@@ -30,13 +30,18 @@ public class EpgPanelView extends android.view.View {
         public final String time;
         public final String title;
         public final boolean live;      // 正在播
-        public final boolean replay;    // 可回看
+        public final boolean replay;    // 已播完且源支持回看 → 可点
+        public final long startMs;
+        public final long stopMs;
 
-        public Item(String time, String title, boolean live, boolean replay) {
+        public Item(String time, String title, boolean live, boolean replay,
+                    long startMs, long stopMs) {
             this.time = time;
             this.title = title;
             this.live = live;
             this.replay = replay;
+            this.startMs = startMs;
+            this.stopMs = stopMs;
         }
     }
 
@@ -138,7 +143,7 @@ public class EpgPanelView extends android.view.View {
                 fill.setColor(0x332F7BFF);
                 r.set(padH - Theme.px(8), y, getWidth() - padH + Theme.px(8), y + itemH);
                 c.drawRoundRect(r, Theme.px(4), Theme.px(4), fill);
-            } else if (i == focusIndex) {
+            } else if (i == focusIndex && it.replay) {
                 fill.setColor(0x1AFFFFFF);
                 r.set(padH - Theme.px(8), y, getWidth() - padH + Theme.px(8), y + itemH);
                 c.drawRoundRect(r, Theme.px(4), Theme.px(4), fill);
@@ -158,11 +163,12 @@ public class EpgPanelView extends android.view.View {
             float maxW = getWidth() - tx - padH - Theme.px(70);
             c.drawText(fit(it.title, maxW, Theme.sp(19)), tx, baseline, p);
 
-            // 右侧标记
-            String mark = it.live ? "直播中" : (it.replay ? "可回看" : null);
+            // 右侧标记：直播中 / 可回看（可点才亮）
+            String mark = it.live ? "直播中" : (it.replay ? "回看" : null);
             if (mark != null) {
                 p.setTextSize(Theme.sp(14));
-                p.setColor(it.live ? Theme.FOCUS_BLUE : 0xFF9A9A9E);
+                p.setColor(it.live ? Theme.FOCUS_BLUE
+                        : (it.replay ? 0xFF6FD08A : 0xFF6A6A70));
                 p.setTextAlign(Paint.Align.RIGHT);
                 c.drawText(mark, getWidth() - padH, baseline, p);
                 p.setTextAlign(Paint.Align.LEFT);
