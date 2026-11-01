@@ -108,7 +108,16 @@ public class OsdView extends View {
 
     public void tick() { invalidate(); }
 
+    /** 供日志/自检用：当前 OSD 是否可见。 */
+    public boolean isVisible() { return osdAlpha > 0f && name != null; }
+
+    public String debugLine() {
+        return "visible=" + isVisible() + " alpha=" + osdAlpha + " no=" + no
+                + " name=" + name + " tagOn0=" + tagOn[0];
+    }
+
     private void kick() {
+        android.util.Log.d("TVUI", "kick name=" + name + " no=" + no);
         osdAlpha = 1f;
         osdUntil = SystemClock.uptimeMillis() + OSD_MS;
         removeCallbacks(fadeTask);
@@ -147,6 +156,7 @@ public class OsdView extends View {
     }
 
     private void drawOsd(Canvas c, float h) {
+        android.util.Log.d("TVUI", "drawOsd " + debugLine() + " w=" + getWidth() + " h=" + h);
         float padH = Theme.px(20);
         float cardW = Theme.px(660);
 
