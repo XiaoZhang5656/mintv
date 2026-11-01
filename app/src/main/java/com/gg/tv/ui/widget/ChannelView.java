@@ -9,10 +9,17 @@ import android.graphics.Typeface;
 import com.gg.tv.ui.Theme;
 
 /**
- * 频道列表的一行：台号块 + 台名 + 状态徽标 + 正在播出的节目。
+ * 频道列表的一行：台号块 +（可选）台标 + 台名 + 状态徽标 + 正在播出的节目。
  *
- * 高 92 设计稿像素。所有文本都是成员变量拼好的 String，
- * onDraw 里绝不 format，避免每次滚动分配 String 造成 GC 抖动。
+ * <p>关键改动：**台标不是必选项**
+ * <ul>
+ *   <li>源里写了 <code>tvg-logo</code> → 加载并绘制台标，台名右移
+ *   <li>没写 → 图标位整段不占宽度，台名直接跟在台号后面
+ * </ul>
+ * 不从台名去猜图标，也不画占位方块 —— 源里没有就是没有。
+ *
+ * <p>高 92 设计稿像素。所有文本都是外部一次性喂进来的 String，
+ * onDraw 里绝不 format，避免滚动时分配 String 造成 GC 抖动。
  */
 public class ChannelView extends BaseCardView {
 
@@ -20,10 +27,11 @@ public class ChannelView extends BaseCardView {
     private final Paint numBg = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint badgeBg = new Paint(Paint.ANTI_ALIAS_FLAG);
 
-    private String number = "";
+    private int number = 0;
+    private String numberText = "";
     private String name = "";
-    private String sub = "";         // "正在播放 · 19:00 新闻联播"
-    private String badge = null;     // null / "播放中" / "可回看"
+    private String sub = "";
+    private String badge;
     private Bitmap logo;
 
     private final float padH = Theme.px(16);
@@ -32,31 +40,41 @@ public class ChannelView extends BaseCardView {
     private final float subSize = Theme.sp(Theme.TS_CHAN_SUB);
     private final float numSize = Theme.sp(Theme.TS_NUM);
 
-    private int colTitle, colSub, colNum, colBadgeText;
-
     public ChannelView(Context c) {
         super(c);
         radius = Theme.px(Theme.RADIUS_ITEM);
         t.setTypeface(Typeface.DEFAULT);
         numBg.setStyle(Paint.Style.FILL);
         badgeBg.setStyle(Paint.Style.FILL);
-        colTitle = Theme.TEXT;
-        colSub = Theme.TEXT_SUB;
-        colNum = 0xFFB9B9BD;
-        colBadgeText = Theme.TEXT;
     }
 
-    public void setNumber(String n) { number = n == null ? "" : n; }
+    /** 台号来自解析器的自增序号，四位补零（0076 那种）。 */
+    public void setNumber(int n) {
+        number = n;
+        String s = String.valueOf(n);
+        while (s.length() < 4) s = "0" + s;
+        numberText = s;
+    }
 
     public void setName(String n) { name = n == null ? "" : n; }
 
+    /** 节目信息。源里没有 EPG 时传空串，副行就不画。 */
     public void setSub(String s) { sub = s == null ? "" : s; }
 
     public void setBadge(String b) { badge = b; }
 
-    public void setLogo(Bitmap b) { logo = b; }
+    /** null = 源里没有台标，图标位不占宽度。 */
+    public void setLogo(Bitmap b) {
+        if (logo != b) {
+            logo = b;
+            invalidate();
+        }
+    }
 
     public void commit() { invalidate(); }
+
+    /** 有台标才为 true，供列表计算台名起始位置时复用。 */
+    public boolean hasLogo() { return logo != null && !logo.isRecycled(); }
 
     @Override
     protected void onDraw(Canvas c) {
@@ -73,32 +91,34 @@ public class ChannelView extends BaseCardView {
         path.addRoundRect(rect, Theme.px(4), Theme.px(4), android.graphics.Path.Direction.CW);
         c.drawPath(path, numBg);
 
-        t.setColor(colNum);
+        t.setColor(0xFFB9B9BD);
         t.setTextSize(numSize);
         t.setFakeBoldText(false);
         t.setTextAlign(Paint.Align.CENTER);
-        c.drawText(number, x + numW / 2f, cy - (t.descent() + t.ascent()) / 2f, t);
+        c.drawText(numberText, x + numW / 2f, cy - (t.descent() + t.ascent()) / 2f, t);
         t.setTextAlign(Paint.Align.LEFT);
 
-        // ---- 台标（可选，96x96 解码）----
         float tx = x + numW + Theme.px(14);
-        if (logo != null && !logo.isRecycled()) {
-            float lh = Theme.px(40);
-            rect.set(tx, cy - lh / 2f, tx + lh, cy + lh / 2f);
+
+        // ---- 台标（有才画，没有不留白）----
+        if (hasLogo()) {
+            float lh = Theme.px(44);
+            float lw = lh * logo.getWidth() / (float) logo.getHeight();
+            if (lw > Theme.px(80)) lw = Theme.px(80);
+            rect.set(tx, cy - lh / 2f, tx + lw, cy + lh / 2f);
             c.drawBitmap(logo, null, rect, null);
-            tx += lh + Theme.px(12);
+            tx += lw + Theme.px(12);
         }
 
         // ---- 台名 ----
-        float nameBaseline = cy - Theme.px(6);
-        t.setColor(colTitle);
+        float nameBaseline = sub.isEmpty() ? cy - (t.descent() + t.ascent()) / 2f : cy - Theme.px(6);
+        t.setColor(Theme.TEXT);
         t.setTextSize(nameSize);
         t.setFakeBoldText(false);
-        c.drawText(name, tx, nameBaseline, t);
 
         // ---- 徽标 ----
-        if (badge != null) {
-            float nameW = t.measureText(name);
+        float nameW = t.measureText(name);
+        if (badge != null && !badge.isEmpty()) {
             float bs = Theme.sp(12);
             t.setTextSize(bs);
             float bw = t.measureText(badge) + Theme.px(16);
@@ -109,14 +129,21 @@ public class ChannelView extends BaseCardView {
             path.reset();
             path.addRoundRect(rect, bh / 2f, bh / 2f, android.graphics.Path.Direction.CW);
             c.drawPath(path, badgeBg);
-            t.setColor(colBadgeText);
+            t.setColor(Theme.TEXT);
             c.drawText(badge, bx + Theme.px(8), nameBaseline - Theme.px(2), t);
+            t.setTextSize(nameSize);
         }
 
-        // ---- 副行 ----
-        t.setColor(colSub);
-        t.setTextSize(subSize);
-        c.drawText(sub, x + numW + Theme.px(14), cy + Theme.px(26), t);
+        t.setColor(Theme.TEXT);
+        t.setTextSize(nameSize);
+        c.drawText(name, tx, nameBaseline, t);
+
+        // ---- 副行（只在有节目信息时画）----
+        if (!sub.isEmpty()) {
+            t.setColor(Theme.TEXT_SUB);
+            t.setTextSize(subSize);
+            c.drawText(sub, tx, cy + Theme.px(26), t);
+        }
 
         drawFocusStroke(c, Theme.FOCUS_BLUE);
     }
