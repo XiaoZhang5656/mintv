@@ -966,10 +966,10 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             int idx = (int) ((y + scrollY - listTop) / rowH);
             if (idx >= 0 && idx < navViews.size()) {
                 switchCategory(idx);
-                if (focus.zone() != FocusEngine.Zone.NAV) {
-                    focus.onKey(KeyEvent.KEYCODE_DPAD_LEFT);
-                }
+                // 分类点完把焦点交给频道列，否则看不到选中框
+                focus.setZone(FocusEngine.Zone.CHAN);
                 updateNavFocus(idx);
+                updateChannelFocus(focus.chanIndex());
             }
             return true;
         }
