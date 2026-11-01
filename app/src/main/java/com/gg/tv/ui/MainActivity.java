@@ -75,6 +75,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     private final java.util.Map<Integer, String> epgIdOf = new java.util.HashMap<>();  // 频道序号 → EPG channelId
     private EpgParser.Epg epg;
     private EpgPanelView epgPanel;
+    private ScrollView epgScroll;
     private long epgTs = 0;
     private final Runnable epgTick = new Runnable() {
         @Override public void run() {
@@ -239,13 +240,8 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         chanLp.leftMargin = navW + Theme.px(1);
         root.addView(chan, chanLp);
 
-        // --- 竖轨 ---
-        View rail = new RailView(this);
-        FrameLayout.LayoutParams railLp = new FrameLayout.LayoutParams(
-                railW, FrameLayout.LayoutParams.MATCH_PARENT);
-        railLp.leftMargin = navW + chanW + Theme.px(1);
-        railView = rail;
-        root.addView(rail, railLp);
+        // 竖排「节目 » 信息」已被第三栏 EPG 取代，保留类但不再使用
+        railView = new View(this);
 
         // --- 时钟 ---
         clock = new ClockView(this);
@@ -256,15 +252,27 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         clockLp.topMargin = Theme.px(18);
         root.addView(clock, clockLp);
 
-        // --- 节目单飞出层（点频道行时展开）---
+        // --- 第三栏：EPG 节目信息（始终显示，随选中频道切换）---
+        int epgW = Theme.px(300);
+        epgScroll = new ScrollView(this);
+        epgScroll.setVerticalScrollBarEnabled(false);
+        epgScroll.setOverScrollMode(View.OVER_SCROLL_NEVER);
+        epgScroll.setBackgroundColor(0x0AFFFFFF);
         epgPanel = new EpgPanelView(this);
-        epgPanel.setVisibility(View.GONE);
-        int panW = Theme.px(640);
-        FrameLayout.LayoutParams panLp = new FrameLayout.LayoutParams(
-                panW, Theme.px(64 + 10 * 56 + 16));
-        panLp.leftMargin = Theme.px(Theme.NAV_W + 12);
-        panLp.topMargin = Theme.px(150);
-        root.addView(epgPanel, panLp);
+        epgScroll.addView(epgPanel, new android.widget.FrameLayout.LayoutParams(
+                android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
+                android.widget.FrameLayout.LayoutParams.MATCH_PARENT));
+        FrameLayout.LayoutParams epgLp = new FrameLayout.LayoutParams(
+                epgW, FrameLayout.LayoutParams.MATCH_PARENT);
+        epgLp.leftMargin = Theme.px(Theme.NAV_W + Theme.CHAN_W + 1);
+        root.addView(epgScroll, epgLp);
+        // 左侧分隔线
+        View epgLine = new View(this);
+        epgLine.setBackgroundColor(Theme.LINE);
+        FrameLayout.LayoutParams lineLp = new FrameLayout.LayoutParams(
+                Math.max(1, Theme.px(1)), FrameLayout.LayoutParams.MATCH_PARENT);
+        lineLp.leftMargin = Theme.px(Theme.NAV_W + Theme.CHAN_W);
+        root.addView(epgLine, lineLp);
 
         // --- OSD ---
         osd = new OsdView(this);
@@ -666,31 +674,39 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         osd.setProgram(nowText, nextText, prog);
     }
 
-    /** 点频道行 → 展开这个频道的节目单。 */
+    /** 把某个频道的节目单填进右侧第三栏。 */
     private void showEpgPanel(int channelIndex) {
-        if (epg == null || channelIndex < 0 || channelIndex >= channels.size()) return;
+        if (epgPanel == null) return;
+        if (channelIndex < 0 || channelIndex >= channels.size()) return;
+        PlaylistParser.Channel ch = channels.get(channelIndex);
+        if (epg == null) {
+            epgPanel.setData(ch.name + " · 节目单", new EpgPanelView.Item[0]);
+            return;
+        }
         String id = epgIdOf.get(channelIndex);
         java.util.List<EpgParser.Program> list = epg.of(id);
-        if (list == null || list.isEmpty()) return;
-
+        if (list == null || list.isEmpty()) {
+            epgPanel.setData(ch.name + " · 暂无节目单", new EpgPanelView.Item[0]);
+            return;
+        }
         long now = System.currentTimeMillis();
         java.util.ArrayList<EpgPanelView.Item> items = new java.util.ArrayList<>();
         for (EpgParser.Program p : list) {
-            boolean live = p.isLive(now);
-            boolean replay = p.stopMs < now;
-            items.add(new EpgPanelView.Item(EpgParser.hm(p.startMs), p.title, live, replay));
+            items.add(new EpgPanelView.Item(EpgParser.hm(p.startMs), p.title,
+                    p.isLive(now), p.stopMs < now));
         }
-        PlaylistParser.Channel ch = channels.get(channelIndex);
+        int h = (int) EpgPanelView.heightFor(items.size());
         epgPanel.setData(ch.name + " · 节目单", items.toArray(new EpgPanelView.Item[0]));
-        epgPanel.setVisibility(View.VISIBLE);
-        epgPanel.bringToFront();
-        epgPanelOpen = true;
+        android.view.ViewGroup.LayoutParams lp = epgPanel.getLayoutParams();
+        if (lp != null && lp.height != h) {
+            lp.height = h;
+            epgPanel.setLayoutParams(lp);
+        }
     }
 
     private boolean epgPanelOpen = false;
 
     private void hideEpgPanel() {
-        if (epgPanel != null) epgPanel.setVisibility(View.GONE);
         epgPanelOpen = false;
     }
 
@@ -822,6 +838,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     @Override
     public void onChannelFocusChanged(int index) {
         updateChannelFocus(index);
+        showEpgPanel(index);
     }
 
     @Override
@@ -935,11 +952,9 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             int listTop = Theme.px(26 + 50);              // 频道列顶部内边距 + 小标题
             int idx = (int) ((y + scrollY - listTop) / itemH);
             if (idx >= 0 && idx < channels.size()) {
-                boolean sameChannel = (idx == playingChannel);
                 playChannel(idx);
                 focusOnChannel(idx);
-                // 点的是当前正在播的频道 → 说明想看节目单
-                if (sameChannel) showEpgPanel(idx);
+                showEpgPanel(idx);
             }
             return true;
         }
