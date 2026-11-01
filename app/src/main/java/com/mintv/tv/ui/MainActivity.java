@@ -64,6 +64,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     // ---- 长按快进 ----
     private SeekOverlayView seekOverlay;
     private View gestureLayer;
+    private ErrorPanel errorPanel;
     private boolean seeking = false;
     private long seekBaseMs = 0;      // 长按起点位置
     private long seekStartWall = 0;   // 长按开始的墙钟时间
@@ -131,6 +132,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         android.util.Log.i("MinTV", "screen realMetrics=" + dm.widthPixels + "x" + dm.heightPixels + " base=" + base);
         Theme.init(base);
 
+        errorPanel = ErrorPanel.install(this);
         CatchupProbe.init(this);
         loadPlaylist();
 
@@ -174,7 +176,10 @@ public class MainActivity extends Activity implements FocusEngine.Host {
 
             @Override public void onError(String msg) {
                 dumpPlaybackState("ERROR", msg);
-                osd.setStatus("播放失败：" + msg);   // 常驻，直到下一次成功起播
+                osd.setStatus("播放失败：" + msg);
+                if (errorPanel != null) {
+                    errorPanel.show("播放失败", "地址：" + currentPlayUrl + "\n\n" + msg);
+                }
             }
 
             @Override public void onVideoFormat(String res, String vc, String ac, String ch, String fps) {
@@ -446,7 +451,17 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                     if (conn != null) conn.disconnect();
                 }
                 final String result = body;
-                if (result == null || result.trim().isEmpty()) return;
+                if (result == null || result.trim().isEmpty()) {
+                    ui.post(new Runnable() {
+                        @Override public void run() {
+                            if (errorPanel != null) {
+                                errorPanel.show("直播源拉取失败",
+                                        "地址：" + url + "\n\n请检查网络或换一个源地址。");
+                            }
+                        }
+                    });
+                    return;
+                }
                 SourceStore.saveBody(MainActivity.this, result);
                 ui.post(new Runnable() {
                     @Override public void run() {
