@@ -19,6 +19,7 @@ import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 
+import com.mintv.tv.data.CatchupProbe;
 import com.mintv.tv.data.EpgParser;
 import com.mintv.tv.data.EpgStore;
 import com.mintv.tv.data.LogoLoader;
@@ -187,7 +188,10 @@ public class MainActivity extends Activity implements FocusEngine.Host {
 
     private void buildPlayer(FrameLayout root) {
         surfaceView = new SurfaceView(this);
+        // 让 SurfaceView 与窗口一起合成（不单独压在 Activity 之上），
+        // 否则 Surface 未出画面时会整屏黑；同时 UI 层才能正常盖在视频上。
         surfaceView.setZOrderMediaOverlay(false);
+        surfaceView.getHolder().setFormat(android.graphics.PixelFormat.RGBA_8888);
         surfaceView.setBackgroundColor(Color.BLACK);
         FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
@@ -708,6 +712,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         }
         refreshChannelSubs();
         refreshPlayInfo();
+        probeCatchupAsync();
         ui.removeCallbacks(epgTick);
         ui.postDelayed(epgTick, 30_000);
     }
@@ -723,17 +728,69 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             EpgParser.Program live = EpgParser.live(epg.of(id), now);
             if (live == null) { v.setSub(""); continue; }
             v.setSub("正在播放 · " + EpgParser.hm(live.startMs) + " " + live.title);
-            v.setBadge(hasReplay(id) ? "可回看" : null);
+            v.setBadge(hasReplay(i) ? "可回看" : null);
             v.invalidate();
         }
     }
 
-    private boolean hasReplay(String epgId) {
-        java.util.List<EpgParser.Program> list = epg.of(epgId);
-        if (list == null) return false;
-        long now = System.currentTimeMillis();
-        for (EpgParser.Program p : list) if (p.stopMs < now) return true;
-        return false;
+    /**
+     * 频道是否真的支持回看。
+     * 判据是<b>源的 catchup 属性</b>，不是「EPG 里有没有播完的节目」——
+     * 后者每个有 EPG 的台都成立，会导致整列都标成可回看。
+     */
+    /**
+     * 后台探测回看能力。只探前若干个不同 host —— 同一个服务器只发一次请求，
+     * 探完刷新列表上的「可回看」标记。
+     */
+    private void probeCatchupAsync() {
+        new Thread(new Runnable() {
+            @Override public void run() {
+                java.util.LinkedHashSet<String> hosts = new java.util.LinkedHashSet<>();
+                java.util.Map<String, PlaylistParser.Channel> sample = new java.util.HashMap<>();
+                for (PlaylistParser.Channel ch : channels) {
+                    String h = hostOf(ch);
+                    if (h == null || hosts.contains(h)) continue;
+                    if (hosts.size() >= 8) break;          // 最多探 8 台服务器
+                    hosts.add(h);
+                    sample.put(h, ch);
+                }
+                for (String h : hosts) {
+                    if (CatchupProbe.cached(h) != null) continue;
+                    final PlaylistParser.Channel ch = sample.get(h);
+                    if (ch == null) continue;
+                    // 用「两小时前」的时段探测，任何源都应该有这个时间点的录像
+                    long end = System.currentTimeMillis() - 3600_000L;
+                    long start = end - 3600_000L;
+                    final boolean ok = CatchupProbe.probe(h,
+                            PlaylistParser.cleanUrl(ch.sources.get(0).url),
+                            ch.catchupSource, ch.catchup, start, end);
+                    ui.post(new Runnable() {
+                        @Override public void run() { refreshChannelSubs(); }
+                    });
+                }
+            }
+        }, "catchup-probe").start();
+    }
+
+    private boolean hasReplay(int channelIndex) {
+        if (channelIndex < 0 || channelIndex >= channels.size()) return false;
+        PlaylistParser.Channel ch = channels.get(channelIndex);
+        // 源里显式写了 catchup 就直接信它
+        if (PlaylistParser.canReplay(ch)) return true;
+        // 否则看对该服务器探测的结论
+        String host = hostOf(ch);
+        if (host == null) return false;
+        Boolean r = CatchupProbe.cached(host);
+        return r != null && r;
+    }
+
+    private static String hostOf(PlaylistParser.Channel ch) {
+        if (ch == null || ch.sources.isEmpty()) return null;
+        try {
+            return new java.net.URL(PlaylistParser.cleanUrl(ch.sources.get(0).url)).getHost();
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     /** 正在播的频道，刷新 OSD 里的「目前/下个节目」。 */
@@ -778,7 +835,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                 boolean ended = p.stopMs <= now;
                 // 只有「已播完 + 源支持回看」的条目才可点
                 items.add(new EpgPanelView.Item(EpgParser.hm(p.startMs), p.title,
-                        live, ended && canReplay, p.startMs, p.stopMs));
+                        live, ended && canReplay, ended, p.startMs, p.stopMs));
             }
             epgPanel.setData(ch.name + (canReplay ? " · 一周回看" : " · 节目单"),
                     items.toArray(new EpgPanelView.Item[0]));
@@ -846,13 +903,19 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         EpgParser.Program prog = programAt(channelIndex, idx);
         if (prog == null) return;
 
-        if (!PlaylistParser.canReplay(ch)) {
-            osd.setStatus("该源不支持回看");
-            return;
+        String host = hostOf(ch);
+        String url;
+        if (PlaylistParser.declaredReplay(ch)) {
+            url = PlaylistParser.buildCatchupUrl(ch, prog.startMs, prog.stopMs);
+        } else if (host != null && Boolean.TRUE.equals(CatchupProbe.cached(host))) {
+            url = CatchupProbe.build(host,
+                    PlaylistParser.cleanUrl(ch.sources.get(0).url),
+                    prog.startMs, prog.stopMs);
+        } else {
+            url = null;
         }
-        String url = PlaylistParser.buildCatchupUrl(ch, prog.startMs, prog.stopMs);
         if (url == null) {
-            osd.setStatus("回看地址生成失败");
+            osd.setStatus("该源不支持回看");
             return;
         }
         epgPanel.setFocus(idx);
