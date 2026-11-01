@@ -139,16 +139,17 @@ public final class CatchupProbe {
 
             String head = new String(buf, 0, Math.min(n, 300), "UTF-8").trim();
 
-            // 实测：不支持的服务器也会返回 200，但正文是 "sign error" / HTML 错误页。
-            // 必须要求正文真的是播放列表或媒体切片，才算探测通过。
-            if (head.startsWith("<") && !head.startsWith("<html") && head.contains("EXTM3U")) {
-                return true;                       // 以 < 开头但不是 html，且是 m3u8
-            }
-            if (head.startsWith("#EXTM3U") || head.contains("#EXTINF")) return true;
-            if (head.startsWith("ts") || head.charAt(0) == 0x47) return true;   // MPEG-TS
-            if (head.startsWith("<html") || head.startsWith("<!DOCTYPE")) return false;
+            // 判定标准只看内容本身，不看 MIME、不看状态码以外的花活：
+            //   · 真正的 HLS 播放列表一定含 #EXTM3U（fMP4 / ts / 加密切片都一样）
+            //   · 有的源直接回一段 #EXTINF 也是有效列表
+            //   · 不支持的服务器实测返回 200 + "sign error" 这类短文本，被这里排除
+            if (head.contains("#EXTM3U") || head.contains("#EXTINF")) return true;
 
-            // 其余短文本基本都是错误信息（sign error / 403 / unauthorized …）
+            // 少数源回的是裸媒体流（TS 同步字节 0x47 / fMP4 的 ftyp box）
+            if (head.length() > 0 && (head.charAt(0) == 0x47
+                    || (head.length() > 8 && head.substring(4, 8).equals("ftyp")))) {
+                return true;
+            }
             return false;
         } catch (Exception e) {
             return false;
