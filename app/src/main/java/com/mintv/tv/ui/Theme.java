@@ -32,7 +32,7 @@ public final class Theme {
     public static final float[] SCRIM_STOPS  = {0f, 0.52f, 0.82f, 1f};
 
     // ---------- 布局（1920x1080 基准）----------
-    public static final int NAV_W        = 300;
+    public static final int NAV_W        = 360;
     public static final int CHAN_W       = 476;
     public static final int RAIL_W       = 56;
     public static final int SCRIM_W      = 1180;
