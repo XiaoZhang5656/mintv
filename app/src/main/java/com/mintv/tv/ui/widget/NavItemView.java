@@ -74,12 +74,41 @@ public class NavItemView extends BaseCardView {
         textPaint.setFakeBoldText(active || focusProgress > 0.5f);
         float tx = x + iconSize + Theme.px(16);
         float ty = cy - (textPaint.descent() + textPaint.ascent()) / 2f;
-        c.drawText(name, tx, ty, textPaint);
+
+        // 名称最宽只能到计数胶囊左侧（留 12px 间距），超出截断，避免和胶囊重叠
+        float pillW = pillWidth();
+        float nameMax = getWidth() - padH - pillW - Theme.px(12) - tx;
+        c.drawText(fit(name, nameMax, textSize), tx, ty, textPaint);
 
         // ---- 计数胶囊 ----
         drawCountPill(c, cy);
 
         drawFocusStroke(c, Theme.FOCUS_BLUE);
+    }
+
+    /** 计数胶囊宽度，名称排版要给它让位。 */
+    private float pillWidth() {
+        String s = String.valueOf(count);
+        float tw = textWidth(pillTextSize, s);
+        return Math.max(Theme.px(44), tw + Theme.px(20));
+    }
+
+    private float textWidth(float size, String s) {
+        float old = textPaint.getTextSize();
+        textPaint.setTextSize(size);
+        float w = textPaint.measureText(s);
+        textPaint.setTextSize(old);
+        return w;
+    }
+
+    private String fit(String s, float maxW, float size) {
+        if (s == null) return "";
+        textPaint.setTextSize(size);
+        if (textPaint.measureText(s) <= maxW) return s;
+        float ellW = textPaint.measureText("…");
+        int n = s.length();
+        while (n > 0 && textPaint.measureText(s.substring(0, n)) + ellW > maxW) n--;
+        return s.substring(0, n) + "…";
     }
 
     private void drawCountPill(Canvas c, float cy) {
