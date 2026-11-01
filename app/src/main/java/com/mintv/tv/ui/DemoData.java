@@ -61,6 +61,8 @@ public final class DemoData {
             {"网速显示", ""},
             {"开机自动播放", ""},
             {"解码方式", "低性能盒子软解会掉帧，仅在花屏时切换"},
+            {"超时换源", "起播/卡顿超过设定时间自动切下一条线路"},
+            {"换源等待", "判定超时的秒数"},
     };
 
     public static final String[][] ROW_OPTIONS = {
@@ -72,9 +74,11 @@ public final class DemoData {
             {"显示", "隐藏"},
             {"开启", "关闭"},
             {"硬件", "软件"},
+            {"开启", "关闭"},
+            {"5 秒", "8 秒", "12 秒", "20 秒"},
     };
 
-    public static final int[] ROW_DEFAULT = {0, 0, 0, 0, 0, 0, 1, 0};
+    public static final int[] ROW_DEFAULT = {0, 0, 0, 0, 0, 0, 1, 0, 0, 1};
 
     // ---------- 无源时的示范 M3U ----------
 
