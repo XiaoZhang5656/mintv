@@ -75,6 +75,14 @@ public final class PlaylistParser {
         public final Map<String, List<Channel>> byGroup = new LinkedHashMap<>();
         public final List<Channel> all = new ArrayList<>();
 
+        /**
+         * #EXTM3U 头部的全局 catchup 声明。头部的值对整份源生效，
+         * 频道的 #EXTINF 没有单独写 catchup 时就用它。
+         */
+        public String globalCatchup;
+        public String globalCatchupSource;
+        public String globalCatchupCorrection;
+
         public List<String> groups() {
             return new ArrayList<>(byGroup.keySet());
         }
@@ -128,6 +136,14 @@ public final class PlaylistParser {
 
     private static Playlist parseM3u(String text) {
         Playlist pl = new Playlist();
+        // 第一行 #EXTM3U 可能带全局 catchup 声明
+        int nl = text.indexOf('\n');
+        String header = nl > 0 ? text.substring(0, nl) : text;
+        if (header.startsWith("#EXTM3U")) {
+            pl.globalCatchup = attr(header, "catchup");
+            pl.globalCatchupSource = attr(header, "catchup-source");
+            pl.globalCatchupCorrection = attr(header, "catchup-correction");
+        }
         Map<String, Channel> byName = new LinkedHashMap<>();
 
         String pendingName = null;
@@ -165,10 +181,17 @@ public final class PlaylistParser {
 
             // 回看属性绑到刚建/命中的频道上
             Channel just = byName.get(name + "|" + pendingGroup);
-            if (just != null && pendingCatchup != null) {
-                just.catchup = pendingCatchup;
-                just.catchupSource = pendingCatchupSrc;
-                just.catchupCorrection = pendingCatchupCorr;
+            if (just != null) {
+                if (pendingCatchup != null) {
+                    just.catchup = pendingCatchup;
+                    just.catchupSource = pendingCatchupSrc;
+                    just.catchupCorrection = pendingCatchupCorr;
+                } else if (pl.globalCatchup != null) {
+                    // 头部全局声明对该频道生效
+                    just.catchup = pl.globalCatchup;
+                    just.catchupSource = pl.globalCatchupSource;
+                    just.catchupCorrection = pl.globalCatchupCorrection;
+                }
             }
 
             pendingName = null;
@@ -356,9 +379,17 @@ public final class PlaylistParser {
         return f.format(new java.util.Date(ms));
     }
 
-    /** 该频道是否具备回看能力。 */
-    public static boolean canReplay(Channel ch) {
+    /**
+     * 源里是否<b>声明</b>了回看能力（不代表服务器真的支持）。
+     * 真支持与否要用 {@link CatchupProbe} 探测。
+     */
+    public static boolean declaredReplay(Channel ch) {
         return ch != null && ch.catchup != null && !ch.sources.isEmpty();
+    }
+
+    /** 兼容旧名。 */
+    public static boolean canReplay(Channel ch) {
+        return declaredReplay(ch);
     }
 
     /** 去掉 URL 上的参数尾巴，只留真实地址。 */
