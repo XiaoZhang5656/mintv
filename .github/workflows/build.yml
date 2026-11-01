@@ -51,13 +51,40 @@ jobs:
           path: app/build/outputs/apk/debug/*.apk
           if-no-files-found: warn
 
-      - name: Publish APK to public/apk
+      # runner 到 github.com 的 git 通道不稳（443 被断），改用 REST API 回写 APK，
+      # 这样 public/apk 下能通过 raw / ghproxy 直链下载。
+      - name: Publish APK via API
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          mkdir -p public/apk
-          cp app/build/outputs/apk/debug/*.apk public/apk/tvui-java-debug.apk
-          ls -la public/apk
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -f public/apk/tvui-java-debug.apk
-          git diff --cached --quiet || git commit -m "ci: publish debug apk [skip ci]"
-          git push
+          cp app/build/outputs/apk/debug/*.apk /tmp/tvui-java-debug.apk
+          python3 - <<'PY'
+          import base64, json, os, urllib.request
+          tok = os.environ['GH_TOKEN']
+          repo = os.environ['GITHUB_REPOSITORY']
+          path = 'public/apk/tvui-java-debug.apk'
+          api = f'https://api.github.com/repos/{repo}/contents/{path}'
+          def call(url, method='GET', body=None):
+              data = json.dumps(body).encode() if body else None
+              req = urllib.request.Request(url, data=data, method=method, headers={
+                  'Authorization': 'Bearer ' + tok,
+                  'Accept': 'application/vnd.github+json',
+                  'Content-Type': 'application/json'})
+              with urllib.request.urlopen(req, timeout=60) as r:
+                  raw = r.read().decode()
+                  return json.loads(raw) if raw.strip() else None
+          sha = None
+          try:
+              sha = call(api)['sha']
+          except Exception:
+              pass
+          body = {
+              'message': 'ci: publish debug apk [skip ci]',
+              'content': base64.b64encode(open('/tmp/tvui-java-debug.apk','rb').read()).decode(),
+              'branch': 'main',
+          }
+          if sha:
+              body['sha'] = sha
+          call(api, 'PUT', body)
+          print('published apk', os.path.getsize('/tmp/tvui-java-debug.apk'), 'bytes')
+          PY
