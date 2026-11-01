@@ -1,0 +1,4 @@
+// 顶层构建脚本。目前只在根上挂 AGP，插件版本集中在 gradle/libs.versions.toml 里改。
+plugins {
+    id 'com.android.application' version '8.5.2' apply false
+}

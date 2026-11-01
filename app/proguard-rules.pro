@@ -1,0 +1,2 @@
+-keep class com.gg.tv.** { *; }
+-dontwarn androidx.media3.**

@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<title>TV 播放器 UI 原型 1920x1080</title>
+<style>
+:root{
+  --bg:#0b0b0c; --panel:rgba(255,255,255,.055); --panel2:rgba(255,255,255,.09);
+  --line:rgba(255,255,255,.07); --txt:#fff; --sub:#9a9a9e;
+  --focus:#2f7bff; --gold:#c9a227;
+}
+*{margin:0;padding:0;box-sizing:border-box;-webkit-font-smoothing:antialiased}
+html,body{background:#000;height:100%;width:100%;overflow:hidden;display:flex;align-items:center;justify-content:center;
+  font-family:"Noto Sans SC","PingFang SC",system-ui,sans-serif;color:var(--txt)}
+#root{flex:none;width:1920px;height:1080px;background:var(--bg);position:relative;overflow:hidden;transform-origin:center center}
+
+/* ---------- 播放层（铺满，最底层）---------- */
+#video{position:absolute;inset:0;background:
+  radial-gradient(120% 90% at 62% 40%, #4a4a42 0%, #2a2a28 45%, #141414 78%, #0b0b0c 100%);}
+#video::after{content:"";position:absolute;inset:0;background:
+  repeating-linear-gradient(0deg, rgba(0,0,0,.16) 0 2px, transparent 2px 4px);opacity:.5}
+#video .pic{position:absolute;left:34%;top:6%;width:34%;height:88%;
+  background:linear-gradient(180deg,rgba(190,185,170,.16),rgba(120,118,110,.10));
+  border-left:1px solid rgba(255,255,255,.08);filter:blur(.3px)}
+#video .pic b{position:absolute;writing-mode:vertical-rl;font-size:44px;letter-spacing:12px;
+  color:#d8b45a;right:24%;top:10%;text-shadow:0 2px 14px rgba(0,0,0,.8);font-weight:700}
+#video .sub{position:absolute;left:42%;bottom:12%;font-size:34px;color:#ffe9b0;
+  text-shadow:0 3px 10px #000,0 0 2px #000;letter-spacing:2px}
+
+/* ---------- 时间（右上）---------- */
+#clock{position:absolute;right:36px;top:30px;text-align:right;z-index:40;
+  font-size:21px;line-height:1.5;text-shadow:0 2px 8px rgba(0,0,0,.9)}
+#clock i{font-style:normal;color:#cfcfcf;font-size:18px}
+
+/* ---------- 遮罩：面板后面那层压暗 ---------- */
+#scrim{position:absolute;left:0;top:0;bottom:0;width:1180px;z-index:5;pointer-events:none;
+  background:linear-gradient(90deg,rgba(0,0,0,.94) 0%,rgba(0,0,0,.88) 52%,rgba(0,0,0,.55) 82%,rgba(0,0,0,0) 100%);
+  transition:opacity .28s ease}
+#root.peek #scrim{opacity:.25}
+
+/* ---------- 三栏 ---------- */
+#nav{position:absolute;left:0;top:0;bottom:0;width:300px;z-index:20;padding:34px 22px 0;
+  background:linear-gradient(180deg,rgba(255,255,255,.04),rgba(255,255,255,.015));
+  border-right:1px solid var(--line);display:flex;flex-direction:column}
+#nav .hd{display:flex;align-items:center;gap:16px;padding:0 10px 26px;font-size:29px;font-weight:600;letter-spacing:1px}
+#nav .hd svg{width:30px;height:30px}
+#nav .list{flex:1;overflow:hidden;display:flex;flex-direction:column;gap:2px}
+.nitem{height:64px;border-radius:10px;display:flex;align-items:center;gap:16px;padding:0 16px;
+  font-size:23px;color:#dedee0;transition:background .16s,color .16s,transform .16s;position:relative}
+.nitem svg{width:26px;height:26px;flex:none}
+.nitem .nm{flex:1}
+.nitem .ct{font-size:15px;font-weight:700;color:#0b0b0c;background:#8b8b6a;
+  border-radius:20px;padding:2px 9px;min-width:38px;text-align:center}
+.nitem.on{background:rgba(255,255,255,.10);color:#fff;font-weight:600}
+.nitem.foc{background:rgba(47,123,255,.16);outline:2px solid var(--focus);
+  outline-offset:-2px;transform:scale(1.015)}
+.nitem.foc .ct{background:#2f7bff;color:#fff}
+#nav .ft{padding:14px 10px 24px;font-size:17px;color:#77777a;letter-spacing:.5px}
+
+/* 中栏 */
+#chan{position:absolute;left:301px;top:0;bottom:0;width:476px;z-index:20;padding:26px 0 0}
+#chan .hd{height:60px;display:flex;align-items:center;gap:10px;padding:0 22px;color:#ececee;
+  font-size:19px;letter-spacing:1px}
+.cyc{position:relative;flex:1;overflow:hidden;
+  -webkit-mask-image:linear-gradient(180deg,transparent 0,#000 34px,#000 calc(100% - 46px),transparent 100%);
+          mask-image:linear-gradient(180deg,transparent 0,#000 34px,#000 calc(100% - 46px),transparent 100%)}
+.citem{height:92px;margin:7px 14px;padding:0 16px;border-radius:10px;display:flex;align-items:center;gap:14px;
+  background:rgba(255,255,255,.05);border:1px solid transparent;transition:background .16s,border-color .16s,transform .16s}
+.citem .no{width:52px;height:26px;border-radius:4px;background:rgba(255,255,255,.10);
+  font-size:14px;color:#b9b9bd;display:flex;align-items:center;justify-content:center;flex:none}
+.citem .body{flex:1;min-width:0}
+.citem .t1{font-size:24px;letter-spacing:.5px;display:flex;align-items:center;gap:12px}
+.badge{font-size:12px;padding:2px 8px;border-radius:10px;background:#2f7bff;color:#fff;font-weight:600}
+.badge.gray{background:rgba(255,255,255,.16);color:#ddd;font-weight:500}
+.citem .t2{font-size:15px;color:#9a9a9e;margin-top:7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.citem .t2 em{font-style:normal;color:#7f7f84;margin-right:6px}
+.citem.right{justify-content:flex-end;background:transparent;border-color:transparent}
+
+/* ---------- 节目信息轨 ---------- */
+#eps{position:absolute;left:777px;top:0;bottom:0;width:64px;z-index:20;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:0;
+  border-left:1px solid rgba(255,255,255,.09);
+  background:linear-gradient(90deg,rgba(0,0,0,.35),rgba(0,0,0,.05));
+  transition:opacity .28s}
+#eps .t{writing-mode:vertical-rl;font-size:24px;letter-spacing:10px;color:#e8e8ea;
+  display:flex;align-items:center;gap:6px}
+#eps .ar{color:#8e8e93;font-size:18px;letter-spacing:0;margin:14px 0}
+
+#root.peek #eps{opacity:0}
+#root.peek #nav,#root.peek #chan{opacity:0}
+#nav,#chan{transition:opacity .26s ease}
+
+/* ---------- 设置弹窗 ---------- */
+#dlg{position:absolute;left:50%;top:96px;transform:translateX(-50%) scale(.97);width:1300px;z-index:80;
+  background:#232426;border:1px solid rgba(255,255,255,.10);border-radius:6px;
+  box-shadow:0 24px 80px rgba(0,0,0,.75);opacity:0;pointer-events:none;transition:opacity .18s,transform .18s}
+#root.dlg #dlg{opacity:1;pointer-events:auto;transform:translateX(-50%) scale(1)}
+#dlg .bar{height:76px;display:flex;align-items:center;padding:0 24px;gap:10px;
+  border-bottom:1px solid rgba(255,255,255,.10)}
+#dlg .gear{width:30px;height:30px;color:#3b82f6;margin-right:16px}
+.tab{height:52px;padding:0 26px;border-radius:4px;display:flex;align-items:center;
+  font-size:21px;color:#d6d6d8;background:transparent;border:1px solid transparent}
+.tab.on{color:#fff;font-weight:600;background:rgba(255,255,255,.06)}
+.tab.foc{outline:2px solid #fff;outline-offset:-2px;color:#fff}
+#dlg .ver{margin-left:auto;color:#9a9a9e;font-size:20px}
+#dlg .x{width:44px;height:44px;display:flex;align-items:center;justify-content:center;
+  font-size:26px;color:#d0d0d2;border-radius:4px}
+#dlg .x.foc{outline:2px solid #fff;outline-offset:-2px;color:#fff}
+#dlg .rows{padding:18px 24px 10px;max-height:800px;overflow:hidden}
+.row{min-height:82px;display:flex;align-items:center;padding:0 18px;border-radius:4px;
+  background:#2b2c2e;margin-bottom:12px;transition:background .14s,outline-color .14s;
+  outline:2px solid transparent;outline-offset:-2px}
+.row.foc{outline-color:#fff}
+.row .lb{width:360px;flex:none}
+.row .lb b{font-size:23px;font-weight:600;display:block}
+.row .lb span{font-size:16px;color:#93939a;display:block;margin-top:5px}
+.row .seg{margin-left:auto;display:flex;gap:12px}
+.opt{height:50px;min-width:86px;padding:0 20px;border-radius:4px;background:#3a3b3e;
+  display:flex;align-items:center;justify-content:center;gap:8px;font-size:20px;color:#e6e6e8}
+.opt.sel{background:#31543a;color:#eaf7ee}
+.opt.sel .chk{color:#4ade80;font-size:18px}
+.opt.foc{outline:2px solid #fff;outline-offset:-2px}
+#dlg .foot{height:62px;display:flex;align-items:center;gap:10px;padding:0 24px;
+  border-top:1px solid rgba(255,255,255,.10);color:#b9b9bd;font-size:17px}
+#dlg .foot .i{width:20px;height:20px;border-radius:50%;background:#3b82f6;color:#fff;
+  font-size:13px;display:flex;align-items:center;justify-content:center;margin-right:4px}
+#dlg .foot .r{margin-left:auto}
+</style></head>
+<body>
+<div id="root">
+  <div id="video"><div class="pic"><b>伟大的抗美援朝(三)</b></div>
+    <div class="sub">而为了完成这一任务</div></div>
+  <div id="scrim"></div>
+
+  <div id="clock">2026年11月1日<br><i>星期日 19:18</i></div>
+
+  <nav id="nav">
+    <div class="hd">
+      <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8"><rect x="2" y="4" width="20" height="13" rx="2"/><path d="M8 20h8M12 17v3"/></svg>
+      频道列表
+    </div>
+    <div class="list" id="navlist"></div>
+    <div class="ft">遥控器 ↑↓ 切换分类 · → 进入频道</div>
+  </nav>
+
+  <div id="chan">
+    <div class="hd">节目 » 信息</div>
+    <div class="cyc" id="chlist"></div>
+  </div>
+
+
+  <div id="dlg">
+    <div class="bar">
+      <svg class="gear" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+        <circle cx="12" cy="12" r="3.2"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5 5l2.1 2.1M16.9 16.9L19 19M19 5l-2.1 2.1M7.1 16.9L5 19"/></svg>
+      <div class="tab">账户登录</div>
+      <div class="tab on foc">播放设置</div>
+      <div class="tab">手机助手</div>
+      <div class="ver">v1.1.7</div>
+      <div class="x">✕</div>
+    </div>
+    <div class="rows" id="rows"></div>
+    <div class="foot"><span class="i">i</span>白框 = 当前焦点；打勾 = 已选中的值
+      <span class="r">按 OK(Enter) 键修改配置，按 ESC 返回主画面</span></div>
+  </div>
+  <div id="eps"><div class="t">节目 » 信息</div><div class="ar">»</div></div>
+</div>
+
+<script>
+const NAV=[
+ ["全部","463","stack"],["省内","9","pin"],["电台","165","radio"],["央视","29","tv"],
+ ["卫视","48","sat"],["4K","8","star"],["新闻","9","news"],["电影","31","film"],
+ ["体育","8","cup"],["儿童","19","smile"],["纪录","12","doc"],["音乐","6","note"]
+];
+const ICO={
+ stack:'<path d="M12 3l9 5-9 5-9-5 9-5z"/><path d="M3 13l9 5 9-5"/>',
+ pin:'<path d="M12 21s7-6.4 7-11a7 7 0 10-14 0c0 4.6 7 11 7 11z"/><circle cx="12" cy="10" r="2.4"/>',
+ radio:'<circle cx="12" cy="12" r="2.2"/><path d="M7.8 7.8a6 6 0 000 8.4M16.2 7.8a6 6 0 010 8.4"/>',
+ tv:'<rect x="2" y="6" width="20" height="13" rx="2"/><path d="M8 2l4 4 4-4"/>',
+ sat:'<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a15 15 0 010 18M12 3a15 15 0 000 18"/>',
+ star:'<path d="M12 3l2.6 5.6L21 9.6l-4.6 4.2 1.2 6.2L12 17l-5.6 3 1.2-6.2L3 9.6l6.4-1"/>',
+ news:'<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9h6M7 13h10M7 17h6"/>',
+ film:'<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M8 5v14M16 5v14"/>',
+ cup:'<path d="M8 4h8v5a4 4 0 01-8 0V4z"/><path d="M8 6H5a3 3 0 003 3M16 6h3a3 3 0 01-3 3M10 17h4M12 13v4M9 20h6"/>',
+ smile:'<circle cx="12" cy="12" r="9"/><path d="M8.5 14.5a4.6 4.6 0 007 0"/><circle cx="9" cy="10" r="1"/><circle cx="15" cy="10" r="1"/>',
+ doc:'<path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4M9 12h6M9 16h6"/>',
+ note:'<path d="M9 18V6l10-2v12"/><circle cx="7" cy="18" r="2"/><circle cx="19" cy="16" r="2"/>'
+};
+const CHAN_BJ=[
+ ["0076","北京卫视","正在播放 · 19:00 新闻联播","回看"],
+ ["0276","北京文艺","正在播放 · 19:00 笑动剧场",""],
+ ["0277","北京纪实科教","正在播放 · 暂无节目信息",""],
+ ["0278","北京影视","正在播放 · 18:35 上午剧场",""],
+ ["0279","北京财经","正在播放 · 18:50 总裁读书会","播放中"],
+ ["0280","北京生活","正在播放 · 19:00 王芳遇上王为民",""],
+ ["0281","北京新闻","正在播放 · 17:00 直播北京",""],
+ ["0282","卡酷少儿","正在播放 · 18:40 熊出没",""]
+];
+const CHAN_ALL=[["0001","CCTV-1 综合","正在播放 · 19:00 新闻联播",""],["0002","CCTV-2 财经","正在播放 · 19:00 经济半小时",""],["0003","CCTV-5 体育","正在播放 · 19:30 体育新闻",""],["0005","CCTV-5+ 体育赛事","正在播放 · 19:00 赛事直播",""],["0006","CCTV-6 电影","正在播放 · 19:30 佳片有约",""],["0009","CCTV-9 纪录","正在播放 · 19:00 大美中国",""],["0013","CCTV-13 新闻","正在播放 · 19:00 新闻联播","回看"],["0017","CCTV-17 农业","正在播放 · 19:00 乡土",""],["0201","湖南卫视","正在播放 · 19:30 金鹰独播剧场",""],["0203","浙江卫视","正在播放 · 19:00 奔跑吧",""],["0208","东方卫视","正在播放 · 19:00 东方新闻",""],["0212","江苏卫视","正在播放 · 19:00 幸福剧场",""]];
+let navFocus=1, chFocus=0;
+
+function svg(p){return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">'+p+'</svg>';}
+
+const nl=document.getElementById('navlist');
+NAV.forEach((n,i)=>{
+  const d=document.createElement('div');
+  d.className='nitem'+(i===1?' on':'');
+  d.innerHTML=svg(ICO[n[2]])+'<span class="nm">'+n[0]+'</span><span class="ct">'+n[1]+'</span>';
+  nl.appendChild(d);
+});
+const cl=document.getElementById('chlist');
+let DATA=CHAN_BJ;
+function renderList(){
+  cl.innerHTML=''; cl.style.transform='translateY(0)';
+  DATA.forEach((c,i)=>{
+    const d=document.createElement('div'); d.className='citem';
+    let b='';
+    if(c[3]==='回看') b='<span class="badge gray">可回看</span>';
+    if(c[3]==='播放中') b='<span class="badge">播放中</span>';
+    d.innerHTML='<div class="no">'+c[0]+'</div><div class="body"><div class="t1">'+c[1]+b+
+      '</div><div class="t2"><em>正在播放</em>· '+c[2].replace('正在播放 · ','')+'</div></div>';
+    cl.appendChild(d);
+  });
+  paint();
+}
+renderList();
+
+function paint(){
+  [...nl.children].forEach((e,i)=>e.classList.toggle('foc', i===navFocus));
+  [...cl.children].forEach((e,i)=>e.classList.toggle('foc', i===chFocus));
+  // 焦点保持可见：简单滚动
+  const h=document.getElementById('chan').clientHeight;
+  const itemH=106, cy=chFocus*itemH+40;
+  let off=0;
+  if(cy>h/2+80) off=-(cy-h/2-80);
+  if(off<0) off=Math.min(0, off);
+  cl.style.transform='translateY('+Math.max(off, -(cl.children.length*itemH-h+120))+'px)';
+  cl.style.transition='transform .22s cubic-bezier(.2,.8,.3,1)';
+}
+paint();
+
+function pickCat(){
+  const name=NAV[navFocus][0];
+  DATA = (name==='全部'||name==='省内') ? CHAN_BJ : CHAN_ALL;
+  chFocus=0; renderList();
+  [...nl.children].forEach((e,i)=>e.classList.toggle('on', i===navFocus));
+}
+// 键盘操作：←→ 切栏，↑↓ 移动，空格/回车 进入播放
+let col=1; // 0=nav 1=chan
+document.addEventListener('keydown',e=>{
+  if(e.key==='ArrowLeft'){ if(col===1){col=0;} }
+  else if(e.key==='ArrowRight'){ col=1; }
+  else if(e.key==='ArrowUp'){ if(col===0) navFocus=Math.max(0,navFocus-1); else chFocus=Math.max(0,chFocus-1); }
+  else if(e.key==='ArrowDown'){ if(col===0) navFocus=Math.min(NAV.length-1,navFocus+1); else chFocus=Math.min(CHAN.length-1,chFocus+1); }
+  else if(e.key==='Enter'||e.key===' '){ if(col===0){ pickCat(); } }
+  else if(e.key==='Escape'){ document.getElementById('root').classList.toggle('peek'); }
+  if(e.key==='e'||e.key==='E'){ document.getElementById('root').classList.add('dlg'); renderSettings(); }
+  if(col===0){ [...nl.children].forEach((e,i)=>e.classList.toggle('foc', i===navFocus)); [...cl.children].forEach(e=>e.classList.remove('foc')); }
+  else paint();
+  e.preventDefault();
+});
+// 点一下 = 模拟按 Esc 隐藏面板看视频
+document.getElementById('root').addEventListener('click',()=>document.getElementById('root').classList.toggle('peek'));
+
+
+/* ============ 设置页数据（按实际界面字段） ============ */
+const SETTINGS=[
+ {k:'画面比例', v:['自动适应','16:9','4:3','原始','铺满'], sel:0},
+ {k:'EPG显示', v:['居左','居中'], sel:0},
+ {k:'上下换台反转', v:['已开启 (ON)'], sel:0, d:'当前：下键上一个，上键下一个'},
+ {k:'换台显示', v:['台号+EPG','台号','EPG'], sel:0, d:'换台时：台号和节目框 / 只台号 / 只节目框'},
+ {k:'左右按键', v:['查看 EPG 回看','切源'], sel:0, d:'直播：左右键时移/出 EPG（默认）'},
+ {k:'网速显示', v:['显示','隐藏'], sel:0},
+ {k:'开机自动播放', v:['开启','关闭'], sel:1},
+ {k:'解码方式', v:['硬件','软件'], sel:0, d:'低性能盒子软解会掉帧，仅在花屏时切换'}
+];
+let setRow=0, setOpt=0;
+function renderSettings(){
+  const w=document.getElementById('rows'); w.innerHTML='';
+  SETTINGS.forEach((it,ri)=>{
+    const r=document.createElement('div'); r.className='row'+(ri===setRow?' foc':'');
+    let h='<div class="lb"><b>'+it.k+'</b>'+(it.d?'<span>'+it.d+'</span>':'')+'</div><div class="seg">';
+    it.v.forEach((o,oi)=>{
+      const on=oi===it.sel, fo=(ri===setRow&&oi===setOpt);
+      h+='<div class="opt'+(on?' sel':'')+(fo?' foc':'')+'">'+(on?'<span class="chk">✓</span>':'')+o+'</div>';
+    });
+    h+='</div>';
+    r.innerHTML=h; w.appendChild(r);
+  });
+}
+/* 设置页键盘 */
+document.addEventListener('keydown',e=>{
+  const root=document.getElementById('root');
+  if(!root.classList.contains('dlg')) return;
+  if(e.key==='Escape'){ root.classList.remove('dlg'); return; }
+  if(e.key==='ArrowUp')   setRow=(setRow+SETTINGS.length-1)%SETTINGS.length, setOpt=SETTINGS[setRow].sel;
+  if(e.key==='ArrowDown') setRow=(setRow+1)%SETTINGS.length, setOpt=SETTINGS[setRow].sel;
+  if(e.key==='ArrowLeft') setOpt=(setOpt+SETTINGS[setRow].v.length-1)%SETTINGS[setRow].v.length;
+  if(e.key==='ArrowRight')setOpt=(setOpt+1)%SETTINGS[setRow].v.length;
+  if(e.key==='Enter'){ SETTINGS[setRow].sel=setOpt; }
+  renderSettings();
+},true);
+
+// 自适应缩放
+function fit(){
+  const s=Math.min(innerWidth/1920, innerHeight/1080);
+  const r=document.getElementById('root');
+  r.style.transform='scale('+s+')';
+  r.style.marginLeft=((innerWidth-1920*s)/2)+'px';
+  r.style.marginTop=((innerHeight-1080*s)/2)+'px';
+}
+addEventListener('resize',fit); fit();
+</script>
+</body></html>
