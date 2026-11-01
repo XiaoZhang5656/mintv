@@ -38,6 +38,14 @@ public final class CatchupProbe {
             "?utc=${ub}&lutc=${ue}",
     };
 
+    private static android.content.SharedPreferences sp;
+
+    /** 初始化持久化缓存（应用启动时调用一次）。 */
+    public static void init(android.content.Context ctx) {
+        sp = ctx.getApplicationContext()
+                .getSharedPreferences("minv_catchup", android.content.Context.MODE_PRIVATE);
+    }
+
     private CatchupProbe() {}
 
     public interface Callback {
@@ -67,6 +75,7 @@ public final class CatchupProbe {
                     hostResult.put(host, 0);
                     hostTemplate.put(host, declaredSource);
                 }
+                persist(host, 0, declaredSource);
                 return true;
             }
             // 拼法可能是整段 URL（vod 模式），直接试
@@ -76,6 +85,7 @@ public final class CatchupProbe {
                     hostResult.put(host, 0);
                     hostTemplate.put(host, declaredSource);
                 }
+                persist(host, 0, declaredSource);
                 return true;
             }
         }
@@ -88,12 +98,14 @@ public final class CatchupProbe {
                     hostResult.put(host, i);
                     hostTemplate.put(host, TEMPLATES[i]);
                 }
+                persist(host, i, TEMPLATES[i]);
                 return true;
             }
         }
         synchronized (hostResult) {
             hostResult.put(host, -1);
         }
+        persist(host, -1, null);
         return false;
     }
 
@@ -101,8 +113,24 @@ public final class CatchupProbe {
     public static Boolean cached(String host) {
         synchronized (hostResult) {
             Integer r = hostResult.get(host);
-            return r == null ? null : r >= 0;
+            if (r != null) return r >= 0;
         }
+        // 内存没有就读磁盘——探测结果跨进程重启保留，避免每次开应用重新试
+        if (sp != null) {
+            int v = sp.getInt(host, -2);
+            if (v != -2) {
+                synchronized (hostResult) { hostResult.put(host, v); }
+                return v >= 0;
+            }
+        }
+        return null;
+    }
+
+    private static void persist(String host, int templateIndex, String tpl) {
+        if (sp == null) return;
+        android.content.SharedPreferences.Editor e = sp.edit().putInt(host, templateIndex);
+        if (tpl != null) e.putString(host + "#tpl", tpl);
+        e.apply();
     }
 
     /** 用探测出来的模板给这个 host 拼回看地址。 */
@@ -111,6 +139,7 @@ public final class CatchupProbe {
         synchronized (hostResult) {
             tpl = hostTemplate.get(host);
         }
+        if (tpl == null && sp != null) tpl = sp.getString(host + "#tpl", null);
         if (tpl == null) tpl = TEMPLATES[0];
         String suffix = fill(tpl, startMs, endMs);
         return suffix.startsWith("http") ? suffix : baseUrl + suffix;
