@@ -32,27 +32,27 @@ public final class Theme {
     public static final float[] SCRIM_STOPS  = {0f, 0.52f, 0.82f, 1f};
 
     // ---------- 布局（1920x1080 基准）----------
-    public static final int NAV_W        = 300;
-    public static final int CHAN_W       = 476;
-    public static final int RAIL_W       = 64;
-    public static final int SCRIM_W      = 1180;
+    public static final int NAV_W        = 330;
+    public static final int CHAN_W       = 620;
+    public static final int RAIL_W       = 56;
+    public static final int SCRIM_W      = 1060;
 
-    public static final int NAV_ITEM_H   = 64;
-    public static final int CHAN_ITEM_H  = 92;
-    public static final int CHAN_ITEM_GAP = 7;
+    public static final int NAV_ITEM_H   = 72;
+    public static final int CHAN_ITEM_H  = 116;
+    public static final int CHAN_ITEM_GAP = 10;
 
     public static final int RADIUS_ITEM  = 10;
     public static final int FOCUS_STROKE = 2;
 
     // ---------- 字号（px @1080p）----------
     public static final int TS_NAV_TITLE = 29;
-    public static final int TS_NAV_ITEM  = 23;
-    public static final int TS_CHAN_TITLE = 24;
-    public static final int TS_CHAN_SUB  = 15;
+    public static final int TS_NAV_ITEM  = 25;
+    public static final int TS_CHAN_TITLE = 26;
+    public static final int TS_CHAN_SUB  = 16;
     public static final int TS_NUM       = 14;
     public static final int TS_CLOCK     = 21;
     public static final int TS_CLOCK_SUB = 18;
-    public static final int TS_RAIL      = 24;
+    public static final int TS_RAIL      = 22;
 
     // ---------- 设置弹窗 ----------
     public static final int DLG_W        = 1300;
