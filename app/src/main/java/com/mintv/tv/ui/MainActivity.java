@@ -63,6 +63,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
 
     // ---- 长按快进 ----
     private SeekOverlayView seekOverlay;
+    private View gestureLayer;
     private boolean seeking = false;
     private long seekBaseMs = 0;      // 长按起点位置
     private long seekStartWall = 0;   // 长按开始的墙钟时间
@@ -336,6 +337,22 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         epgLp.leftMargin = Theme.px(Theme.CHAN_W + 8);   // 紧贴左移后的频道列右侧
         epgScroll.setVisibility(View.GONE);
         root.addView(epgScroll, epgLp);
+
+        // --- 长按唤出设置的手势层（只在中央区域生效，不吃列表触摸）---
+        gestureLayer = new View(this);
+        gestureLayer.setBackgroundColor(0x00000000);
+        gestureLayer.setOnLongClickListener(new View.OnLongClickListener() {
+            @Override public boolean onLongClick(View v) {
+                openSettings();     // 长按播放区中央唤出设置
+                return true;
+            }
+        });
+        gestureLayer.setVisibility(View.GONE);   // 只在面板收起时启用
+        FrameLayout.LayoutParams gLp = new FrameLayout.LayoutParams(
+                Theme.px(760), FrameLayout.LayoutParams.MATCH_PARENT);
+        gLp.leftMargin = Theme.px(Theme.NAV_W + Theme.CHAN_W + Theme.RAIL_W);
+        gLp.gravity = Gravity.CENTER_VERTICAL;
+        root.addView(gestureLayer, gLp);
 
         // --- 长按快进预览 ---
         seekOverlay = new SeekOverlayView(this);
@@ -667,6 +684,21 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             }
         }
     };
+    /** 设置行下标（与 DemoData.ROW_TITLES 顺序一致） */
+    private static final int ROW_TIMEOUT_SWITCH = 8;
+    private static final int ROW_TIMEOUT_SECONDS = 9;
+
+    private boolean autoSwitchSource() { return selections[ROW_TIMEOUT_SWITCH] == 0; }
+
+    private long switchTimeoutMs() {
+        switch (selections[ROW_TIMEOUT_SECONDS]) {
+            case 0: return 5000;
+            case 2: return 12000;
+            case 3: return 20000;
+            default: return 8000;
+        }
+    }
+
     private boolean playing = false;
     private boolean watchdogFired = false;
 
@@ -675,7 +707,8 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         playing = false;
         watchdogFired = false;
         ui.removeCallbacks(playbackWatchdog);
-        ui.postDelayed(playbackWatchdog, 8000);
+        if (!autoSwitchSource()) return;      // 设置里关掉就不看门狗
+        ui.postDelayed(playbackWatchdog, switchTimeoutMs());
     }
 
     private void refreshOsdTags() {
@@ -1085,6 +1118,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     }
 
     private void openSettings() {
+        if (gestureLayer != null) gestureLayer.setVisibility(View.GONE);
         dialogRoot.setVisibility(View.VISIBLE);
         dialogRoot.setAlpha(0f);
         dialogRoot.animate().alpha(1f).setDuration(140).start();
@@ -1096,6 +1130,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
 
     private void closeSettings() {
         dialogRoot.setVisibility(View.GONE);
+        if (gestureLayer != null && !panelVisible) gestureLayer.setVisibility(View.VISIBLE);
         focus.exitSettings();
         updateChannelFocus(focus.chanIndex());
     }
@@ -1128,6 +1163,14 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     @Override
     public void onSettingRowChanged(int rowIndex, int optIndex) {
         applyRowFocus(rowIndex);
+    }
+
+    /** 设置项写入后调用：只处理需要立刻生效的项。 */
+    private void onSettingCommitted(int row, int value) {
+        selections[row] = value;
+        if (row == ROW_TIMEOUT_SWITCH || row == ROW_TIMEOUT_SECONDS) {
+            armWatchdog();     // 立即按新策略重新计时
+        }
     }
 
     @Override
@@ -1414,7 +1457,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         }
         if (keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER) {
             int row = focus.rowIndex();
-            selections[row] = focus.optIndex();
+            onSettingCommitted(row, focus.optIndex());
             rowViews.get(row).setSelected(focus.optIndex());
             return true;
         }
@@ -1451,11 +1494,13 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     private void hidePanel() {
         panelVisible = false;
         animatePanel(0f);
+        if (gestureLayer != null) gestureLayer.setVisibility(View.VISIBLE);
     }
 
     private void showPanel() {
         panelVisible = true;
         animatePanel(1f);
+        if (gestureLayer != null) gestureLayer.setVisibility(View.GONE);
     }
 
     private void animatePanel(float to) {
