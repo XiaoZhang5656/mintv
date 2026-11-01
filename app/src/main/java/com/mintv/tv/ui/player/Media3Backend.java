@@ -143,15 +143,11 @@ public final class Media3Backend implements PlaybackBackend {
         }
 
         MediaItem item = MediaItem.fromUri(Uri.parse(url));
-        String lower = url.toLowerCase();
-        MediaSource source;
-        if (lower.contains(".m3u8")) {
-            source = new HlsMediaSource.Factory(http).createMediaSource(item);
-        } else {
-            // mp4 / flv / ts 直链走通用解析器
-            source = new androidx.media3.exoplayer.source.DefaultMediaSourceFactory(http)
-                    .createMediaSource(item);
-        }
+        // 用 DefaultMediaSourceFactory 按内容自动识别 HLS / Progressive，
+        // 比手动判断扩展名稳（很多源的 m3u8 带 ?xxx 参数或走 302）
+        androidx.media3.exoplayer.source.DefaultMediaSourceFactory dmsf =
+                new androidx.media3.exoplayer.source.DefaultMediaSourceFactory(http);
+        MediaSource source = dmsf.createMediaSource(item);
 
         p.setMediaSource(source);
         p.setPlayWhenReady(true);
