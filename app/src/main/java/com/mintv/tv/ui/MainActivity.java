@@ -753,6 +753,28 @@ public class MainActivity extends Activity implements FocusEngine.Host {
 
     private String currentPlayUrl;
 
+    /** 弹播放诊断面板。 */
+    private void showDiagnostics() {
+        if (errorPanel == null) return;
+        StringBuilder sb = new StringBuilder();
+        sb.append("当前地址: ").append(currentPlayUrl).append('\n');
+        sb.append("播放器: ").append(player == null ? "null" : player.getClass().getSimpleName()).append('\n');
+        if (player instanceof Media3Backend) {
+            sb.append("状态: ").append(((Media3Backend) player).diagnostics()).append('\n');
+        }
+        boolean surfaceOk = surfaceView != null
+                && surfaceView.getHolder().getSurface() != null
+                && surfaceView.getHolder().getSurface().isValid();
+        sb.append("Surface 有效: ").append(surfaceOk).append('\n');
+        sb.append("SurfaceView 尺寸: ")
+                .append(surfaceView == null ? "-" : (surfaceView.getWidth() + "x" + surfaceView.getHeight()))
+                .append('\n');
+        sb.append("面板可见: ").append(panelVisible).append("  抽屉: ").append(epgPanelOpen).append('\n');
+        sb.append("屏幕: ").append(getResources().getDisplayMetrics().widthPixels)
+                .append('x').append(getResources().getDisplayMetrics().heightPixels).append('\n');
+        errorPanel.show("播放诊断", sb.toString());
+    }
+
     private void refreshOsdTags() {
         String src = lineTotal > 1 ? ("源 " + (currentLine + 1) + "/" + lineTotal) : "源 1/1";
         osd.setTags(src, null, lastResolution, null, null, null, lastFps);
@@ -1006,6 +1028,16 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                 .setDuration(Theme.T_PANEL).start();
         navDivider.animate().alpha(0f).setDuration(Theme.T_PANEL).start();
         railView.animate().alpha(0f).setDuration(Theme.T_PANEL).start();
+        // 滑出去的分类栏不能再吃点击
+        for (NavItemView v : navViews) v.setClickable(false);
+        ui.postDelayed(new Runnable() {
+            @Override public void run() {
+                if (!epgPanelOpen) return;
+                navPanel.setVisibility(View.GONE);
+                navDivider.setVisibility(View.GONE);
+                railView.setVisibility(View.GONE);
+            }
+        }, Theme.T_PANEL + 40);
         // 频道列左移补位
         chanContainer.animate()
                 .translationX(-Theme.px(Theme.NAV_W))
@@ -1022,12 +1054,16 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                     @Override public void run() { epgScroll.setVisibility(View.GONE); }
                 }).start();
 
+        navPanel.setVisibility(View.VISIBLE);
+        navDivider.setVisibility(View.VISIBLE);
+        railView.setVisibility(View.VISIBLE);
         navPanel.animate()
                 .translationX(0f)
                 .alpha(1f)
                 .setDuration(Theme.T_PANEL).start();
         navDivider.animate().alpha(1f).setDuration(Theme.T_PANEL).start();
         railView.animate().alpha(1f).setDuration(Theme.T_PANEL).start();
+        for (NavItemView v : navViews) v.setClickable(true);
         chanContainer.animate()
                 .translationX(0f)
                 .setDuration(Theme.T_PANEL).start();
@@ -1039,18 +1075,59 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         setPanelVisible(false);
     }
 
-    private void setPanelVisible(boolean visible) {
+    /**
+     * 面板显隐。
+     *
+     * 关键点：alpha=0 的 View <b>依然会接收触摸和点击</b>，
+     * 所以「看不见却还能点」的 bug 必须靠 setVisibility / 设置 clickable 来解决，
+     * 不能只做透明度动画。
+     */
+    private void setPanelVisible(final boolean visible) {
         if (panelVisible == visible) return;
         panelVisible = visible;
-        float to = visible ? 1f : 0f;
+        final float to = visible ? 1f : 0f;
+
+        if (visible) {
+            // 先恢复可见，再做淡入
+            setPanelsInteractive(true);
+            navPanel.setVisibility(View.VISIBLE);
+            navDivider.setVisibility(View.VISIBLE);
+            chanContainer.setVisibility(View.VISIBLE);
+            railView.setVisibility(View.VISIBLE);
+            scrim.setVisibility(View.VISIBLE);
+        }
+
         navPanel.animate().alpha(to).setDuration(Theme.T_PANEL).start();
         navDivider.animate().alpha(to).setDuration(Theme.T_PANEL).start();
         chanContainer.animate().alpha(to).setDuration(Theme.T_PANEL).start();
         railView.animate().alpha(to).setDuration(Theme.T_PANEL).start();
         scrim.animate().alpha(visible ? 1f : 0f).setDuration(Theme.T_PANEL).start();
+
+        if (!visible) {
+            // 淡出结束后彻底移除，才能保证点不到
+            ui.postDelayed(new Runnable() {
+                @Override public void run() {
+                    if (panelVisible) return;      // 期间又被唤出
+                    setPanelsInteractive(false);
+                    navPanel.setVisibility(View.GONE);
+                    navDivider.setVisibility(View.GONE);
+                    chanContainer.setVisibility(View.GONE);
+                    railView.setVisibility(View.GONE);
+                    scrim.setVisibility(View.GONE);
+                }
+            }, Theme.T_PANEL + 40);
+        }
+
         if (gestureLayer != null) {
             gestureLayer.setVisibility(visible ? View.GONE : View.VISIBLE);
         }
+    }
+
+    /** 面板不可见时把子 View 全部设为不可点击，双保险。 */
+    private void setPanelsInteractive(boolean enabled) {
+        for (NavItemView v : navViews) v.setClickable(enabled);
+        for (ChannelView v : chanViews) v.setClickable(enabled);
+        if (chanContainer != null) chanContainer.setClickable(enabled);
     }
 
     private boolean epgPanelOpen = false;
@@ -1506,6 +1583,13 @@ public class MainActivity extends Activity implements FocusEngine.Host {
 
         if (keyCode == KeyEvent.KEYCODE_MENU) {
             openSettings();
+            return true;
+        }
+
+        // 长按 OK 键（或 INFO 键）弹播放诊断，方便现场看"有声音没画面"
+        if (keyCode == KeyEvent.KEYCODE_INFO
+                || (keyCode == KeyEvent.KEYCODE_MENU && event.isLongPress())) {
+            showDiagnostics();
             return true;
         }
 
