@@ -21,13 +21,20 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      # 不用 android-actions/setup-android（内部调 sdkmanager，在 runner 上易 401/超时）。
-      # ubuntu-latest 镜像自带 ANDROID_HOME 与 cmdline-tools，AGP 会自己补 platform。
       - name: Show preinstalled Android SDK
         run: |
           echo "ANDROID_HOME=$ANDROID_HOME"
           ls "$ANDROID_HOME/platforms" || true
-          ls "$ANDROID_HOME/build-tools" || true
+
+      # runner 自带的 debug.keystore 每次都是新的，导致覆盖安装失败。
+      # 这里生成一个固定密钥（口令 android/android），保证每次升级都能覆盖安装。
+      - name: Create stable debug keystore
+        run: |
+          rm -f app/debug.keystore
+          keytool -genkeypair -v \
+            -keystore app/debug.keystore -storepass android -keypass android \
+            -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 \
+            -dname "CN=Android Debug,O=Android,C=US"
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v3
@@ -44,8 +51,6 @@ jobs:
           path: app/build/outputs/apk/debug/*.apk
           if-no-files-found: warn
 
-      # 额外把 APK 放回仓库 public/apk/，这样 raw.githubusercontent.com 可以直链下载，
-      # 不依赖 artifact 的 Azure 鉴权跳转。
       - name: Publish APK to public/apk
         run: |
           mkdir -p public/apk
