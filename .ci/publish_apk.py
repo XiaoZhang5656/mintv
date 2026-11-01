@@ -43,12 +43,22 @@ def call(url, method='GET', body=None, tries=6, ok404=False):
     raise SystemExit('publish failed: %s' % last)
 
 
+def read_version_code(apk_path):
+    """从 build.gradle 读 versionCode —— 比解析 AXML 简单可靠。
+    CI 里 gradle 刚从这份文件构建，两者必然一致。"""
+    import re
+    txt = open('app/build.gradle', encoding='utf-8').read()
+    m = re.search(r'versionCode\s+(\d+)', txt)
+    return m.group(1) if m else '?'
+
+
 def main():
     apk = sorted(glob.glob('app/build/outputs/apk/debug/*.apk'))[0]
     data = open(apk, 'rb').read()
-    print('apk', apk, len(data), 'bytes')
+    vc = read_version_code(apk)
+    print('apk', apk, len(data), 'bytes versionCode=', vc)
 
-    cur = call(API, ok404=True)
+    cur = call(API, ok404=True)  # 不存在时返回 None，PUT 即为新建
     body = {
         'message': 'ci: publish debug apk [skip ci]',
         'content': base64.b64encode(data).decode(),
