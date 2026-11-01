@@ -17,6 +17,8 @@ import androidx.media3.exoplayer.ExoPlayer;
 import androidx.media3.exoplayer.hls.HlsMediaSource;
 import androidx.media3.exoplayer.source.MediaSource;
 
+import java.util.Map;
+
 /**
  * Media3 实现。只写 Java，media3 内部的少量 Kotlin 代码跟你无关。
  *
@@ -84,6 +86,48 @@ public final class Media3Backend implements PlaybackBackend {
     public void setSurface(Surface s) {
         surface = s;
         if (player != null) player.setVideoSurface(s);
+    }
+
+    /** 带自定义请求头播放（源里写成 url|User-Agent=xx 的情况）。 */
+    public void play(Context appCtx, String url, Map<String, String> headers, boolean live) {
+        if (released) return;
+        ExoPlayer p = ensurePlayer(appCtx);
+        if (surface != null) p.setVideoSurface(surface);
+        p.stop();
+        p.clearMediaItems();
+
+        currentUrl = url;
+        notifyState(State.BUFFERING);
+
+        DefaultHttpDataSource.Factory http = new DefaultHttpDataSource.Factory()
+                .setUserAgent("TVUI/1.0")
+                .setConnectTimeoutMs(8000)
+                .setReadTimeoutMs(8000)
+                .setAllowCrossProtocolRedirects(true);
+        if (headers != null && !headers.isEmpty()) {
+            for (Map.Entry<String, String> e : headers.entrySet()) {
+                // User-Agent 单独设，其余进默认请求头
+                if ("User-Agent".equalsIgnoreCase(e.getKey())) {
+                    http.setUserAgent(e.getValue());
+                }
+            }
+            http.setDefaultRequestProperties(headers);
+        }
+
+        MediaItem item = MediaItem.fromUri(Uri.parse(url));
+        String lower = url.toLowerCase();
+        MediaSource source;
+        if (lower.contains(".m3u8")) {
+            source = new HlsMediaSource.Factory(http).createMediaSource(item);
+        } else {
+            // mp4 / flv / ts 直链走通用解析器
+            source = new androidx.media3.exoplayer.source.DefaultMediaSourceFactory(http)
+                    .createMediaSource(item);
+        }
+
+        p.setMediaSource(source);
+        p.setPlayWhenReady(true);
+        p.prepare();
     }
 
     @Override
