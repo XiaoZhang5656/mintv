@@ -194,11 +194,8 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         root.addView(surfaceView, lp);
     }
 
-    /** 频道列宽度：设计值不够屏宽 34% 时按比例放大，保证大屏不留空白。 */
     private int chanWidth() {
-        int w = Theme.px(Theme.CHAN_W);
-        int need = (int) (getResources().getDisplayMetrics().widthPixels * 0.34f);
-        return Math.max(w, need);
+        return Theme.px(Theme.CHAN_W);
     }
 
     private void buildOverlay(FrameLayout root) {
@@ -308,12 +305,10 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         clockLp.topMargin = Theme.px(18);
         root.addView(clock, clockLp);
 
-        // --- 抽屉式 EPG：展开后分类栏收起，频道列左移，右边是节目单 ---
-        //    布局：[频道列 476][间隔 8][节目单 776]
-        // 节目单吃掉频道列右侧全部剩余宽度，不留空
-        int screenW = getResources().getDisplayMetrics().widthPixels;
-        int epgW = Math.max(Theme.px(420),
-                screenW - Theme.px(Theme.CHAN_W) - Theme.px(16));
+        // --- 抽屉式 EPG ---
+        // 展开后布局：[频道列 476][间隔 8][节目单 422][播放画面 剩余]
+        // 分类栏滑出屏幕，频道列左移 300 补位。
+        int epgW = Theme.px(Theme.EPG_W);
         epgScroll = new ScrollView(this);
         epgScroll.setVerticalScrollBarEnabled(false);
         epgScroll.setOverScrollMode(View.OVER_SCROLL_NEVER);
@@ -324,7 +319,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                 android.widget.FrameLayout.LayoutParams.MATCH_PARENT));
         FrameLayout.LayoutParams epgLp = new FrameLayout.LayoutParams(
                 epgW, FrameLayout.LayoutParams.MATCH_PARENT);
-        epgLp.leftMargin = Theme.px(Theme.CHAN_W + 8);   // 抽屉展开后紧贴左移的频道列
+        epgLp.leftMargin = Theme.px(Theme.CHAN_W + 8);   // 紧贴左移后的频道列右侧
         epgScroll.setVisibility(View.GONE);
         root.addView(epgScroll, epgLp);
 
