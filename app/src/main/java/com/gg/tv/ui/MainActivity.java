@@ -1,6 +1,7 @@
 package com.gg.tv.ui;
 
 import android.app.Activity;
+import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.os.Bundle;
 import android.os.Handler;
@@ -18,6 +19,9 @@ import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 
+import com.gg.tv.data.LogoLoader;
+import com.gg.tv.data.PlaylistParser;
+import com.gg.tv.data.SourceStore;
 import com.gg.tv.ui.focus.FocusEngine;
 import com.gg.tv.ui.player.Media3Backend;
 import com.gg.tv.ui.player.PlaybackBackend;
@@ -55,9 +59,12 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     // ---- 状态 ----
     private final FocusEngine focus = new FocusEngine();
     private List<DemoData.Category> categories;
-    private List<DemoData.Channel> channels;
+    private PlaylistParser.Playlist playlist;
+    private List<PlaylistParser.Channel> channels;
+    private final LogoLoader logos = new LogoLoader();
     private boolean panelVisible = true;
-    private int playingChannel = 4;
+    private int playingChannel = 0;
+    private int currentLine = 0;
 
     // ---- 设置弹窗 ----
     private FrameLayout dialogRoot;
@@ -82,8 +89,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         int sw = getResources().getDisplayMetrics().widthPixels;
         Theme.init(sw);
 
-        categories = DemoData.categories();
-        channels = DemoData.bj();
+        loadPlaylist();
 
         FrameLayout root = new FrameLayout(this);
         root.setBackgroundColor(Color.BLACK);
@@ -256,16 +262,102 @@ public class MainActivity extends Activity implements FocusEngine.Host {
 
     // ================= 频道列表 =================
 
+    /** 读取源：有 URL 走网络（带本地缓存兜底），没有就用内置示范。 */
+    private void loadPlaylist() {
+        String url = SourceStore.url(this);
+        String body = null;
+        if (url != null && !url.isEmpty()) {
+            body = SourceStore.cachedBody(this);
+        }
+        if (body == null || body.trim().isEmpty()) {
+            body = DemoData.SAMPLE_M3U;
+        }
+        applyPlaylist(body);
+
+        if (url != null && !url.isEmpty()) {
+            fetchSourceAsync(url);
+        }
+    }
+
+    private void applyPlaylist(String body) {
+        playlist = PlaylistParser.parse(body);
+        categories = DemoData.toCategories(playlist);
+        channels = playlist.all;
+    }
+
+    /** 后台拉源，成功后重建界面。失败就继续用缓存/示范。 */
+    private void fetchSourceAsync(final String url) {
+        new Thread(new Runnable() {
+            @Override public void run() {
+                String body = null;
+                java.net.HttpURLConnection conn = null;
+                try {
+                    conn = (java.net.HttpURLConnection) new java.net.URL(url).openConnection();
+                    conn.setConnectTimeout(10000);
+                    conn.setReadTimeout(15000);
+                    conn.setRequestProperty("User-Agent", "TVUI/1.0");
+                    conn.setInstanceFollowRedirects(true);
+                    java.io.InputStream in = conn.getInputStream();
+                    java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+                    byte[] buf = new byte[16384];
+                    int n;
+                    while ((n = in.read(buf)) > 0) bos.write(buf, 0, n);
+                    in.close();
+                    body = bos.toString("UTF-8");
+                } catch (Exception ignored) {
+                } finally {
+                    if (conn != null) conn.disconnect();
+                }
+                final String result = body;
+                if (result == null || result.trim().isEmpty()) return;
+                SourceStore.saveBody(MainActivity.this, result);
+                ui.post(new Runnable() {
+                    @Override public void run() {
+                        applyPlaylist(result);
+                        rebuildCategoryColumn();
+                        bindChannels();
+                        updateChannelFocus(0);
+                    }
+                });
+            }
+        }, "source-fetch").start();
+    }
+
+    private void rebuildCategoryColumn() {
+        if (navPanel instanceof LinearLayout) {
+            LinearLayout nav = (LinearLayout) navPanel;
+            View scroll = nav.getChildAt(1);
+            if (scroll instanceof ScrollView) {
+                LinearLayout list = (LinearLayout) ((ScrollView) scroll).getChildAt(0);
+                list.removeAllViews();
+                navViews.clear();
+                for (int i = 0; i < categories.size(); i++) {
+                    DemoData.Category cat = categories.get(i);
+                    NavItemView v = new NavItemView(MainActivity.this);
+                    v.bind(cat.name, cat.count, cat.glyph);
+                    LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT, Theme.px(Theme.NAV_ITEM_H));
+                    p.bottomMargin = Theme.px(2);
+                    list.addView(v, p);
+                    navViews.add(v);
+                }
+                focus.setNavCount(categories.size());
+                updateNavFocus(Math.min(focus.navIndex(), categories.size() - 1));
+            }
+        }
+    }
+
     private void bindChannels() {
         chanColumn.removeAllViews();
         chanViews.clear();
         for (int i = 0; i < channels.size(); i++) {
-            DemoData.Channel ch = channels.get(i);
-            ChannelView v = new ChannelView(this);
-            v.setNumber(ch.no);
+            final PlaylistParser.Channel ch = channels.get(i);
+            final ChannelView v = new ChannelView(this);
+            v.setNumber(ch.number);
             v.setName(ch.name);
-            v.setSub(ch.now);
-            v.setBadge(ch.badge);
+            v.setSub("");                       // 没接 EPG 就不画副行，不编造假节目
+            v.setBadge(null);
+
             LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, Theme.px(Theme.CHAN_ITEM_H));
             p.leftMargin = Theme.px(14);
@@ -274,6 +366,25 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             p.bottomMargin = Theme.px(Theme.CHAN_ITEM_GAP / 2);
             chanColumn.addView(v, p);
             chanViews.add(v);
+
+            // 只有源里带 tvg-logo 才去加载，没有就不占图标位
+            if (ch.logo != null && !ch.logo.isEmpty()) {
+                Bitmap cached = logos.peek(ch.logo);
+                if (cached != null) {
+                    v.setLogo(cached);
+                    v.requestLayout();
+                } else {
+                    logos.load(ch.logo, new LogoLoader.Callback() {
+                        @Override public void onLogo(String url, final Bitmap bmp) {
+                            ui.post(new Runnable() {
+                                @Override public void run() {
+                                    if (!bmp.isRecycled()) { v.setLogo(bmp); v.invalidate(); }
+                                }
+                            });
+                        }
+                    });
+                }
+            }
         }
         focus.setChannelCount(channels.size());
     }
@@ -324,9 +435,19 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     private void playChannel(int index) {
         if (index < 0 || index >= channels.size()) return;
         playingChannel = index;
-        DemoData.Channel ch = channels.get(index);
-        osd.showChannelOsd(ch.no, ch.name);
-        player.play(getApplicationContext(), ch.url, true);
+        PlaylistParser.Channel ch = channels.get(index);
+        String no = String.valueOf(ch.number);
+        while (no.length() < 4) no = "0" + no;
+        osd.showChannelOsd(no, ch.name);
+        if (ch.sources.isEmpty()) return;
+        PlaylistParser.Source src = ch.sources.get(currentLine);
+        if (currentLine >= ch.sources.size()) { src = ch.sources.get(0); currentLine = 0; }
+        if (player instanceof Media3Backend) {
+            ((Media3Backend) player).play(getApplicationContext(),
+                    PlaylistParser.cleanUrl(src.url), src.headers, true);
+        } else {
+            player.play(getApplicationContext(), PlaylistParser.cleanUrl(src.url), true);
+        }
     }
 
     // ================= 设置弹窗 =================
@@ -697,7 +818,11 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             navViews.get(i).setActive(i == index);
         }
         String name = categories.get(index).name;
-        channels = ("全部".equals(name) || "省内".equals(name)) ? DemoData.bj() : DemoData.all();
+        List<PlaylistParser.Channel> list = "全部".equals(name)
+                ? playlist.all
+                : playlist.byGroup.get(name);
+        channels = list == null ? new ArrayList<PlaylistParser.Channel>() : list;
+        currentLine = 0;
         bindChannels();
         focus.resetChannelFocus();
         updateChannelFocus(0);
