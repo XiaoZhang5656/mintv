@@ -45,15 +45,20 @@ public final class PlaylistParser {
         public final String name;
         public final String group;      // 分类，来自 group-title 或 #genre#
         public final String logo;       // tvg-logo，可能为 null
+        public final String tvgId;      // tvg-id，用于 EPG 匹配，可能为 null
         public final int number;        // 自动生成的台号，从 1 开始
         public final List<Source> sources = new ArrayList<>();
 
-        Channel(String name, String group, String logo, int number) {
+        Channel(String name, String group, String logo, String tvgId, int number) {
             this.name = name;
             this.group = group;
             this.logo = logo;
+            this.tvgId = tvgId;
             this.number = number;
         }
+
+        /** EPG 匹配用，可能为空 */
+        public String tvgId() { return tvgId; }
     }
 
     public static final class Playlist {
@@ -119,6 +124,7 @@ public final class PlaylistParser {
         String pendingName = null;
         String pendingGroup = DEFAULT_GROUP;
         String pendingLogo = null;
+        String pendingTvgId = null;
 
         String[] lines = text.split("\r?\n");
         for (String raw : lines) {
@@ -130,6 +136,7 @@ public final class PlaylistParser {
                 String g = attr(line, "group-title");
                 pendingGroup = (g == null || g.isEmpty()) ? DEFAULT_GROUP : cleanGroup(g);
                 pendingLogo = attr(line, "tvg-logo");
+                pendingTvgId = attr(line, "tvg-id");
                 if (pendingName == null || pendingName.isEmpty()) pendingName = attr(line, "tvg-name");
                 continue;
             }
@@ -137,14 +144,15 @@ public final class PlaylistParser {
             if (line.startsWith("#")) continue;   // 其它指令忽略
 
             // 到这里就是地址行
-            if (isMetaGroup(pendingGroup)) { pendingName = null; pendingLogo = null; pendingGroup = DEFAULT_GROUP; continue; }
+            if (isMetaGroup(pendingGroup)) { pendingName = null; pendingLogo = null; pendingTvgId = null; pendingGroup = DEFAULT_GROUP; continue; }
             String url = line;
             String name = pendingName;
             if (name == null || name.isEmpty()) name = nameFromUrl(url);
-            addSource(pl, byName, name, pendingGroup, pendingLogo, url);
+            addSource(pl, byName, name, pendingGroup, pendingLogo, pendingTvgId, url);
 
             pendingName = null;
             pendingLogo = null;
+            pendingTvgId = null;
             pendingGroup = DEFAULT_GROUP;
         }
         return pl;
@@ -209,7 +217,7 @@ public final class PlaylistParser {
 
             // 普通频道行： 名称,地址
             if (right.isEmpty()) continue;
-            addSource(pl, byName, left, currentGroup, null, right);
+            addSource(pl, byName, left, currentGroup, null, null, right);
         }
         return pl;
     }
@@ -217,11 +225,11 @@ public final class PlaylistParser {
     // ---------------- 公共 ----------------
 
     private static void addSource(Playlist pl, Map<String, Channel> byName,
-                                  String name, String group, String logo, String url) {
+                                  String name, String group, String logo, String tvgId, String url) {
         String key = name + "|" + group;
         Channel ch = byName.get(key);
         if (ch == null) {
-            ch = new Channel(name, group, logo, pl.all.size() + 1);
+            ch = new Channel(name, group, logo, tvgId, pl.all.size() + 1);
             byName.put(key, ch);
             pl.all.add(ch);
             List<Channel> list = pl.byGroup.get(group);
@@ -230,8 +238,6 @@ public final class PlaylistParser {
                 pl.byGroup.put(group, list);
             }
             list.add(ch);
-        } else if (ch.logo == null && logo != null) {
-            // 后续行补上了图标
         }
         ch.sources.add(new Source(url, parseHeaders(url)));
     }
