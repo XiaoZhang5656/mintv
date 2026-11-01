@@ -46,6 +46,15 @@ public final class PlaylistParser {
         public final String group;      // 分类，来自 group-title 或 #genre#
         public final String logo;       // tvg-logo，可能为 null
         public final String tvgId;      // tvg-id，用于 EPG 匹配，可能为 null
+        /**
+         * 回看方式，来自 #EXTINF 的 catchup 属性：
+         * default / append / shift / vod，null 表示该频道不支持回看。
+         */
+        public String catchup;
+        /** catchup-source 模板，如 ?playseek=${(b)yyyyMMddHHmmss}-${(e)yyyyMMddHHmmss} */
+        public String catchupSource;
+        /** catchup-correction（有的源用它表示时区修正） */
+        public String catchupCorrection;
         public final int number;        // 自动生成的台号，从 1 开始
         public final List<Source> sources = new ArrayList<>();
 
@@ -125,6 +134,7 @@ public final class PlaylistParser {
         String pendingGroup = DEFAULT_GROUP;
         String pendingLogo = null;
         String pendingTvgId = null;
+        String pendingCatchup = null, pendingCatchupSrc = null, pendingCatchupCorr = null;
 
         String[] lines = text.split("\r?\n");
         for (String raw : lines) {
@@ -137,6 +147,9 @@ public final class PlaylistParser {
                 pendingGroup = (g == null || g.isEmpty()) ? DEFAULT_GROUP : cleanGroup(g);
                 pendingLogo = attr(line, "tvg-logo");
                 pendingTvgId = attr(line, "tvg-id");
+                pendingCatchup = attr(line, "catchup");
+                pendingCatchupSrc = attr(line, "catchup-source");
+                pendingCatchupCorr = attr(line, "catchup-correction");
                 if (pendingName == null || pendingName.isEmpty()) pendingName = attr(line, "tvg-name");
                 continue;
             }
@@ -150,7 +163,18 @@ public final class PlaylistParser {
             if (name == null || name.isEmpty()) name = nameFromUrl(url);
             addSource(pl, byName, name, pendingGroup, pendingLogo, pendingTvgId, url);
 
+            // 回看属性绑到刚建/命中的频道上
+            Channel just = byName.get(name + "|" + pendingGroup);
+            if (just != null && pendingCatchup != null) {
+                just.catchup = pendingCatchup;
+                just.catchupSource = pendingCatchupSrc;
+                just.catchupCorrection = pendingCatchupCorr;
+            }
+
             pendingName = null;
+            pendingCatchup = null;
+            pendingCatchupSrc = null;
+            pendingCatchupCorr = null;
             pendingLogo = null;
             pendingTvgId = null;
             pendingGroup = DEFAULT_GROUP;
@@ -266,6 +290,75 @@ public final class PlaylistParser {
             h.put(part.substring(0, eq).trim(), part.substring(eq + 1).trim());
         }
         return h;
+    }
+
+    /**
+     * 按 catchup 规范拼回看地址。
+     *
+     * <p>支持的模板占位符（与 iptv-api / tvbox 生态一致）：
+     * <pre>
+     * ${(b)yyyyMMddHHmmss}   开始时间
+     * ${(e)yyyyMMddHHmmss}   结束时间
+     * ${utc}  ${utcend}      开始 / 结束的 Unix 秒
+     * ${start} ${end}        起止时间的毫秒时间戳
+     * {start} {end}          同上，另一种写法
+     * </pre>
+     *
+     * @return 回看播放地址；该频道不支持回看或模板为空时返回 null
+     */
+    public static String buildCatchupUrl(Channel ch, long startMs, long endMs) {
+        if (ch == null || ch.catchup == null || ch.sources.isEmpty()) return null;
+        if (endMs <= startMs) return null;
+        String base = cleanUrl(ch.sources.get(0).url);
+        String src = ch.catchupSource;
+
+        if (src == null || src.isEmpty()) {
+            // catchup="default" 或只写了 catchup 没给模板：多数源用这个通用写法
+            src = "?playseek=${(b)yyyyMMddHHmmss}-${(e)yyyyMMddHHmmss}";
+        }
+
+        java.text.SimpleDateFormat f = new java.text.SimpleDateFormat(
+                "yyyyMMddHHmmss", java.util.Locale.US);
+        f.setTimeZone(java.util.TimeZone.getTimeZone("Asia/Shanghai"));
+
+        String out = src;
+        out = out.replace("${(b)yyyyMMddHHmmss}", f.format(new java.util.Date(startMs)));
+        out = out.replace("${(e)yyyyMMddHHmmss}", f.format(new java.util.Date(endMs)));
+        out = out.replace("${(b)yyyy-MM-dd HH:mm:ss}", fmt(startMs));
+        out = out.replace("${(e)yyyy-MM-dd HH:mm:ss}", fmt(endMs));
+        out = out.replace("${utc}", String.valueOf(startMs / 1000));
+        out = out.replace("${utcend}", String.valueOf(endMs / 1000));
+        out = out.replace("${start}", String.valueOf(startMs));
+        out = out.replace("${end}", String.valueOf(endMs));
+        out = out.replace("{start}", String.valueOf(startMs));
+        out = out.replace("{end}", String.valueOf(endMs));
+
+        String mode = ch.catchup.toLowerCase(java.util.Locale.US);
+        if (mode.contains("append")) {
+            // 直接拼到直播地址后面
+            return base + out;
+        }
+        if (mode.contains("shift")) {
+            // 替换地址最后一段（常见于 /live/xxx/1234.m3u8 里再拼时移参数）
+            return base + out;
+        }
+        if (mode.contains("vod")) {
+            return out.startsWith("http") ? out : base + out;
+        }
+        // default / 其它：能拼就拼
+        return base + out;
+    }
+
+    private static String fmt(long ms) {
+        java.text.SimpleDateFormat f = new java.text.SimpleDateFormat(
+                "yyyy-MM-dd HH:mm:ss", java.util.Locale.US);
+        f.setTimeZone(java.util.TimeZone.getTimeZone("Asia/Shanghai"));
+        return f.format(new java.util.Date(ms));
+    }
+
+    /** 该频道是否具备回看能力。 */
+    public static boolean canReplay(Channel ch) {
+        return ch != null && ch.catchup != null && !ch.sources.isEmpty();
     }
 
     /** 去掉 URL 上的参数尾巴，只留真实地址。 */
