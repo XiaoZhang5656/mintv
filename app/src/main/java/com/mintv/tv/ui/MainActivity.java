@@ -150,12 +150,22 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         player = new Media3Backend();
         player.setCallback(new PlaybackBackend.Callback() {
             @Override public void onState(PlaybackBackend.State s) {
+                if (s == PlaybackBackend.State.READY) {
+                    playing = true;
+                    watchdogFired = true;
+                    ui.removeCallbacks(playbackWatchdog);
+                }
                 osd.setStatus(OsdView.stateText(s));   // READY 返回 null，会自动清空
             }
             @Override public void onError(String msg) {
                 osd.setStatus("源失效：" + msg);
             }
-            @Override public void onFirstFrame() { }
+            @Override public void onFirstFrame() {
+                playing = true;
+                watchdogFired = true;
+                ui.removeCallbacks(playbackWatchdog);
+                osd.setStatus(null);
+            }
 
             @Override public void onTimeline(long pos, long dur, long buf) {
                 curPosition = pos;
@@ -188,10 +198,9 @@ public class MainActivity extends Activity implements FocusEngine.Host {
 
     private void buildPlayer(FrameLayout root) {
         surfaceView = new SurfaceView(this);
-        // 让 SurfaceView 与窗口一起合成（不单独压在 Activity 之上），
-        // 否则 Surface 未出画面时会整屏黑；同时 UI 层才能正常盖在视频上。
+        // 不要改 SurfaceView 的 PixelFormat：默认就是解码器直出的格式，
+        // 设成 RGBA_8888 会强制走 GPU 合成，MediaCodec 就出不了画面。
         surfaceView.setZOrderMediaOverlay(false);
-        surfaceView.getHolder().setFormat(android.graphics.PixelFormat.RGBA_8888);
         surfaceView.setBackgroundColor(Color.BLACK);
         FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
@@ -633,12 +642,40 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         if (ch.sources.isEmpty()) return;
         PlaylistParser.Source src = ch.sources.get(currentLine);
         if (currentLine >= ch.sources.size()) { src = ch.sources.get(0); currentLine = 0; }
+        armWatchdog();
         if (player instanceof Media3Backend) {
             ((Media3Backend) player).play(getApplicationContext(),
                     PlaylistParser.cleanUrl(src.url), src.headers, PlaybackBackend.Mode.LIVE);
         } else {
             player.play(getApplicationContext(), PlaylistParser.cleanUrl(src.url), PlaybackBackend.Mode.LIVE);
         }
+    }
+
+    private final Runnable playbackWatchdog = new Runnable() {
+        @Override public void run() {
+            if (!playing && !watchdogFired) {
+                watchdogFired = true;
+                PlaylistParser.Channel ch = (playingChannel >= 0 && playingChannel < channels.size())
+                        ? channels.get(playingChannel) : null;
+                if (ch != null && ch.sources.size() > 1) {
+                    currentLine = (currentLine + 1) % ch.sources.size();
+                    osd.toast("该线路无响应，切换线路 " + (currentLine + 1) + "/" + ch.sources.size());
+                    playChannel(playingChannel);
+                } else {
+                    osd.toast("该源无响应");
+                }
+            }
+        }
+    };
+    private boolean playing = false;
+    private boolean watchdogFired = false;
+
+    /** 起播后调用：8 秒没出画面就自愈。 */
+    private void armWatchdog() {
+        playing = false;
+        watchdogFired = false;
+        ui.removeCallbacks(playbackWatchdog);
+        ui.postDelayed(playbackWatchdog, 8000);
     }
 
     private void refreshOsdTags() {
