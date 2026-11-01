@@ -45,8 +45,18 @@ jobs:
           path: app/build/outputs/apk/debug/*.apk
 
       # git push 到 github.com 在 runner 上常被断，改用 REST API 回写
-      - name: Publish APK via API
+      # 回写 APK：先试 git push（快），失败再走 Contents API（绕开 443 断连）。
+      # 内置 GITHUB_TOKEN 在 permissions: contents: write 下两者都有写权限。
+      - name: Publish APK
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
-        run: python3 .ci/publish_apk.py
+        run: |
+          mkdir -p public/apk
+          cp app/build/outputs/apk/debug/*.apk public/apk/tvui-java-debug.apk
+          ls -la public/apk
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f public/apk/tvui-java-debug.apk
+          git diff --cached --quiet || git commit -m "ci: publish debug apk [skip ci]"
+          git push || python3 .ci/publish_apk.py
