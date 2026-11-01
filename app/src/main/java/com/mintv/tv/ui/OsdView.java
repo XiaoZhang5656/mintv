@@ -157,7 +157,7 @@ public class OsdView extends View {
 
     private void drawOsd(Canvas c, float h) {
         float padH = Theme.px(22);
-        float cardW = Theme.px(720);
+        float cardW = Theme.px(1080);
 
         // 先量高度：标题行 + 目前 + 进度 + 下个 + 标签行
         float lineTitle = Theme.sp(28);
