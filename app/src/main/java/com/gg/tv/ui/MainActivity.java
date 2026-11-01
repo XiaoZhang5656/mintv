@@ -65,6 +65,8 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     private boolean panelVisible = true;
     private int playingChannel = 0;
     private int currentLine = 0;
+    private int lineTotal = 1;
+    private String lastResolution, lastFps;
 
     // ---- 设置弹窗 ----
     private FrameLayout dialogRoot;
@@ -115,6 +117,12 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                 osd.setStatus("源失效：" + msg);
             }
             @Override public void onFirstFrame() { }
+
+            @Override public void onVideoFormat(String res, String vc, String ac, String ch, String fps) {
+                if (res != null) lastResolution = res;
+                if (fps != null) lastFps = fps;
+                refreshOsdTags();
+            }
         });
 
         // Surface 一就绪就开播，避免先黑屏再起播
@@ -493,7 +501,13 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         PlaylistParser.Channel ch = channels.get(index);
         String no = String.valueOf(ch.number);
         while (no.length() < 4) no = "0" + no;
-        osd.showChannelOsd(no, ch.name);
+        lastResolution = null;
+        lastFps = null;
+        lineTotal = ch.sources.size();
+        osd.showChannel(no, ch.name, ch.group);
+        osd.setClock(new java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.CHINA)
+                .format(new java.util.Date()));
+        refreshOsdTags();
         if (ch.sources.isEmpty()) return;
         PlaylistParser.Source src = ch.sources.get(currentLine);
         if (currentLine >= ch.sources.size()) { src = ch.sources.get(0); currentLine = 0; }
@@ -503,6 +517,11 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         } else {
             player.play(getApplicationContext(), PlaylistParser.cleanUrl(src.url), true);
         }
+    }
+
+    private void refreshOsdTags() {
+        String src = lineTotal > 1 ? ("源 " + (currentLine + 1) + "/" + lineTotal) : "源 1/1";
+        osd.setTags(src, null, lastResolution, null, null, null, lastFps);
     }
 
     // ================= 设置弹窗 =================
