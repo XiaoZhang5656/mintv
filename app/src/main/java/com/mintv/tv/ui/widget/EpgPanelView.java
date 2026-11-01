@@ -53,10 +53,10 @@ public class EpgPanelView extends android.view.View {
     private Item[] items = new Item[0];
     private int focusIndex = -1;
 
-    private final float padH = Theme.px(22);
+    private final float padH = Theme.px(20);
     private final float headerH = Theme.px(66);
     private final float itemH = Theme.px(62);
-    private final float timeW = Theme.px(76);
+    private final float timeW = Theme.px(72);
 
     public EpgPanelView(Context c) {
         super(c);
@@ -160,7 +160,7 @@ public class EpgPanelView extends android.view.View {
             p.setColor(it.live ? Theme.TEXT : 0xFFE2E2E6);
             p.setTextSize(Theme.sp(21));
             float tx = padH + timeW;
-            float maxW = getWidth() - tx - padH - Theme.px(86);
+            float maxW = getWidth() - tx - padH - Theme.px(76);
             c.drawText(fit(it.title, maxW, Theme.sp(21)), tx, baseline, p);
 
             // 右侧标记：直播中 / 可回看（可点才亮）
