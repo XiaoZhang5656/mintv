@@ -156,9 +156,8 @@ public class OsdView extends View {
     }
 
     private void drawOsd(Canvas c, float h) {
-        android.util.Log.d("TVUI", "drawOsd " + debugLine() + " w=" + getWidth() + " h=" + h);
-        float padH = Theme.px(20);
-        float cardW = Theme.px(660);
+        float padH = Theme.px(22);
+        float cardW = Theme.px(720);
 
         // 先量高度：标题行 + 目前 + 进度 + 下个 + 标签行
         float lineTitle = Theme.sp(28);
@@ -174,14 +173,14 @@ public class OsdView extends View {
                 + (nextText != null ? lineSub + gap : 0)
                 + chipH + padH;
         float cardH = contentH;
-        float left = Theme.px(56);
-        float bottom = h - Theme.px(48);
+        float left = (getWidth() - cardW) / 2f;   // 底部居中
+        float bottom = h - Theme.px(56);
         float top = bottom - cardH;
 
         // 卡片底
         r.set(left, top, left + cardW, bottom);
         fill.setColor(0xE0101216);
-        c.drawRoundRect(r, Theme.px(4), Theme.px(4), fill);
+        c.drawRoundRect(r, Theme.px(8), Theme.px(8), fill);
         // 左侧蓝条
         fill.setColor(Theme.FOCUS_BLUE);
         r.set(left, top, left + Theme.px(3), bottom);
