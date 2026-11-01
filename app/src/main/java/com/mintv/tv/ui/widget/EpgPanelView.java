@@ -31,15 +31,17 @@ public class EpgPanelView extends android.view.View {
         public final String title;
         public final boolean live;      // 正在播
         public final boolean replay;    // 已播完且源支持回看 → 可点
+        public final boolean ended;     // 已播完（不管源支不支持）
         public final long startMs;
         public final long stopMs;
 
         public Item(String time, String title, boolean live, boolean replay,
-                    long startMs, long stopMs) {
+                    boolean ended, long startMs, long stopMs) {
             this.time = time;
             this.title = title;
             this.live = live;
             this.replay = replay;
+            this.ended = ended;
             this.startMs = startMs;
             this.stopMs = stopMs;
         }
@@ -163,12 +165,33 @@ public class EpgPanelView extends android.view.View {
             float maxW = getWidth() - tx - padH - Theme.px(76);
             c.drawText(fit(it.title, maxW, Theme.sp(21)), tx, baseline, p);
 
-            // 右侧标记：直播中 / 可回看（可点才亮）
-            String mark = it.live ? "直播中" : (it.replay ? "回看" : null);
+            // 右侧标记：直播中 / 回看（绿=可点，灰=源不支持）
+            String mark;
+            if (it.live) mark = "直播中";
+            else if (it.replay) mark = "回看";
+            else if (it.ended) mark = "回看";     // 源不支持时也给按钮，灰掉
+            else mark = null;                      // 还没播的节目不显示
             if (mark != null) {
+                // 「回看」画成胶囊按钮，直播中只给文字
+                if (!it.live) {
+                    p.setTextSize(Theme.sp(16));
+                    float mw = p.measureText(mark) + Theme.px(20);
+                    float mh = Theme.px(30);
+                    float bx = getWidth() - padH - mw;
+                    float by = y + itemH / 2f - mh / 2f;
+                    fill.setColor(it.replay ? 0x2E6FD08A : 0x14FFFFFF);
+                    r.set(bx, by, bx + mw, by + mh);
+                    c.drawRoundRect(r, Theme.px(4), Theme.px(4), fill);
+                    p.setColor(it.replay ? 0xFF6FD08A : 0xFF5A5A60);
+                    p.setTextAlign(Paint.Align.CENTER);
+                    c.drawText(mark, bx + mw / 2f, baseline, p);
+                    p.setTextAlign(Paint.Align.LEFT);
+                    y += itemH;
+                    continue;
+                }
                 p.setTextSize(Theme.sp(16));
                 p.setColor(it.live ? Theme.FOCUS_BLUE
-                        : (it.replay ? 0xFF6FD08A : 0xFF6A6A70));
+                        : (it.replay ? 0xFF6FD08A : 0xFF5A5A60));
                 p.setTextAlign(Paint.Align.RIGHT);
                 c.drawText(mark, getWidth() - padH, baseline, p);
                 p.setTextAlign(Paint.Align.LEFT);
