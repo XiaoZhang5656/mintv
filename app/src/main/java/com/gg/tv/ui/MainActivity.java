@@ -470,6 +470,157 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         updateChannelFocus(focus.chanIndex());
     }
 
+    // ================= 触屏 / 手势（手机、平板、带触屏的盒子）=================
+
+    private float downX, downY;
+    private boolean moved;
+    private final int slop = (int) (24 * Theme.scale());
+
+    @Override
+    public boolean dispatchTouchEvent(android.view.MotionEvent ev) {
+        // 设置弹窗打开时交给弹窗自己的触摸逻辑
+        if (dialogRoot != null && dialogRoot.getVisibility() == View.VISIBLE) {
+            return handleSettingsTouch(ev);
+        }
+
+        switch (ev.getActionMasked()) {
+            case android.view.MotionEvent.ACTION_DOWN:
+                downX = ev.getX();
+                downY = ev.getY();
+                moved = false;
+                return true;
+
+            case android.view.MotionEvent.ACTION_MOVE:
+                if (Math.abs(ev.getY() - downY) > slop * 3 || Math.abs(ev.getX() - downX) > slop * 3) {
+                    moved = true;
+                }
+                return true;
+
+            case android.view.MotionEvent.ACTION_UP: {
+                float dx = ev.getX() - downX;
+                float dy = ev.getY() - downY;
+
+                if (moved) {
+                    // 上下滑 = 换频道；左右滑 = 换分类
+                    if (Math.abs(dy) > Math.abs(dx)) {
+                        if (!panelVisible) showPanel();
+                        int step = dy < 0 ? 1 : -1;
+                        moveChannel(step);
+                    } else {
+                        int step = dx < 0 ? 1 : -1;
+                        switchCategory((focus.navIndex() + step + categories.size()) % categories.size());
+                    }
+                    return true;
+                }
+
+                // 单击：先按坐标命中，命中不到再退化成「唤出面板 / 播放」
+                if (!panelVisible) {
+                    showPanel();
+                    return true;
+                }
+                if (hitTest(ev.getX(), ev.getY())) return true;
+
+                playChannel(focus.chanIndex());
+                hidePanel();
+                return true;
+            }
+        }
+        return true;
+    }
+
+    /** 按屏幕坐标判断点到了哪一栏哪一项。 */
+    private boolean hitTest(float x, float y) {
+        int navW = Theme.px(Theme.NAV_W);
+        int chanW = Theme.px(Theme.CHAN_W);
+
+        // --- 左侧分类列 ---
+        if (x < navW) {
+            int listTop = Theme.px(34) + Theme.px(76);
+            int idx = (int) ((y - listTop) / (Theme.px(Theme.NAV_ITEM_H) + Theme.px(2)));
+            if (idx >= 0 && idx < navViews.size()) {
+                switchCategory(idx);
+                focus.setNavCount(categories.size());
+                if (focus.zone() != FocusEngine.Zone.NAV) {
+                    focus.onKey(KeyEvent.KEYCODE_DPAD_LEFT);
+                }
+                updateNavFocus(idx);
+                return true;
+            }
+            return true;
+        }
+
+        // --- 中间频道列 ---
+        if (x < navW + chanW) {
+            ScrollView sv = findScrollParent(chanViews.isEmpty() ? chanColumn : chanViews.get(0));
+            int scrollY = sv == null ? 0 : sv.getScrollY();
+            int itemH = Theme.px(Theme.CHAN_ITEM_H + Theme.CHAN_ITEM_GAP);
+            int listTop = Theme.px(26) + Theme.px(50);
+            int idx = (int) ((y + scrollY - listTop) / itemH);
+            if (idx >= 0 && idx < channels.size()) {
+                playChannel(idx);
+                focusOnChannel(idx);
+                return true;
+            }
+            return true;
+        }
+
+        return false;
+    }
+
+    private void moveChannel(int step) {
+        int n = focus.chanIndex() + step;
+        if (n < 0) n = 0;
+        if (n > channels.size() - 1) n = channels.size() - 1;
+        focusOnChannel(n);
+        playChannel(n);
+    }
+
+    /** 手动把焦点同步到指定频道（触屏用，绕过 FocusEngine 的算术）。 */
+    private void focusOnChannel(int index) {
+        int cur = focus.chanIndex();
+        while (cur < index) { focus.onKey(KeyEvent.KEYCODE_DPAD_DOWN); cur++; }
+        while (cur > index) { focus.onKey(KeyEvent.KEYCODE_DPAD_UP); cur--; }
+        updateChannelFocus(index);
+    }
+
+    /** 设置弹窗里的触摸：点页签关闭、点选项选中、点空白关闭。 */
+    private boolean handleSettingsTouch(android.view.MotionEvent ev) {
+        if (ev.getActionMasked() != android.view.MotionEvent.ACTION_UP) return true;
+        float x = ev.getX(), y = ev.getY();
+        int cardLeft = (getWindow().getDecorView().getWidth() - Theme.px(Theme.DLG_W)) / 2;
+        int cardTop = Theme.px(Theme.DLG_TOP);
+        int cardW = Theme.px(Theme.DLG_W);
+
+        // 点弹窗外面 → 关闭
+        if (x < cardLeft || x > cardLeft + cardW) {
+            closeSettings();
+            return true;
+        }
+
+        int rowTop = cardTop + Theme.px(76) + Theme.px(18);
+        int rowH = Theme.px(82) + Theme.px(12);
+        int idx = (int) ((y - rowTop) / rowH);
+        if (idx >= 0 && idx < rowViews.size()) {
+            int innerY = (int) ((y - rowTop) - idx * rowH);
+            if (innerY >= 0 && innerY <= Theme.px(82)) {
+                int localX = (int) (x - cardLeft - Theme.px(24));
+                int opt = rowViews.get(idx).segment().indexAt(localX);
+                // 先把焦点挪到这一行
+                while (focus.rowIndex() < idx) focus.onKey(KeyEvent.KEYCODE_DPAD_DOWN);
+                while (focus.rowIndex() > idx) focus.onKey(KeyEvent.KEYCODE_DPAD_UP);
+                applyRowFocus(idx);
+                if (opt >= 0) {
+                    selections[idx] = opt;
+                    rowViews.get(idx).setSelected(opt);
+                    rowViews.get(idx).setRowFocused(false);
+                    rowViews.get(idx).setOptionFocused(opt);
+                }
+                return true;
+            }
+        }
+        return true;
+    }
+
     // ================= 按键 =================
 
     @Override
