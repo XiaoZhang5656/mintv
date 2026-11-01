@@ -1,9 +1,20 @@
 package com.gg.tv.ui;
 
+import com.gg.tv.data.PlaylistParser;
+
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
-/** 全部静态数据。主线接真实源时，把这里换成 ChannelStore 的输出即可。 */
+/**
+ * 内置示范数据。
+ *
+ * <p>只在两种情况下使用：
+ * 1. 没配置直播源（首次安装）
+ * 2. 配置的源拉取失败，且本地没有缓存
+ *
+ * <p>真实渲染一律走 {@link PlaylistParser} 的解析结果，图标只认 tvg-logo。
+ */
 public final class DemoData {
 
     private DemoData() {}
@@ -15,72 +26,29 @@ public final class DemoData {
         public Category(String n, int c, int g) { name = n; count = c; glyph = g; }
     }
 
-    public static final class Channel {
-        public final String no, name, now;
-        public final String badge;   // null / "播放中" / "可回看"
-        public final String url;
-        public Channel(String no, String name, String now, String badge, String url) {
-            this.no = no; this.name = name; this.now = now; this.badge = badge; this.url = url;
-        }
-    }
-
-    public static List<Category> categories() {
+    /** 把解析结果转成左侧导航用的分类。图标按名字粗略匹配，匹配不到就走默认字形。 */
+    public static List<Category> toCategories(PlaylistParser.Playlist pl) {
         List<Category> l = new ArrayList<>();
-        l.add(new Category("全部", 463, 0));
-        l.add(new Category("省内", 9, 1));
-        l.add(new Category("电台", 165, 2));
-        l.add(new Category("央视", 29, 3));
-        l.add(new Category("卫视", 48, 4));
-        l.add(new Category("4K", 8, 5));
-        l.add(new Category("新闻", 9, 5));
-        l.add(new Category("电影", 31, 6));
-        l.add(new Category("体育", 8, 7));
-        l.add(new Category("儿童", 19, 7));
-        l.add(new Category("纪录", 12, 5));
-        l.add(new Category("音乐", 6, 6));
-        return l;
-    }
-
-    /** 北京本地台（对应设计稿第一屏） */
-    public static List<Channel> bj() {
-        // 公开测试流，仅用于验证播放链路是否通畅
-        final String TEST = "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8";
-        List<Channel> l = new ArrayList<>();
-        l.add(new Channel("0076", "北京卫视", "正在播放 · 19:00 新闻联播", "可回看", TEST));
-        l.add(new Channel("0276", "北京文艺", "正在播放 · 19:00 笑动剧场", null, TEST));
-        l.add(new Channel("0277", "北京纪实科教", "正在播放 · 暂无节目信息", null, TEST));
-        l.add(new Channel("0278", "北京影视", "正在播放 · 18:35 上午剧场", null, TEST));
-        l.add(new Channel("0279", "北京财经", "正在播放 · 18:50 总裁读书会", "播放中", TEST));
-        l.add(new Channel("0280", "北京生活", "正在播放 · 19:00 王芳遇上王为民", null, TEST));
-        l.add(new Channel("0281", "北京新闻", "正在播放 · 17:00 直播北京", null, TEST));
-        l.add(new Channel("0282", "卡酷少儿", "正在播放 · 18:40 熊出没", null, TEST));
-        return l;
-    }
-
-    public static List<Channel> all() {
-        final String TEST = "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8";
-        List<Channel> l = new ArrayList<>();
-        String[][] d = {
-                {"0001", "CCTV-1 综合", "19:00 新闻联播", "可回看"},
-                {"0002", "CCTV-2 财经", "19:00 经济半小时", ""},
-                {"0003", "CCTV-5 体育", "19:30 体育新闻", ""},
-                {"0005", "CCTV-5+ 体育赛事", "19:00 赛事直播", ""},
-                {"0006", "CCTV-6 电影", "19:30 佳片有约", ""},
-                {"0009", "CCTV-9 纪录", "19:00 大美中国", ""},
-                {"0013", "CCTV-13 新闻", "19:00 新闻联播", "可回看"},
-                {"0017", "CCTV-17 农业", "19:00 乡土", ""},
-                {"0201", "湖南卫视", "19:30 金鹰独播剧场", ""},
-                {"0203", "浙江卫视", "19:00 奔跑吧", ""},
-                {"0208", "东方卫视", "19:00 东方新闻", ""},
-                {"0212", "江苏卫视", "19:00 幸福剧场", ""},
-        };
-        for (String[] r : d) {
-            l.add(new Channel(r[0], r[1], "正在播放 · " + r[2], r[3].isEmpty() ? null : r[3], TEST));
+        l.add(new Category("全部", pl.all.size(), 0));
+        for (Map.Entry<String, List<PlaylistParser.Channel>> e : pl.byGroup.entrySet()) {
+            l.add(new Category(e.getKey(), e.getValue().size(), glyphOf(e.getKey())));
         }
         return l;
     }
 
-    // ---------- 设置页 ----------
+    private static int glyphOf(String group) {
+        if (group == null) return 5;
+        if (group.contains("央视") || group.contains("CCTV")) return 3;
+        if (group.contains("卫视")) return 4;
+        if (group.contains("省") || group.contains("本地") || group.contains("市")) return 1;
+        if (group.contains("电台") || group.contains("广播")) return 2;
+        if (group.contains("电影")) return 6;
+        if (group.contains("体育")) return 7;
+        if (group.contains("新闻")) return 5;
+        if (group.contains("儿童") || group.contains("少儿")) return 7;
+        if (group.contains("4K") || group.contains("超清")) return 5;
+        return 5;
+    }
 
     public static final String[] TABS = {"账户登录", "播放设置", "手机助手"};
 
@@ -107,4 +75,41 @@ public final class DemoData {
     };
 
     public static final int[] ROW_DEFAULT = {0, 0, 0, 0, 0, 0, 1, 0};
+
+    // ---------- 无源时的示范 M3U ----------
+
+    /**
+     * 示范数据同样走解析器，字段结构跟真实源一致，
+     * 这样「有源 / 无源」两条路的渲染代码只有一份。
+     */
+    public static final String SAMPLE_M3U =
+            "#EXTM3U x-tvg-url=\"\"\n"
+            + "#EXTINF:-1 tvg-id=\"bjws\" tvg-name=\"北京卫视\" group-title=\"省内\",北京卫视\n"
+            + "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8\n"
+            + "#EXTINF:-1 group-title=\"省内\",北京文艺\n"
+            + "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8\n"
+            + "#EXTINF:-1 group-title=\"省内\",北京纪实科教\n"
+            + "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8\n"
+            + "#EXTINF:-1 group-title=\"省内\",北京影视\n"
+            + "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8\n"
+            + "#EXTINF:-1 group-title=\"省内\",北京财经\n"
+            + "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8\n"
+            + "#EXTINF:-1 group-title=\"省内\",北京生活\n"
+            + "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8\n"
+            + "#EXTINF:-1 group-title=\"省内\",北京新闻\n"
+            + "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8\n"
+            + "#EXTINF:-1 group-title=\"省内\",卡酷少儿\n"
+            + "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8\n"
+            + "央视,#genre#\n"
+            + "CCTV-1 综合,https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8\n"
+            + "CCTV-2 财经,https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8\n"
+            + "CCTV-5 体育,https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8\n"
+            + "CCTV-6 电影,https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8\n"
+            + "CCTV-9 纪录,https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8\n"
+            + "CCTV-13 新闻,https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8\n"
+            + "卫视,#genre#\n"
+            + "湖南卫视,https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8\n"
+            + "浙江卫视,https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8\n"
+            + "东方卫视,https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8\n"
+            + "江苏卫视,https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8\n";
 }
