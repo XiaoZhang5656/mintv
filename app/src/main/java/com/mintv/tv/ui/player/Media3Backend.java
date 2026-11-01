@@ -33,6 +33,7 @@ public final class Media3Backend implements PlaybackBackend {
     private Callback cb;
     private String currentUrl;
     private boolean released = false;
+    private Mode mode = Mode.LIVE;
 
     @Override
     public void setCallback(Callback cb) { this.cb = cb; }
@@ -95,6 +96,7 @@ public final class Media3Backend implements PlaybackBackend {
         });
 
         if (surface != null) player.setVideoSurface(surface);
+        startTimelineTicker();
         return player;
     }
 
@@ -105,7 +107,17 @@ public final class Media3Backend implements PlaybackBackend {
     }
 
     /** 带自定义请求头播放（源里写成 url|User-Agent=xx 的情况）。 */
-    public void play(Context appCtx, String url, Map<String, String> headers, boolean live) {
+    public void play(Context appCtx, String url, Map<String, String> headers, Mode m) {
+        this.mode = m;
+        playInternal(appCtx, url, headers, m == Mode.LIVE);
+    }
+
+    @Override
+    public void play(Context appCtx, String url, Mode m) {
+        play(appCtx, url, null, m);
+    }
+
+    private void playInternal(Context appCtx, String url, Map<String, String> headers, boolean live) {
         if (released) return;
         ExoPlayer p = ensurePlayer(appCtx);
         if (surface != null) p.setVideoSurface(surface);
@@ -179,6 +191,7 @@ public final class Media3Backend implements PlaybackBackend {
     @Override
     public void release() {
         released = true;
+        if (timelineTask != null) main.removeCallbacks(timelineTask);
         if (player != null) {
             player.release();
             player = null;
@@ -192,6 +205,41 @@ public final class Media3Backend implements PlaybackBackend {
     }
 
     public String currentUrl() { return currentUrl; }
+
+    @Override public Mode mode() { return mode; }
+
+    /**
+     * 只有时移 / 点播才允许 seek。
+     * Media3 对直播 HLS 调用 seekTo 会跳到直播窗口内最近的可播放点，
+     * 在没有 seekable window 的情况下会抛 IllegalSeekPositionException。
+     */
+    @Override
+    public boolean canSeek() {
+        if (player == null) return false;
+        if (mode == Mode.LIVE) return false;
+        return player.isCurrentMediaItemSeekable();
+    }
+
+    @Override
+    public void seekTo(long positionMs) {
+        if (player == null || !canSeek()) return;
+        long dur = durationMs();
+        long target = positionMs;
+        if (dur > 0) target = Math.max(0, Math.min(target, dur));
+        player.seekTo(target);
+    }
+
+    @Override
+    public long positionMs() {
+        return player == null ? -1 : player.getCurrentPosition();
+    }
+
+    @Override
+    public long durationMs() {
+        if (player == null) return -1;
+        long d = player.getDuration();
+        return (d == androidx.media3.common.C.TIME_UNSET || d <= 0) ? -1 : d;
+    }
 
     /** 从当前视频轨的 Format 里取帧率。取不到返回 null。 */
     private String formatFps() {
@@ -212,6 +260,22 @@ public final class Media3Backend implements PlaybackBackend {
         } catch (Throwable ignored) {
         }
         return null;
+    }
+
+    private Runnable timelineTask;
+
+    private void startTimelineTicker() {
+        if (timelineTask != null) return;
+        timelineTask = new Runnable() {
+            @Override public void run() {
+                if (player == null || released) return;
+                if (cb != null) {
+                    cb.onTimeline(positionMs(), durationMs(), bufferedPositionMs());
+                }
+                main.postDelayed(this, 500);
+            }
+        };
+        main.postDelayed(timelineTask, 500);
     }
 
     private void notifyState(State s) {
