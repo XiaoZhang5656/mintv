@@ -58,6 +58,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     private LinearLayout chanColumn;
     private View navPanel, chanPanel, railView, scrim;
     private View chanContainer;   // 频道列的外层，抽屉展开时整体左移
+    private ScrollView chanScroll;
     private ClockView clock;
 
     // ---- 状态 ----
@@ -226,7 +227,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         chan.addView(chanHead, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, Theme.px(50)));
 
-        ScrollView chanScroll = new ScrollView(this);
+        chanScroll = new ScrollView(this);
         chanScroll.setVerticalScrollBarEnabled(false);
         chanScroll.setOverScrollMode(View.OVER_SCROLL_NEVER);
         chanColumn = new LinearLayout(this);
@@ -422,20 +423,16 @@ public class MainActivity extends Activity implements FocusEngine.Host {
 
     /** 列表滚动时补加载新露出行的台标。只挂一次监听。 */
     private void attachScrollLoader() {
-        ViewGroup parent = (ViewGroup) chanColumn.getParent();
-        if (parent instanceof ScrollView) {
-            ScrollView sv = (ScrollView) parent;
-            if (sv.getTag() == null) {
-                sv.setTag(Boolean.TRUE);
-                sv.setOnScrollChangeListener(new View.OnScrollChangeListener() {
-                    @Override public void onScrollChange(View v, int sx, int sy, int osx, int osy) {
-                        // 滚完再拉，避免滚动中频繁触发
-                        ui.removeCallbacks(scrollLogoTask);
-                        ui.postDelayed(scrollLogoTask, 120);
-                    }
-                });
+        if (chanScroll == null) return;
+        if (chanScroll.getTag() != null) return;
+        chanScroll.setTag(Boolean.TRUE);
+        chanScroll.setOnScrollChangeListener(new View.OnScrollChangeListener() {
+            @Override public void onScrollChange(View v, int sx, int sy, int osx, int osy) {
+                // 滚完再拉，避免滚动中频繁触发
+                ui.removeCallbacks(scrollLogoTask);
+                ui.postDelayed(scrollLogoTask, 80);
             }
-        }
+        });
     }
 
     private final Runnable scrollLogoTask = new Runnable() {
@@ -457,8 +454,9 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         int itemH = Theme.px(Theme.CHAN_ITEM_H + Theme.CHAN_ITEM_GAP);
         int listTop = Theme.px(26) + Theme.px(50);
 
-        int first = Math.max(0, (scrollY + listTop) / itemH - 2);
-        int last = Math.min(chanViews.size() - 1, (scrollY + viewH) / itemH + 2);
+        int first = Math.max(0, (scrollY + listTop) / itemH - 3);
+        // 多预取一屏，滚动时不会出现「露出来还没图」的空档
+        int last = Math.min(chanViews.size() - 1, (scrollY + viewH) / itemH + 12);
         requestLogos(first, last + 1);
     }
 
@@ -490,17 +488,19 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     }
 
     private void updateNavFocus(int index) {
+        boolean navZone = focus.zone() == FocusEngine.Zone.NAV;
         for (int i = 0; i < navViews.size(); i++) {
             NavItemView v = navViews.get(i);
+            // 当前分类始终有底，只有焦点真的在分类列时才画蓝框
             v.setActive(i == focus.navIndex());
-            v.setFocused(i == index && focus.zone() == FocusEngine.Zone.NAV, true);
+            v.setFocused(navZone && i == index, true);
         }
     }
 
     private void updateChannelFocus(int index) {
         for (int i = 0; i < chanViews.size(); i++) {
             ChannelView v = chanViews.get(i);
-            v.setFocused(i == index && focus.zone() == FocusEngine.Zone.CHAN, true);
+            v.setFocused(i == index, true);
         }
         scrollChannelIntoView(index);
     }
@@ -968,8 +968,9 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                 switchCategory(idx);
                 // 分类点完把焦点交给频道列，否则看不到选中框
                 focus.setZone(FocusEngine.Zone.CHAN);
+                focus.setNavIndexSilently(idx);
                 updateNavFocus(idx);
-                updateChannelFocus(focus.chanIndex());
+                updateChannelFocus(0);
             }
             return true;
         }
@@ -1008,9 +1009,14 @@ public class MainActivity extends Activity implements FocusEngine.Host {
 
     /** 手动把焦点同步到指定频道（触屏用，绕过 FocusEngine 的算术）。 */
     private void focusOnChannel(int index) {
+        // 触屏操作时焦点可能停在分类列，先切回频道列，蓝框才会出现
+        if (focus.zone() != FocusEngine.Zone.CHAN) {
+            focus.setZone(FocusEngine.Zone.CHAN);
+        }
         int cur = focus.chanIndex();
         while (cur < index) { focus.onKey(KeyEvent.KEYCODE_DPAD_DOWN); cur++; }
         while (cur > index) { focus.onKey(KeyEvent.KEYCODE_DPAD_UP); cur--; }
+        updateNavFocus(focus.navIndex());
         updateChannelFocus(index);
     }
 
