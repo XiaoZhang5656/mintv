@@ -122,12 +122,11 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         getWindow().setBackgroundDrawable(new android.graphics.drawable.ColorDrawable(Color.BLACK));
 
-        // 关键：应用强制横屏，onCreate 时 widthPixels 可能还是竖屏值（1156），
-        // 拿它当基准会把整个 UI 缩到 0.6 倍、挤在左边一小块。
-        // 这里直接取真实屏幕的长边做基准，与方向无关。
+        // 用真实屏幕像素的长边做基准（与当前方向无关）。
         android.util.DisplayMetrics dm = new android.util.DisplayMetrics();
         getWindowManager().getDefaultDisplay().getRealMetrics(dm);
         int base = Math.max(dm.widthPixels, dm.heightPixels);
+        android.util.Log.i("MinTV", "screen realMetrics=" + dm.widthPixels + "x" + dm.heightPixels + " base=" + base);
         Theme.init(base);
 
         loadPlaylist();
@@ -188,6 +187,8 @@ public class MainActivity extends Activity implements FocusEngine.Host {
 
     private void buildPlayer(FrameLayout root) {
         surfaceView = new SurfaceView(this);
+        surfaceView.setZOrderMediaOverlay(false);
+        surfaceView.setBackgroundColor(Color.BLACK);
         FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
         lp.gravity = Gravity.CENTER;
