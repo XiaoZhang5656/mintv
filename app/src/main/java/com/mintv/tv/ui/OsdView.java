@@ -100,6 +100,22 @@ public class OsdView extends View {
         invalidate();
     }
 
+    private String toastText;
+    private final Runnable toastTask = new Runnable() {
+        @Override public void run() {
+            toastText = null;
+            invalidate();
+        }
+    };
+
+    /** 一次性提示，2 秒后自动消失，不会像状态文本那样一直挂着。 */
+    public void toast(String text) {
+        toastText = text;
+        removeCallbacks(toastTask);
+        postDelayed(toastTask, 2000);
+        invalidate();
+    }
+
     public void setStatus(String s) {
         if ((s == null && statusText == null) || (s != null && s.equals(statusText))) return;
         statusText = s;
@@ -142,6 +158,16 @@ public class OsdView extends View {
 
         if (osdAlpha > 0f && name != null) {
             drawOsd(c, h);
+        }
+
+        if (toastText != null) {
+            p.setColor(Theme.TEXT);
+            p.setTextSize(Theme.sp(19));
+            p.setTextAlign(Paint.Align.RIGHT);
+            p.setShadowLayer(Theme.px(4), 0, 0, 0xDD000000);
+            c.drawText(toastText, w - Theme.px(40), h - Theme.px(90), p);
+            p.setShadowLayer(0, 0, 0, 0);
+            p.setTextAlign(Paint.Align.LEFT);
         }
 
         if (statusText != null) {
