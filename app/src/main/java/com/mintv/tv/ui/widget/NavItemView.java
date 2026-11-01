@@ -25,7 +25,7 @@ public class NavItemView extends BaseCardView {
     private int glyph = 0;
 
     private final float padH = Theme.px(16);
-    private final float iconSize = Theme.px(26);
+    private final float iconSize = Theme.px(30);
     private final float textSize = Theme.sp(Theme.TS_NAV_ITEM);
     private final float pillTextSize = Theme.sp(15);
 
@@ -86,8 +86,8 @@ public class NavItemView extends BaseCardView {
         pillPaint.setTextSize(pillTextSize);
         String s = String.valueOf(count);
         float tw = textMeasure(pillTextSize, s);
-        float ph = Theme.px(24);
-        float pw = Math.max(Theme.px(38), tw + Theme.px(18));
+        float ph = Theme.px(26);
+        float pw = Math.max(Theme.px(44), tw + Theme.px(20));
         float right = getWidth() - padH;
         float left = right - pw;
         float top = cy - ph / 2f;
