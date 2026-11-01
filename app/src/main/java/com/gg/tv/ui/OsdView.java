@@ -11,36 +11,47 @@ import android.view.View;
 import com.gg.tv.ui.player.PlaybackBackend;
 
 /**
- * 屏幕上那层「软 UI」：
- *   · 换台 OSD（台号 + 台名），2.5 秒后淡出
- *   · 缓冲 / 重连 / 源失效状态
+ * 换台 OSD —— 参考主流 TV 播放器的信息密度重做。
  *
- * 关键点：播放画面走 SurfaceView 的独立图层，跟这层 View 完全不重叠绘制，
- * 所以列表滚动时视频不会跟着重绘 —— 这是低端盒子不卡的根本原因。
+ * <pre>
+ * ┌──────────────────────────────────────────────────────┐
+ * │ [0001]  CCTV-1 综合                        [央视]    │
+ * │ 目前播放: 20:03 伟大的长征第38集                      │
+ * │ ▓▓▓▓▓▓▓▓▓▓▓▓▓▓░░░░░░░░░░░░░░  77%                   │
+ * │ 下个节目: 20:53 前情提要-伟大的长征-第39集            │
+ * │ [源 3/5] [回看] [1280x720] [H264] [AAC] [立体声] [25fps]  20:42:15 │
+ * └──────────────────────────────────────────────────────┘
+ * </pre>
  *
- * 注意：OSD 淡出不用 postInvalidateOnAnimation 死循环（那样会把 View 锁在
- * 60fps 重绘，低端机上白白吃掉一整个 vsync 周期），而是用一个单次 postDelayed
- * 触发消失。
+ * 所有信息都来自播放器实时回调；拿不到的项目（EPG、分辨率）就把那一段隐藏，
+ * 不画占位符也不编假数据。
  */
 public class OsdView extends View {
 
-    private static final long OSD_MS = 2500;
+    private static final long OSD_MS = 4000;
 
     private final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
-    private final Paint box = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint fill = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final RectF r = new RectF();
 
-    private String osdNo, osdName;
-    private long osdUntil = 0;
-    private float osdAlpha = 0f;
+    // ---- 频道 / 节目 ----
+    private String no, name, group;
+    private String nowText;       // "20:03 伟大的长征第38集"
+    private String nextText;      // "20:53 前情提要"
+    private float progress = -1f; // 0~1，<0 不画进度条
 
+    // ---- 技术信息小标签 ----
+    private final String[] tags = new String[7];   // 源 / 回看 / 分辨率 / 视频编码 / 音频编码 / 声道 / 帧率
+    private final boolean[] tagOn = new boolean[7];
+
+    private String clockText;
     private String statusText;
+
+    private long osdUntil;
+    private float osdAlpha;
 
     private final Runnable fadeTask = new Runnable() {
         @Override public void run() {
-            // 简单两帧淡出不需要 ValueAnimator，直接一次置零重绘
-            osdNo = null;
-            osdName = null;
             osdAlpha = 0f;
             invalidate();
         }
@@ -49,17 +60,43 @@ public class OsdView extends View {
     public OsdView(Context c) {
         super(c);
         setWillNotDraw(false);
+        setClickable(false);
+        setFocusable(false);
+        setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO);
         p.setTypeface(Typeface.DEFAULT);
-        box.setStyle(Paint.Style.FILL);
+        fill.setStyle(Paint.Style.FILL);
     }
 
-    public void showChannelOsd(String no, String name) {
-        osdNo = no;
-        osdName = name;
-        osdAlpha = 1f;
-        osdUntil = SystemClock.uptimeMillis() + OSD_MS;
-        removeCallbacks(fadeTask);
-        postDelayed(fadeTask, OSD_MS);
+    // ================= 外部喂数据 =================
+
+    public void showChannel(String no, String name, String group) {
+        this.no = no;
+        this.name = name;
+        this.group = group;
+        this.nowText = null;
+        this.nextText = null;
+        this.progress = -1f;
+        for (int i = 0; i < tagOn.length; i++) tagOn[i] = false;
+        kick();
+    }
+
+    /** EPG：目前播放 / 下个节目 / 进度。没有 EPG 就不调用。 */
+    public void setProgram(String now, String next, float progress01) {
+        nowText = now;
+        nextText = next;
+        progress = progress01;
+        invalidate();
+    }
+
+    /** 技术标签。null 或空串表示该项不可用，直接不画。 */
+    public void setTags(String source, String replay, String resolution,
+                        String vCodec, String aCodec, String channels, String fps) {
+        String[] v = {source, replay, resolution, vCodec, aCodec, channels, fps};
+        for (int i = 0; i < tags.length; i++) {
+            boolean on = v[i] != null && !v[i].isEmpty();
+            tagOn[i] = on;
+            if (on) tags[i] = v[i];
+        }
         invalidate();
     }
 
@@ -69,48 +106,35 @@ public class OsdView extends View {
         invalidate();
     }
 
+    public void tick() { invalidate(); }
+
+    private void kick() {
+        osdAlpha = 1f;
+        osdUntil = SystemClock.uptimeMillis() + OSD_MS;
+        removeCallbacks(fadeTask);
+        postDelayed(fadeTask, OSD_MS);
+        invalidate();
+    }
+
     public static String stateText(PlaybackBackend.State st) {
         switch (st) {
             case BUFFERING: return "缓冲中…";
             case RECONNECTING: return "重连中…";
-            case READY: return null;
             case ERROR: return "源失效";
-            case IDLE:
             default: return null;
         }
     }
+
+    // ================= 绘制 =================
 
     @Override
     protected void onDraw(Canvas c) {
         float w = getWidth(), h = getHeight();
 
-        // ---- 换台 OSD：左下角 ----
-        if (osdNo != null && osdAlpha > 0f) {
-            float left = Theme.px(60), bottom = h - Theme.px(76);
-            float bw = Theme.px(320), bh = Theme.px(104);
-            r.set(left, bottom - bh, left + bw, bottom);
-            box.setColor(0xD90B0B0C);
-            c.drawRoundRect(r, Theme.px(6), Theme.px(6), box);
-
-            // 左侧一道蓝色竖条，跟焦点色统一
-            box.setColor(Theme.FOCUS_BLUE);
-            r.set(left, bottom - bh, left + Theme.px(4), bottom);
-            c.drawRoundRect(r, Theme.px(2), Theme.px(2), box);
-
-            p.setTextAlign(Paint.Align.LEFT);
-            p.setColor(Theme.TEXT);
-            p.setTextSize(Theme.sp(32));
-            p.setFakeBoldText(true);
-            c.drawText(osdNo == null ? "" : osdNo, left + Theme.px(20), bottom - Theme.px(58), p);
-
-            p.setColor(0xFFCFCFCF);
-            p.setTextSize(Theme.sp(20));
-            p.setFakeBoldText(false);
-            c.drawText(fit(osdName, bw - Theme.px(40), Theme.sp(20)),
-                    left + Theme.px(20), bottom - Theme.px(24), p);
+        if (osdAlpha > 0f && name != null) {
+            drawOsd(c, h);
         }
 
-        // ---- 状态：右下角 ----
         if (statusText != null) {
             p.setColor(Theme.TEXT);
             p.setTextSize(Theme.sp(18));
@@ -122,7 +146,167 @@ public class OsdView extends View {
         }
     }
 
-    /** 文本超宽时截断加省略号，绝不溢出框。 */
+    private void drawOsd(Canvas c, float h) {
+        float padH = Theme.px(20);
+        float cardW = Theme.px(660);
+
+        // 先量高度：标题行 + 目前 + 进度 + 下个 + 标签行
+        float lineTitle = Theme.sp(28);
+        float lineSub = Theme.sp(18);
+        float barH = Theme.px(6);
+        float chipH = Theme.px(26);
+        float gap = Theme.px(10);
+
+        float contentH = padH
+                + lineTitle + gap
+                + (nowText != null ? lineSub + gap : 0)
+                + (progress >= 0 ? barH + gap : 0)
+                + (nextText != null ? lineSub + gap : 0)
+                + chipH + padH;
+        float cardH = contentH;
+        float left = Theme.px(56);
+        float bottom = h - Theme.px(48);
+        float top = bottom - cardH;
+
+        // 卡片底
+        r.set(left, top, left + cardW, bottom);
+        fill.setColor(0xE0101216);
+        c.drawRoundRect(r, Theme.px(4), Theme.px(4), fill);
+        // 左侧蓝条
+        fill.setColor(Theme.FOCUS_BLUE);
+        r.set(left, top, left + Theme.px(3), bottom);
+        c.drawRoundRect(r, Theme.px(1), Theme.px(1), fill);
+
+        float x = left + padH;
+        float y = top + padH + lineTitle * 0.78f;
+
+        // ---- 第 1 行：台号块 + 台名 + 分类胶囊 ----
+        float noW = Theme.px(66), noH = Theme.px(30);
+        float noTop = y - Theme.sp(28) * 0.78f + Theme.px(2);
+        fill.setColor(Theme.FOCUS_BLUE);
+        r.set(x, noTop, x + noW, noTop + noH);
+        c.drawRoundRect(r, Theme.px(3), Theme.px(3), fill);
+        p.setColor(Theme.TEXT);
+        p.setTextSize(Theme.sp(18));
+        p.setTextAlign(Paint.Align.CENTER);
+        c.drawText(no == null ? "" : no, x + noW / 2f, noTop + noH / 2f + Theme.px(6), p);
+        p.setTextAlign(Paint.Align.LEFT);
+
+        p.setColor(Theme.TEXT);
+        p.setTextSize(lineTitle);
+        p.setFakeBoldText(false);
+        float nameX = x + noW + Theme.px(16);
+        c.drawText(name, nameX, y, p);
+
+        // 分类胶囊靠右
+        if (group != null && !group.isEmpty()) {
+            float cs = Theme.sp(16);
+            p.setTextSize(cs);
+            float cw = p.measureText(group) + Theme.px(18);
+            float cx = left + cardW - padH - cw;
+            fill.setColor(0xFF3A6EA5);
+            r.set(cx, noTop, cx + cw, noTop + noH);
+            c.drawRoundRect(r, Theme.px(3), Theme.px(3), fill);
+            p.setColor(Theme.TEXT);
+            c.drawText(group, cx + Theme.px(9), noTop + noH / 2f + Theme.px(5), p);
+        }
+
+        y += gap;
+
+        // ---- 第 2 行：目前播放 ----
+        float rowX = x;
+        if (nowText != null) {
+            y += lineSub * 0.8f;
+            p.setColor(0xFF8E8E93);
+            p.setTextSize(Theme.sp(17));
+            c.drawText("目前播放:", rowX, y, p);
+            float labelW = p.measureText("目前播放:");
+            p.setColor(0xFFE6E6E8);
+            p.setTextSize(lineSub);
+            c.drawText(fit(nowText, cardW - padH * 2 - labelW - Theme.px(10), lineSub),
+                    rowX + labelW + Theme.px(10), y, p);
+            y += gap;
+        }
+
+        // ---- 第 3 行：进度条 ----
+        if (progress >= 0f) {
+            float fullW = cardW - padH * 2;
+            float barW = fullW - Theme.px(60);
+            float barTop = y;
+            fill.setColor(0x33FFFFFF);
+            r.set(rowX, barTop, rowX + barW, barTop + barH);
+            c.drawRoundRect(r, barH / 2f, barH / 2f, fill);
+            fill.setColor(0xFF2F7BFF);
+            r.set(rowX, barTop, rowX + barW * Math.min(1f, progress), barTop + barH);
+            c.drawRoundRect(r, barH / 2f, barH / 2f, fill);
+            p.setColor(0xFFB9B9BD);
+            p.setTextSize(Theme.sp(16));
+            c.drawText(Math.round(progress * 100) + "%", rowX + barW + Theme.px(12),
+                    barTop + barH + Theme.px(4), p);
+            y += barH + gap;
+        }
+
+        // ---- 第 4 行：下个节目 ----
+        if (nextText != null) {
+            y += lineSub * 0.8f;
+            p.setColor(0xFF8E8E93);
+            p.setTextSize(Theme.sp(17));
+            c.drawText("下个节目:", rowX, y, p);
+            float labelW = p.measureText("下个节目:");
+            p.setColor(0xFFC9C9CE);
+            p.setTextSize(Theme.sp(17));
+            c.drawText(fit(nextText, cardW - padH * 2 - labelW - Theme.px(10), Theme.sp(17)),
+                    rowX + labelW + Theme.px(10), y, p);
+            y += gap;
+        }
+
+        // ---- 第 5 行：技术标签 + 时钟 ----
+        float chipTop = bottom - padH - chipH;
+        float cx = rowX;
+        for (int i = 0; i < tags.length; i++) {
+            if (!tagOn[i]) continue;
+            p.setTextSize(Theme.sp(15));
+            float tw = p.measureText(tags[i]) + Theme.px(16);
+            fill.setColor(chipColor(i));
+            r.set(cx, chipTop, cx + tw, chipTop + chipH);
+            c.drawRoundRect(r, Theme.px(3), Theme.px(3), fill);
+            p.setColor(Theme.TEXT);
+            c.drawText(tags[i], cx + Theme.px(8), chipTop + chipH / 2f + Theme.px(5), p);
+            cx += tw + Theme.px(8);
+            if (cx > left + cardW - Theme.px(90)) break;   // 放不下就截断
+        }
+
+        // 右下角时钟
+        String t = clockText != null ? clockText : nowClock();
+        p.setColor(0xFF9A9A9E);
+        p.setTextSize(Theme.sp(16));
+        p.setTextAlign(Paint.Align.RIGHT);
+        c.drawText(t, left + cardW - padH, chipTop + chipH / 2f + Theme.px(5), p);
+        p.setTextAlign(Paint.Align.LEFT);
+    }
+
+    private static int chipColor(int i) {
+        switch (i) {
+            case 0: return 0xFF1F5FA8;   // 源
+            case 1: return 0xFF3A3B3E;   // 回看
+            case 2: return 0xFF2B2C2E;   // 分辨率
+            case 3: return 0xFF2E6B3E;   // H264
+            case 4: return 0xFF7A4B1E;   // AAC
+            case 5: return 0xFF5A2E6E;   // 声道
+            default: return 0xFF2B2C2E;  // fps
+        }
+    }
+
+    private String nowClock() {
+        return new java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.CHINA)
+                .format(new java.util.Date());
+    }
+
+    public void setClock(String s) {
+        clockText = s;
+        invalidate();
+    }
+
     private String fit(String s, float maxW, float size) {
         if (s == null) return "";
         p.setTextSize(size);
