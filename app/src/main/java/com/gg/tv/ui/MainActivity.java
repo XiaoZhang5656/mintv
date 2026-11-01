@@ -19,6 +19,8 @@ import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 
+import com.gg.tv.data.EpgParser;
+import com.gg.tv.data.EpgStore;
 import com.gg.tv.data.LogoLoader;
 import com.gg.tv.data.PlaylistParser;
 import com.gg.tv.data.SourceStore;
@@ -27,6 +29,7 @@ import com.gg.tv.ui.player.Media3Backend;
 import com.gg.tv.ui.player.PlaybackBackend;
 import com.gg.tv.ui.widget.ChannelView;
 import com.gg.tv.ui.widget.ClockView;
+import com.gg.tv.ui.widget.EpgPanelView;
 import com.gg.tv.ui.widget.NavItemView;
 import com.gg.tv.ui.widget.RailView;
 import com.gg.tv.ui.widget.ScrimView;
@@ -67,6 +70,18 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     private int currentLine = 0;
     private int lineTotal = 1;
     private String lastResolution, lastFps;
+
+    // ---- EPG ----
+    private final java.util.Map<Integer, String> epgIdOf = new java.util.HashMap<>();  // 频道序号 → EPG channelId
+    private EpgParser.Epg epg;
+    private EpgPanelView epgPanel;
+    private long epgTs = 0;
+    private final Runnable epgTick = new Runnable() {
+        @Override public void run() {
+            refreshPlayInfo();
+            ui.postDelayed(this, 30_000);
+        }
+    };
 
     // ---- 设置弹窗 ----
     private FrameLayout dialogRoot;
@@ -136,6 +151,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         });
 
         ui.post(clockTick);
+        loadEpgAsync();
     }
 
     // ================= 布局 =================
@@ -239,6 +255,16 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         clockLp.rightMargin = Theme.px(36);
         clockLp.topMargin = Theme.px(18);
         root.addView(clock, clockLp);
+
+        // --- 节目单飞出层（点频道行时展开）---
+        epgPanel = new EpgPanelView(this);
+        epgPanel.setVisibility(View.GONE);
+        int panW = Theme.px(640);
+        FrameLayout.LayoutParams panLp = new FrameLayout.LayoutParams(
+                panW, Theme.px(64 + 10 * 56 + 16));
+        panLp.leftMargin = Theme.px(Theme.NAV_W + 12);
+        panLp.topMargin = Theme.px(150);
+        root.addView(epgPanel, panLp);
 
         // --- OSD ---
         osd = new OsdView(this);
@@ -376,6 +402,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             chanViews.add(v);
         }
         focus.setChannelCount(channels.size());
+        refreshChannelSubs();
         // 台标改成按可见范围惰性加载，绝不在绑定阶段全量入队
         attachScrollLoader();
         ui.post(new Runnable() {
@@ -508,6 +535,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         osd.setClock(new java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.CHINA)
                 .format(new java.util.Date()));
         refreshOsdTags();
+        refreshPlayInfo();
         if (ch.sources.isEmpty()) return;
         PlaylistParser.Source src = ch.sources.get(currentLine);
         if (currentLine >= ch.sources.size()) { src = ch.sources.get(0); currentLine = 0; }
@@ -522,6 +550,148 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     private void refreshOsdTags() {
         String src = lineTotal > 1 ? ("源 " + (currentLine + 1) + "/" + lineTotal) : "源 1/1";
         osd.setTags(src, null, lastResolution, null, null, null, lastFps);
+    }
+
+    // ================= EPG =================
+
+    private void loadEpgAsync() {
+        final byte[] cached = EpgStore.cached(this);
+        final boolean fresh = EpgStore.isFresh(this);
+        if (cached != null) {
+            new Thread(new Runnable() {
+                @Override public void run() {
+                    final EpgParser.Epg e = EpgParser.parse(cached);
+                    ui.post(new Runnable() {
+                        @Override public void run() { applyEpg(e); }
+                    });
+                }
+            }, "epg-parse").start();
+        }
+        if (cached != null && fresh) return;
+
+        new Thread(new Runnable() {
+            @Override public void run() {
+                for (String url : EpgStore.SOURCES) {
+                    byte[] raw = download(url);
+                    if (raw == null || raw.length < 1024) continue;
+                    EpgStore.save(MainActivity.this, raw);
+                    final EpgParser.Epg e = EpgParser.parse(raw);
+                    ui.post(new Runnable() {
+                        @Override public void run() { applyEpg(e); }
+                    });
+                    return;
+                }
+            }
+        }, "epg-fetch").start();
+    }
+
+    private byte[] download(String url) {
+        java.net.HttpURLConnection conn = null;
+        try {
+            conn = (java.net.HttpURLConnection) new java.net.URL(url).openConnection();
+            conn.setConnectTimeout(10000);
+            conn.setReadTimeout(20000);
+            conn.setRequestProperty("User-Agent", "TVUI/1.0");
+            conn.setInstanceFollowRedirects(true);
+            java.io.InputStream in = conn.getInputStream();
+            java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream(2 << 20);
+            byte[] buf = new byte[32768];
+            int n;
+            while ((n = in.read(buf)) > 0) bos.write(buf, 0, n);
+            in.close();
+            return bos.toByteArray();
+        } catch (Exception e) {
+            return null;
+        } finally {
+            if (conn != null) conn.disconnect();
+        }
+    }
+
+    private void applyEpg(EpgParser.Epg e) {
+        if (e == null || e.byChannel.isEmpty()) return;
+        epg = e;
+        epgIdOf.clear();
+        for (int i = 0; i < channels.size(); i++) {
+            PlaylistParser.Channel ch = channels.get(i);
+            String id = EpgParser.matchChannelId(ch.tvgId(), ch.name, e);
+            if (id != null) epgIdOf.put(i, id);
+        }
+        refreshChannelSubs();
+        refreshPlayInfo();
+        ui.removeCallbacks(epgTick);
+        ui.postDelayed(epgTick, 30_000);
+    }
+
+    /** 给列表每一行填「正在播放 · 节目名」。 */
+    private void refreshChannelSubs() {
+        if (epg == null) return;
+        long now = System.currentTimeMillis();
+        for (int i = 0; i < chanViews.size() && i < channels.size(); i++) {
+            ChannelView v = chanViews.get(i);
+            String id = epgIdOf.get(i);
+            if (id == null) { v.setSub(""); continue; }
+            EpgParser.Program live = EpgParser.live(epg.of(id), now);
+            if (live == null) { v.setSub(""); continue; }
+            v.setSub("正在播放 · " + EpgParser.hm(live.startMs) + " " + live.title);
+            v.setBadge(hasReplay(id) ? "可回看" : null);
+            v.invalidate();
+        }
+    }
+
+    private boolean hasReplay(String epgId) {
+        java.util.List<EpgParser.Program> list = epg.of(epgId);
+        if (list == null) return false;
+        long now = System.currentTimeMillis();
+        for (EpgParser.Program p : list) if (p.stopMs < now) return true;
+        return false;
+    }
+
+    /** 正在播的频道，刷新 OSD 里的「目前/下个节目」。 */
+    private void refreshPlayInfo() {
+        if (epg == null || playingChannel < 0 || playingChannel >= channels.size()) return;
+        String id = epgIdOf.get(playingChannel);
+        if (id == null) { osd.setProgram(null, null, -1f); return; }
+        long now = System.currentTimeMillis();
+        java.util.List<EpgParser.Program> list = epg.of(id);
+        EpgParser.Program live = EpgParser.live(list, now);
+        EpgParser.Program next = EpgParser.next(list, now);
+        String nowText = live == null ? null
+                : EpgParser.hm(live.startMs) + " " + live.title;
+        String nextText = next == null ? null
+                : EpgParser.hm(next.startMs) + " " + next.title;
+        float prog = -1f;
+        if (live != null && live.stopMs > live.startMs) {
+            prog = (now - live.startMs) / (float) (live.stopMs - live.startMs);
+        }
+        osd.setProgram(nowText, nextText, prog);
+    }
+
+    /** 点频道行 → 展开这个频道的节目单。 */
+    private void showEpgPanel(int channelIndex) {
+        if (epg == null || channelIndex < 0 || channelIndex >= channels.size()) return;
+        String id = epgIdOf.get(channelIndex);
+        java.util.List<EpgParser.Program> list = epg.of(id);
+        if (list == null || list.isEmpty()) return;
+
+        long now = System.currentTimeMillis();
+        java.util.ArrayList<EpgPanelView.Item> items = new java.util.ArrayList<>();
+        for (EpgParser.Program p : list) {
+            boolean live = p.isLive(now);
+            boolean replay = p.stopMs < now;
+            items.add(new EpgPanelView.Item(EpgParser.hm(p.startMs), p.title, live, replay));
+        }
+        PlaylistParser.Channel ch = channels.get(channelIndex);
+        epgPanel.setData(ch.name + " · 节目单", items.toArray(new EpgPanelView.Item[0]));
+        epgPanel.setVisibility(View.VISIBLE);
+        epgPanel.bringToFront();
+        epgPanelOpen = true;
+    }
+
+    private boolean epgPanelOpen = false;
+
+    private void hideEpgPanel() {
+        if (epgPanel != null) epgPanel.setVisibility(View.GONE);
+        epgPanelOpen = false;
     }
 
     // ================= 设置弹窗 =================
@@ -693,6 +863,18 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                 return true;
 
             case android.view.MotionEvent.ACTION_UP: {
+                // 节目单面板打开时，点面板内切换条目，点外面收起
+                if (epgPanelOpen) {
+                    int px = epgPanel.getLeft(), py = epgPanel.getTop();
+                    int pw = epgPanel.getRight(), ph = epgPanel.getBottom();
+                    if (ev.getX() >= px && ev.getX() <= pw && ev.getY() >= py && ev.getY() <= ph) {
+                        int idx = epgPanel.itemAt(ev.getY() - py);
+                        if (idx >= 0) epgPanel.setFocus(idx);
+                    } else {
+                        hideEpgPanel();
+                    }
+                    return true;
+                }
                 float dx = ev.getX() - downX;
                 float dy = ev.getY() - downY;
 
@@ -753,8 +935,11 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             int listTop = Theme.px(26 + 50);              // 频道列顶部内边距 + 小标题
             int idx = (int) ((y + scrollY - listTop) / itemH);
             if (idx >= 0 && idx < channels.size()) {
+                boolean sameChannel = (idx == playingChannel);
                 playChannel(idx);
                 focusOnChannel(idx);
+                // 点的是当前正在播的频道 → 说明想看节目单
+                if (sameChannel) showEpgPanel(idx);
             }
             return true;
         }
