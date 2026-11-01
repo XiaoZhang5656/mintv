@@ -691,12 +691,17 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             epgPanel.setData(ch.name + " · 暂无节目单", new EpgPanelView.Item[0]);
         } else {
             long now = System.currentTimeMillis();
+            boolean canReplay = PlaylistParser.canReplay(ch);
             java.util.ArrayList<EpgPanelView.Item> items = new java.util.ArrayList<>();
             for (EpgParser.Program p : list) {
+                boolean live = p.isLive(now);
+                boolean ended = p.stopMs <= now;
+                // 只有「已播完 + 源支持回看」的条目才可点
                 items.add(new EpgPanelView.Item(EpgParser.hm(p.startMs), p.title,
-                        p.isLive(now), p.stopMs < now));
+                        live, ended && canReplay, p.startMs, p.stopMs));
             }
-            epgPanel.setData(ch.name + " · 一周回看", items.toArray(new EpgPanelView.Item[0]));
+            epgPanel.setData(ch.name + (canReplay ? " · 一周回看" : " · 节目单"),
+                    items.toArray(new EpgPanelView.Item[0]));
         }
         // 高度撑满视口
         int vh = getWindow().getDecorView().getHeight();
@@ -753,6 +758,41 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     }
 
     private boolean epgPanelOpen = false;
+
+    /** 节目单里第 idx 条：已播完且源支持回看 → 播时移地址。 */
+    private void playReplay(int channelIndex, int idx) {
+        if (channelIndex < 0 || channelIndex >= channels.size()) return;
+        PlaylistParser.Channel ch = channels.get(channelIndex);
+        EpgParser.Program prog = programAt(channelIndex, idx);
+        if (prog == null) return;
+
+        if (!PlaylistParser.canReplay(ch)) {
+            osd.setStatus("该源不支持回看");
+            return;
+        }
+        String url = PlaylistParser.buildCatchupUrl(ch, prog.startMs, prog.stopMs);
+        if (url == null) {
+            osd.setStatus("回看地址生成失败");
+            return;
+        }
+        epgPanel.setFocus(idx);
+        String no = String.valueOf(ch.number);
+        while (no.length() < 4) no = "0" + no;
+        osd.showChannel(no, ch.name + " · 回看 " + EpgParser.hm(prog.startMs), ch.group);
+        osd.setProgram(null, null, -1f);
+        refreshOsdTags();
+        player.play(getApplicationContext(), url, true);
+        closeEpgPanel();
+    }
+
+    /** 取某频道 EPG 列表里第 idx 条节目。 */
+    private EpgParser.Program programAt(int channelIndex, int idx) {
+        if (epg == null) return null;
+        String id = epgIdOf.get(channelIndex);
+        java.util.List<EpgParser.Program> list = epg.of(id);
+        if (list == null || idx < 0 || idx >= list.size()) return null;
+        return list.get(idx);
+    }
 
 
 
@@ -940,9 +980,19 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             return true;
         }
         if (epgPanelOpen) {
-            if (x < Theme.px(Theme.NAV_W + Theme.CHAN_W) - Theme.px(Theme.NAV_W)) {
+            // 左半边是频道列
+            if (x < Theme.px(Theme.CHAN_W)) {
                 hitTest(x + Theme.px(Theme.NAV_W), y);
                 return true;
+            }
+            // 右半边是节目单：点条目就回看
+            int panelLeft = Theme.px(Theme.CHAN_W + 8);
+            if (x >= panelLeft) {
+                int idx = epgPanel.itemAt(y);
+                if (idx >= 0) {
+                    playReplay(playingChannel, idx);
+                    return true;
+                }
             }
             closeEpgPanel();
             return true;
