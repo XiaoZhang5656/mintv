@@ -122,8 +122,13 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         getWindow().setBackgroundDrawable(new android.graphics.drawable.ColorDrawable(Color.BLACK));
 
-        int sw = getResources().getDisplayMetrics().widthPixels;
-        Theme.init(sw);
+        // 关键：应用强制横屏，onCreate 时 widthPixels 可能还是竖屏值（1156），
+        // 拿它当基准会把整个 UI 缩到 0.6 倍、挤在左边一小块。
+        // 这里直接取真实屏幕的长边做基准，与方向无关。
+        android.util.DisplayMetrics dm = new android.util.DisplayMetrics();
+        getWindowManager().getDefaultDisplay().getRealMetrics(dm);
+        int base = Math.max(dm.widthPixels, dm.heightPixels);
+        Theme.init(base);
 
         loadPlaylist();
 
@@ -189,9 +194,16 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         root.addView(surfaceView, lp);
     }
 
+    /** 频道列宽度：设计值不够屏宽 34% 时按比例放大，保证大屏不留空白。 */
+    private int chanWidth() {
+        int w = Theme.px(Theme.CHAN_W);
+        int need = (int) (getResources().getDisplayMetrics().widthPixels * 0.34f);
+        return Math.max(w, need);
+    }
+
     private void buildOverlay(FrameLayout root) {
         int navW = Theme.px(Theme.NAV_W);
-        int chanW = Theme.px(Theme.CHAN_W);
+        int chanW = chanWidth();
         int railW = Theme.px(Theme.RAIL_W);
         int scrimW = Theme.px(Theme.SCRIM_W);
         int top = 0;
@@ -298,7 +310,10 @@ public class MainActivity extends Activity implements FocusEngine.Host {
 
         // --- 抽屉式 EPG：展开后分类栏收起，频道列左移，右边是节目单 ---
         //    布局：[频道列 476][间隔 8][节目单 776]
-        int epgW = Theme.px(560);
+        // 节目单吃掉频道列右侧全部剩余宽度，不留空
+        int screenW = getResources().getDisplayMetrics().widthPixels;
+        int epgW = Math.max(Theme.px(420),
+                screenW - Theme.px(Theme.CHAN_W) - Theme.px(16));
         epgScroll = new ScrollView(this);
         epgScroll.setVerticalScrollBarEnabled(false);
         epgScroll.setOverScrollMode(View.OVER_SCROLL_NEVER);
@@ -1028,7 +1043,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     /** 按屏幕坐标判断点到了哪一栏哪一项。 */
     private boolean hitTest(float x, float y) {
         int navW = Theme.px(Theme.NAV_W);
-        int chanW = Theme.px(Theme.CHAN_W);
+        int chanW = chanWidth();
 
         // --- 左侧分类列 ---
         if (x < navW) {
