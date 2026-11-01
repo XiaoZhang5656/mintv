@@ -57,7 +57,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     private final List<NavItemView> navViews = new ArrayList<>();
     private final List<ChannelView> chanViews = new ArrayList<>();
     private LinearLayout chanColumn;
-    private View navPanel, chanPanel, railView, scrim;
+    private View navPanel, chanPanel, railView, scrim, navDivider;
     private View chanContainer;   // 频道列的外层，抽屉展开时整体左移
     private ScrollView chanScroll;
 
@@ -271,6 +271,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         // 分隔线
         View navLine = new View(this);
         navLine.setBackgroundColor(Theme.LINE);
+        navDivider = navLine;
         FrameLayout.LayoutParams navLp = new FrameLayout.LayoutParams(navW, FrameLayout.LayoutParams.MATCH_PARENT);
         root.addView(nav, navLp);
         root.addView(navLine, lineParams(navW));
@@ -981,11 +982,17 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     }
 
     /**
-     * 展开：分类栏向左滑出收起，频道列整体左移贴边，节目单从右侧淡入。
-     * 收进去的是「分类」，留下「频道列表 + EPG 节目」，跟设计稿一致。
+     * 三种状态，互斥且有明确返回路径：
+     *
+     * ① 常态   [分类 360][频道 476][竖轨][视频]
+     * ② 抽屉   [频道 476][节目单 422][视频]      ← 分类滑出，点频道列 / 返回 → ①
+     * ③ 播放   整屏只有视频                        ← 点播放区 / 返回 → ①
+     *
+     * 关键：抽屉态下频道列必须在最左边可点，否则用户回不去。
      */
     private void openEpgPanel() {
         if (epgPanelOpen) return;
+        setPanelVisible(true);          // 抽屉需要面板可见
         epgPanelOpen = true;
 
         epgScroll.setVisibility(View.VISIBLE);
@@ -997,15 +1004,15 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                 .translationX(-Theme.px(Theme.NAV_W))
                 .alpha(0f)
                 .setDuration(Theme.T_PANEL).start();
-        // 竖轨跟着收起
+        navDivider.animate().alpha(0f).setDuration(Theme.T_PANEL).start();
         railView.animate().alpha(0f).setDuration(Theme.T_PANEL).start();
-        // 频道列左移，补上分类栏腾出的位置
+        // 频道列左移补位
         chanContainer.animate()
                 .translationX(-Theme.px(Theme.NAV_W))
                 .setDuration(Theme.T_PANEL).start();
     }
 
-    /** 收起：分类栏滑回，频道列归位，节目单淡出。 */
+    /** 收起抽屉：分类栏滑回，频道列归位，节目单淡出。 */
     private void closeEpgPanel() {
         if (!epgPanelOpen) return;
         epgPanelOpen = false;
@@ -1017,12 +1024,33 @@ public class MainActivity extends Activity implements FocusEngine.Host {
 
         navPanel.animate()
                 .translationX(0f)
-                .alpha(panelVisible ? 1f : 0f)
+                .alpha(1f)
                 .setDuration(Theme.T_PANEL).start();
-        railView.animate().alpha(panelVisible ? 1f : 0f).setDuration(Theme.T_PANEL).start();
+        navDivider.animate().alpha(1f).setDuration(Theme.T_PANEL).start();
+        railView.animate().alpha(1f).setDuration(Theme.T_PANEL).start();
         chanContainer.animate()
                 .translationX(0f)
                 .setDuration(Theme.T_PANEL).start();
+    }
+
+    /** ③ 纯播放：整套面板淡出，只留视频。任意方向键/点击恢复。 */
+    private void enterFullPlayer() {
+        if (epgPanelOpen) closeEpgPanel();
+        setPanelVisible(false);
+    }
+
+    private void setPanelVisible(boolean visible) {
+        if (panelVisible == visible) return;
+        panelVisible = visible;
+        float to = visible ? 1f : 0f;
+        navPanel.animate().alpha(to).setDuration(Theme.T_PANEL).start();
+        navDivider.animate().alpha(to).setDuration(Theme.T_PANEL).start();
+        chanContainer.animate().alpha(to).setDuration(Theme.T_PANEL).start();
+        railView.animate().alpha(to).setDuration(Theme.T_PANEL).start();
+        scrim.animate().alpha(visible ? 1f : 0f).setDuration(Theme.T_PANEL).start();
+        if (gestureLayer != null) {
+            gestureLayer.setVisibility(visible ? View.GONE : View.VISIBLE);
+        }
     }
 
     private boolean epgPanelOpen = false;
@@ -1284,6 +1312,25 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         int navW = Theme.px(Theme.NAV_W);
         int chanW = chanWidth();
 
+        // 抽屉态：左边整块是频道列（已左移到 0），右边是节目单
+        if (epgPanelOpen) {
+            // 最左侧一条热区：退出抽屉，恢复分类栏
+            if (x < Theme.px(48)) {
+                closeEpgPanel();
+                return true;
+            }
+            if (x < chanW) {
+                hitChannelColumn(x, y, 0);      // 频道列左移到 0 起
+                return true;
+            }
+            int epgLeft = chanW + Theme.px(8);
+            if (x >= epgLeft) {
+                int idx = epgPanel.itemAt(y);
+                if (idx >= 0) playReplay(playingChannel, idx);
+            }
+            return true;
+        }
+
         // --- 左侧分类列 ---
         if (x < navW) {
             int listTop = Theme.px(34 + 76);              // 顶部内边距 + 标题高度
@@ -1304,26 +1351,30 @@ public class MainActivity extends Activity implements FocusEngine.Host {
 
         // --- 中间频道列 ---
         if (x < navW + chanW) {
-            ScrollView sv = findScrollParent(chanViews.isEmpty() ? chanColumn : chanViews.get(0));
-            int scrollY = sv == null ? 0 : sv.getScrollY();
-            int itemH = Theme.px(Theme.CHAN_ITEM_H + Theme.CHAN_ITEM_GAP);
-            int listTop = Theme.px(26 + 50);              // 频道列顶部内边距 + 小标题
-            int idx = (int) ((y + scrollY - listTop) / itemH);
-            if (idx >= 0 && idx < channels.size()) {
-                playChannel(idx);
-                focusOnChannel(idx);
-                fillEpg(idx);          // 只刷新节目单内容，不展开
-            }
+            hitChannelColumn(x, y, navW);
             return true;
         }
 
-        // --- 竖轨「节目 » 信息」：点它展开抽屉（分类收起，露出频道+EPG）---
-        if (x >= navW + chanW && x <= navW + chanW + Theme.px(Theme.RAIL_W)) {
+        // --- 竖轨：点它展开抽屉 ---
+        if (x <= navW + chanW + Theme.px(Theme.RAIL_W)) {
             showEpgPanel(playingChannel >= 0 ? playingChannel : focus.chanIndex());
             return true;
         }
-
         return false;
+    }
+
+    /** 频道列命中。offsetX = 频道列左边界在屏幕上的 x。 */
+    private void hitChannelColumn(float x, float y, int offsetX) {
+        ScrollView sv = findScrollParent(chanViews.isEmpty() ? chanColumn : chanViews.get(0));
+        int scrollY = sv == null ? 0 : sv.getScrollY();
+        int itemH = Theme.px(Theme.CHAN_ITEM_H + Theme.CHAN_ITEM_GAP);
+        int listTop = Theme.px(26 + 50);
+        int idx = (int) ((y + scrollY - listTop) / itemH);
+        if (idx >= 0 && idx < channels.size()) {
+            playChannel(idx);
+            focusOnChannel(idx);
+            fillEpg(idx);
+        }
     }
 
     private void moveChannel(int step) {
@@ -1573,16 +1624,11 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         updateChannelFocus(0);
     }
 
-    private void hidePanel() {
-        panelVisible = false;
-        animatePanel(0f);
-        if (gestureLayer != null) gestureLayer.setVisibility(View.VISIBLE);
-    }
+    private void hidePanel() { enterFullPlayer(); }
 
     private void showPanel() {
-        panelVisible = true;
-        animatePanel(1f);
-        if (gestureLayer != null) gestureLayer.setVisibility(View.GONE);
+        if (epgPanelOpen) closeEpgPanel();
+        setPanelVisible(true);
     }
 
     private void animatePanel(float to) {
