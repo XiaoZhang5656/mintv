@@ -36,8 +36,14 @@ jobs:
         with:
           gradle-version: '8.7'
 
+      # 注意：这里绝对不能接 `| tail`，管道会把 gradle 的非零退出码吞掉，
+      # 让「编译失败」显示成「成功」，下一步 cp 才报找不到文件。
       - name: Build debug APK
-        run: gradle assembleDebug --no-daemon --stacktrace --console=plain 2>&1 | tail -60
+        run: |
+          set -o pipefail
+          gradle assembleDebug --no-daemon --stacktrace --console=plain
+          echo "---- outputs ----"
+          find app/build/outputs -name '*.apk' -type f || true
 
       - uses: actions/upload-artifact@v4
         with:
