@@ -15,45 +15,38 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
+      - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      - name: Show preinstalled Android SDK
-        run: |
-          echo "ANDROID_HOME=$ANDROID_HOME"
-          ls "$ANDROID_HOME/platforms" || true
+      - name: Show Android SDK
+        run: ls "$ANDROID_HOME/platforms" || true
 
-      # runner 自带的 debug.keystore 每次都是新的，导致覆盖安装失败。
-      # 这里生成一个固定密钥（口令 android/android），保证每次升级都能覆盖安装。
-      - name: Create stable debug keystore
+      # runner 自带 debug.keystore 每次都是新的，固定一份保证可覆盖升级
+      - name: Stable debug keystore
         run: |
           rm -f app/debug.keystore
-          keytool -genkeypair -v \
-            -keystore app/debug.keystore -storepass android -keypass android \
+          keytool -genkeypair -v -keystore app/debug.keystore \
+            -storepass android -keypass android \
             -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 \
             -dname "CN=Android Debug,O=Android,C=US"
 
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v3
+      - uses: gradle/actions/setup-gradle@v3
         with:
           gradle-version: '8.7'
 
       - name: Build debug APK
-        run: gradle assembleDebug --no-daemon --stacktrace --console=plain 2>&1 | tail -80
+        run: gradle assembleDebug --no-daemon --stacktrace --console=plain
 
-      - name: Upload APK (artifact)
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: tvui-java-debug
           path: app/build/outputs/apk/debug/*.apk
-          if-no-files-found: warn
 
-      # runner 到 github.com 的 git 通道不稳（443 被断），改用 REST API 回写 APK，
-      # 这样 public/apk 下能通过 raw / ghproxy 直链下载。
+      # git push 到 github.com 在 runner 上常被断，改用 REST API 回写
       - name: Publish APK via API
+        if: always()
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
