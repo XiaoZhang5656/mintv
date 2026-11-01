@@ -1147,7 +1147,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         FrameLayout.LayoutParams cardLp = new FrameLayout.LayoutParams(
                 w, FrameLayout.LayoutParams.WRAP_CONTENT);
         cardLp.gravity = Gravity.TOP | Gravity.CENTER_HORIZONTAL;
-        cardLp.topMargin = Theme.px(Theme.DLG_TOP);
+        cardLp.topMargin = Theme.px(50);
 
         // 标题栏
         LinearLayout bar = new LinearLayout(this);
@@ -1207,7 +1207,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         rowScroll.setOverScrollMode(View.OVER_SCROLL_NEVER);
         rowScroll.addView(rowColumn);
         // 限高：卡片总高不能超出屏幕，超出部分滚动
-        int maxRowsH = (int) (getResources().getDisplayMetrics().heightPixels * 0.72f);
+        int maxRowsH = (int) (getResources().getDisplayMetrics().heightPixels * 0.66f);
         card.addView(rowScroll, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, Math.min(maxRowsH,
                 Theme.px(10 * (82 + 12)) + Theme.px(28))));
