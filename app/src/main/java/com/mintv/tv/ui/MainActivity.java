@@ -131,6 +131,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         android.util.Log.i("MinTV", "screen realMetrics=" + dm.widthPixels + "x" + dm.heightPixels + " base=" + base);
         Theme.init(base);
 
+        CatchupProbe.init(this);
         loadPlaylist();
 
         FrameLayout root = new FrameLayout(this);
@@ -158,9 +159,6 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                 }
                 osd.setStatus(OsdView.stateText(s));   // READY 返回 null，会自动清空
             }
-            @Override public void onError(String msg) {
-                osd.setStatus("源失效：" + msg);
-            }
             @Override public void onFirstFrame() {
                 playing = true;
                 watchdogFired = true;
@@ -172,6 +170,11 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                 curPosition = pos;
                 curDuration = dur;
                 if (!seeking && seekOverlay != null) seekOverlay.hide();
+            }
+
+            @Override public void onError(String msg) {
+                dumpPlaybackState("ERROR", msg);
+                osd.setStatus("播放失败：" + msg);   // 常驻，直到下一次成功起播
             }
 
             @Override public void onVideoFormat(String res, String vc, String ac, String ch, String fps) {
@@ -659,6 +662,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         if (ch.sources.isEmpty()) return;
         PlaylistParser.Source src = ch.sources.get(currentLine);
         if (currentLine >= ch.sources.size()) { src = ch.sources.get(0); currentLine = 0; }
+        currentPlayUrl = PlaylistParser.cleanUrl(src.url);
         armWatchdog();
         if (player instanceof Media3Backend) {
             ((Media3Backend) player).play(getApplicationContext(),
@@ -710,6 +714,28 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         if (!autoSwitchSource()) return;      // 设置里关掉就不看门狗
         ui.postDelayed(playbackWatchdog, switchTimeoutMs());
     }
+
+    /** 把播放状态写到外部文件，用于排查「有解码器但没画面」。 */
+    private void dumpPlaybackState(String tag, String extra) {
+        try {
+            java.io.File dir = getExternalFilesDir(null);
+            if (dir == null) dir = getFilesDir();
+            java.io.File f = new java.io.File(dir, "playback.log");
+            java.io.FileWriter w = new java.io.FileWriter(f, true);
+            w.write(System.currentTimeMillis() + " [" + tag + "] "
+                    + "url=" + currentPlayUrl
+                    + " surface=" + (surfaceView != null && surfaceView.getHolder().getSurface() != null
+                        && surfaceView.getHolder().getSurface().isValid())
+                    + " mode=" + (player == null ? "null" : player.mode())
+                    + " canSeek=" + (player == null ? "null" : player.canSeek())
+                    + " pos=" + (player == null ? -1 : player.positionMs())
+                    + " dur=" + (player == null ? -1 : player.durationMs())
+                    + (extra == null ? "" : " " + extra) + "\n");
+            w.close();
+        } catch (Throwable ignored) { }
+    }
+
+    private String currentPlayUrl;
 
     private void refreshOsdTags() {
         String src = lineTotal > 1 ? ("源 " + (currentLine + 1) + "/" + lineTotal) : "源 1/1";
@@ -916,9 +942,11 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             int from = Math.max(0, liveIdx - 4);
             int to = Math.min(list.size(), liveIdx + 5);
 
+            epgWindow.clear();
             java.util.ArrayList<EpgPanelView.Item> items = new java.util.ArrayList<>();
             for (int i = from; i < to; i++) {
                 EpgParser.Program p = list.get(i);
+                epgWindow.add(p);
                 boolean live = p.isLive(now);
                 boolean ended = p.stopMs <= now;
                 // 只有「已播完 + 源支持回看」的条目才可点
@@ -983,6 +1011,8 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     }
 
     private boolean epgPanelOpen = false;
+    /** 当前节目单窗口里每一条对应的原始节目，下标与 EpgPanelView 的行一一对应。 */
+    private final java.util.ArrayList<EpgParser.Program> epgWindow = new java.util.ArrayList<>();
 
     /** 节目单里第 idx 条：已播完且源支持回看 → 播时移地址。 */
     private void playReplay(int channelIndex, int idx) {
@@ -991,21 +1021,53 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         EpgParser.Program prog = programAt(channelIndex, idx);
         if (prog == null) return;
 
-        String host = hostOf(ch);
-        String url;
-        if (PlaylistParser.declaredReplay(ch)) {
-            url = PlaylistParser.buildCatchupUrl(ch, prog.startMs, prog.stopMs);
-        } else if (host != null && Boolean.TRUE.equals(CatchupProbe.cached(host))) {
-            url = CatchupProbe.build(host,
-                    PlaylistParser.cleanUrl(ch.sources.get(0).url),
-                    prog.startMs, prog.stopMs);
-        } else {
-            url = null;
-        }
-        if (url == null) {
+        final String host = hostOf(ch);
+        final PlaylistParser.Channel fch = ch;
+        final EpgParser.Program fprog = prog;
+        final int fIdx = idx;
+
+        // 已经探过且不支持 → 直接提示，不再发请求
+        Boolean known = host == null ? null : CatchupProbe.cached(host);
+        if (Boolean.FALSE.equals(known) && !PlaylistParser.declaredReplay(ch)) {
             osd.toast("该源不支持回看");
             return;
         }
+
+        osd.toast("正在解析回看…");
+        new Thread(new Runnable() {
+            @Override public void run() {
+                boolean ok = true;
+                if (known == null) {
+                    // 没探过 → 当场探一次（只发 1 个请求，因为结果按 host 缓存）
+                    ok = CatchupProbe.probe(host,
+                            PlaylistParser.cleanUrl(fch.sources.get(0).url),
+                            fch.catchupSource, fch.catchup,
+                            fprog.startMs, fprog.stopMs);
+                }
+                final boolean supported = ok || PlaylistParser.declaredReplay(fch);
+                ui.post(new Runnable() {
+                    @Override public void run() {
+                        if (!supported) {
+                            osd.toast("该源不支持回看");
+                            return;
+                        }
+                        String url = PlaylistParser.declaredReplay(fch)
+                                ? PlaylistParser.buildCatchupUrl(fch, fprog.startMs, fprog.stopMs)
+                                : CatchupProbe.build(host,
+                                    PlaylistParser.cleanUrl(fch.sources.get(0).url),
+                                    fprog.startMs, fprog.stopMs);
+                        if (url == null || url.isEmpty()) {
+                            osd.toast("回看地址生成失败");
+                            return;
+                        }
+                        startReplay(fch, fprog, fIdx, url);
+                    }
+                });
+            }
+        }, "catchup-go").start();
+    }
+
+    private void startReplay(PlaylistParser.Channel ch, EpgParser.Program prog, int idx, String url) {
         epgPanel.setFocus(idx);
         String no = String.valueOf(ch.number);
         while (no.length() < 4) no = "0" + no;
@@ -1016,13 +1078,10 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         closeEpgPanel();
     }
 
-    /** 取某频道 EPG 列表里第 idx 条节目。 */
+    /** 取节目单窗口里的第 idx 条（idx 是界面行号，不是全量列表下标）。 */
     private EpgParser.Program programAt(int channelIndex, int idx) {
-        if (epg == null) return null;
-        String id = epgIdOf.get(channelIndex);
-        java.util.List<EpgParser.Program> list = epg.of(id);
-        if (list == null || idx < 0 || idx >= list.size()) return null;
-        return list.get(idx);
+        if (idx < 0 || idx >= epgWindow.size()) return null;
+        return epgWindow.get(idx);
     }
 
 
@@ -1100,7 +1159,15 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             rowColumn.addView(row, p);
             rowViews.add(row);
         }
-        card.addView(rowColumn);
+        ScrollView rowScroll = new ScrollView(this);
+        rowScroll.setVerticalScrollBarEnabled(false);
+        rowScroll.setOverScrollMode(View.OVER_SCROLL_NEVER);
+        rowScroll.addView(rowColumn);
+        // 限高：卡片总高不能超出屏幕，超出部分滚动
+        int maxRowsH = (int) (getResources().getDisplayMetrics().heightPixels * 0.72f);
+        card.addView(rowScroll, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, Math.min(maxRowsH,
+                Theme.px(10 * (82 + 12)) + Theme.px(28))));
 
         // 底栏
         TextView foot = new TextView(this);
