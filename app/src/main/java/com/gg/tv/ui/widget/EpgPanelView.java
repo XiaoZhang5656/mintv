@@ -49,9 +49,9 @@ public class EpgPanelView extends android.view.View {
     private int focusIndex = -1;
 
     private final float padH = Theme.px(22);
-    private final float headerH = Theme.px(64);
-    private final float itemH = Theme.px(56);
-    private final float timeW = Theme.px(76);
+    private final float headerH = Theme.px(58);
+    private final float itemH = Theme.px(52);
+    private final float timeW = Theme.px(64);
 
     public EpgPanelView(Context c) {
         super(c);
@@ -60,6 +60,11 @@ public class EpgPanelView extends android.view.View {
         setFocusable(false);
         p.setTypeface(Typeface.DEFAULT);
         fill.setStyle(Paint.Style.FILL);
+    }
+
+    /** 第三栏自己负责滚动，这里告诉外面总高度。 */
+    public float contentHeight() {
+        return headerH + items.length * itemH + Theme.px(12);
     }
 
     public void setData(String header, Item[] items) {
@@ -89,16 +94,11 @@ public class EpgPanelView extends android.view.View {
 
     @Override
     protected void onDraw(Canvas c) {
-        // 底板
-        fill.setColor(0xF014161A);
-        r.set(0, 0, getWidth(), getHeight());
-        c.drawRoundRect(r, Theme.px(6), Theme.px(6), fill);
-
         // 标题
-        p.setColor(Theme.TEXT);
-        p.setTextSize(Theme.sp(24));
+        p.setColor(0xFFECECEE);
+        p.setTextSize(Theme.sp(21));
         p.setFakeBoldText(false);
-        c.drawText(header, padH, Theme.px(40), p);
+        c.drawText(fit(header, getWidth() - padH * 2, Theme.sp(21)), padH, Theme.px(36), p);
 
         // 标题分隔线
         fill.setColor(0x1AFFFFFF);
@@ -112,32 +112,32 @@ public class EpgPanelView extends android.view.View {
             // 当前/焦点行底色
             if (it.live) {
                 fill.setColor(0x332F7BFF);
-                r.set(padH - Theme.px(8), y + Theme.px(4), getWidth() - padH + Theme.px(8), y + itemH - Theme.px(4));
+                r.set(padH - Theme.px(8), y, getWidth() - padH + Theme.px(8), y + itemH);
                 c.drawRoundRect(r, Theme.px(4), Theme.px(4), fill);
             } else if (i == focusIndex) {
                 fill.setColor(0x1AFFFFFF);
-                r.set(padH - Theme.px(8), y + Theme.px(4), getWidth() - padH + Theme.px(8), y + itemH - Theme.px(4));
+                r.set(padH - Theme.px(8), y, getWidth() - padH + Theme.px(8), y + itemH);
                 c.drawRoundRect(r, Theme.px(4), Theme.px(4), fill);
             }
 
-            float baseline = y + itemH / 2f + Theme.px(8);
+            float baseline = y + itemH / 2f + Theme.px(7);
 
             // 时间
             p.setColor(it.live ? Theme.FOCUS_BLUE : 0xFF9A9A9E);
-            p.setTextSize(Theme.sp(20));
+            p.setTextSize(Theme.sp(18));
             c.drawText(it.time, padH, baseline, p);
 
             // 标题
             p.setColor(it.live ? Theme.TEXT : 0xFFE2E2E6);
-            p.setTextSize(Theme.sp(21));
+            p.setTextSize(Theme.sp(19));
             float tx = padH + timeW;
-            float maxW = getWidth() - tx - padH - Theme.px(90);
-            c.drawText(fit(it.title, maxW, Theme.sp(21)), tx, baseline, p);
+            float maxW = getWidth() - tx - padH - Theme.px(70);
+            c.drawText(fit(it.title, maxW, Theme.sp(19)), tx, baseline, p);
 
             // 右侧标记
             String mark = it.live ? "直播中" : (it.replay ? "可回看" : null);
             if (mark != null) {
-                p.setTextSize(Theme.sp(16));
+                p.setTextSize(Theme.sp(14));
                 p.setColor(it.live ? Theme.FOCUS_BLUE : 0xFF9A9A9E);
                 p.setTextAlign(Paint.Align.RIGHT);
                 c.drawText(mark, getWidth() - padH, baseline, p);
