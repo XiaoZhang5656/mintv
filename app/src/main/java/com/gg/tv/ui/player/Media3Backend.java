@@ -76,6 +76,16 @@ public final class Media3Backend implements PlaybackBackend {
             @Override public void onRenderedFirstFrame() {
                 if (cb != null) cb.onFirstFrame();
             }
+
+            @Override public void onVideoSizeChanged(androidx.media3.common.VideoSize vs) {
+                if (vs == null || vs.width == 0 || vs.height == 0) return;
+                final String res = vs.width + "x" + vs.height;
+                final String fps = vs.frameRate > 0
+                        ? Math.round(vs.frameRate) + "fps" : null;
+                if (cb != null) main.post(new Runnable() {
+                    @Override public void run() { cb.onVideoFormat(res, null, null, null, fps); }
+                });
+            }
         });
 
         if (surface != null) player.setVideoSurface(surface);
