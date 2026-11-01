@@ -658,6 +658,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         if (dialogRoot != null && dialogRoot.getVisibility() == View.VISIBLE) {
             return handleSettingsTouch(ev);
         }
+        // 弹窗关闭时把 touch 标记清掉，避免上一次残留
 
         switch (ev.getActionMasked()) {
             case android.view.MotionEvent.ACTION_DOWN:
@@ -694,9 +695,8 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                     showPanel();
                     return true;
                 }
+                // 右侧播放区单击：只收起面板看画面，不切台
                 if (hitTest(ev.getX(), ev.getY())) return true;
-
-                playChannel(focus.chanIndex());
                 hidePanel();
                 return true;
             }
@@ -711,16 +711,17 @@ public class MainActivity extends Activity implements FocusEngine.Host {
 
         // --- 左侧分类列 ---
         if (x < navW) {
-            int listTop = Theme.px(34) + Theme.px(76);
-            int idx = (int) ((y - listTop) / (Theme.px(Theme.NAV_ITEM_H) + Theme.px(2)));
+            int listTop = Theme.px(34 + 76);              // 顶部内边距 + 标题高度
+            int rowH = Theme.px(Theme.NAV_ITEM_H + 2);
+            ScrollView navScroll = findScrollParent(navViews.isEmpty() ? navPanel : navViews.get(0));
+            int scrollY = navScroll == null ? 0 : navScroll.getScrollY();
+            int idx = (int) ((y + scrollY - listTop) / rowH);
             if (idx >= 0 && idx < navViews.size()) {
                 switchCategory(idx);
-                focus.setNavCount(categories.size());
                 if (focus.zone() != FocusEngine.Zone.NAV) {
                     focus.onKey(KeyEvent.KEYCODE_DPAD_LEFT);
                 }
                 updateNavFocus(idx);
-                return true;
             }
             return true;
         }
@@ -730,12 +731,11 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             ScrollView sv = findScrollParent(chanViews.isEmpty() ? chanColumn : chanViews.get(0));
             int scrollY = sv == null ? 0 : sv.getScrollY();
             int itemH = Theme.px(Theme.CHAN_ITEM_H + Theme.CHAN_ITEM_GAP);
-            int listTop = Theme.px(26) + Theme.px(50);
+            int listTop = Theme.px(26 + 50);              // 频道列顶部内边距 + 小标题
             int idx = (int) ((y + scrollY - listTop) / itemH);
             if (idx >= 0 && idx < channels.size()) {
                 playChannel(idx);
                 focusOnChannel(idx);
-                return true;
             }
             return true;
         }
@@ -759,13 +759,16 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         updateChannelFocus(index);
     }
 
-    /** 设置弹窗里的触摸：点页签关闭、点选项选中、点空白关闭。 */
+    /** 设置弹窗里的触摸：点选项选中、点卡片外面关闭。 */
     private boolean handleSettingsTouch(android.view.MotionEvent ev) {
-        if (ev.getActionMasked() != android.view.MotionEvent.ACTION_UP) return true;
+        if (ev.getActionMasked() != android.view.MotionEvent.ACTION_UP) {
+            return true;   // 按下 / 移动一律吃掉，交给 UP 处理
+        }
         float x = ev.getX(), y = ev.getY();
-        int cardLeft = (getWindow().getDecorView().getWidth() - Theme.px(Theme.DLG_W)) / 2;
-        int cardTop = Theme.px(Theme.DLG_TOP);
+        int screenW = getWindow().getDecorView().getWidth();
         int cardW = Theme.px(Theme.DLG_W);
+        int cardLeft = (screenW - cardW) / 2;
+        int cardTop = Theme.px(Theme.DLG_TOP);
 
         // 点弹窗外面 → 关闭
         if (x < cardLeft || x > cardLeft + cardW) {
@@ -773,15 +776,14 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             return true;
         }
 
-        int rowTop = cardTop + Theme.px(76) + Theme.px(18);
-        int rowH = Theme.px(82) + Theme.px(12);
+        int rowTop = cardTop + Theme.px(76 + 18);
+        int rowH = Theme.px(82 + 12);
         int idx = (int) ((y - rowTop) / rowH);
         if (idx >= 0 && idx < rowViews.size()) {
             int innerY = (int) ((y - rowTop) - idx * rowH);
             if (innerY >= 0 && innerY <= Theme.px(82)) {
                 int localX = (int) (x - cardLeft - Theme.px(24));
                 int opt = rowViews.get(idx).segment().indexAt(localX);
-                // 先把焦点挪到这一行
                 while (focus.rowIndex() < idx) focus.onKey(KeyEvent.KEYCODE_DPAD_DOWN);
                 while (focus.rowIndex() > idx) focus.onKey(KeyEvent.KEYCODE_DPAD_UP);
                 applyRowFocus(idx);
@@ -791,7 +793,6 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                     rowViews.get(idx).setRowFocused(false);
                     rowViews.get(idx).setOptionFocused(opt);
                 }
-                return true;
             }
         }
         return true;
