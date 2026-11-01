@@ -79,6 +79,11 @@ public final class FocusEngine {
     }
     public boolean inSettings() { return settingsMode; }
     public int navIndex() { return navIndex; }
+
+    /** 只改索引，不回调（分类切换时用，避免多余的焦点刷新）。 */
+    public void setNavIndexSilently(int i) {
+        if (i >= 0 && i < navCount) navIndex = i;
+    }
     public int chanIndex() { return chanIndex; }
     public int rowIndex() { return rowIndex; }
     public int optIndex() { return optIndex; }
