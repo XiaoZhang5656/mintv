@@ -73,8 +73,12 @@ public final class Theme {
     /** 实际分辨率 / 1920 的比例。只在 Activity 里设一次。 */
     private static float sScale = 1f;
 
-    public static void init(int widthPx) {
-        sScale = widthPx / 1920f;
+    /**
+     * @param longSidePx 屏幕长边像素（不是 onCreate 时的 widthPixels ——
+     *                   强制横屏的应用在 onCreate 里拿到的可能是竖屏值）
+     */
+    public static void init(int longSidePx) {
+        sScale = longSidePx / 1920f;
         if (sScale <= 0f) sScale = 1f;
     }
 
