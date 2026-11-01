@@ -240,8 +240,13 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         chanLp.leftMargin = navW + Theme.px(1);
         root.addView(chan, chanLp);
 
-        // 竖排「节目 » 信息」已被第三栏 EPG 取代，保留类但不再使用
-        railView = new View(this);
+        // 竖轨：EPG 收起时作为「节目 » 信息」入口，点它展开节目单
+        View rail = new RailView(this);
+        FrameLayout.LayoutParams railLp = new FrameLayout.LayoutParams(
+                railW, FrameLayout.LayoutParams.MATCH_PARENT);
+        railLp.leftMargin = navW + chanW + Theme.px(1);
+        railView = rail;
+        root.addView(rail, railLp);
 
         // --- 时钟 ---
         clock = new ClockView(this);
@@ -252,8 +257,8 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         clockLp.topMargin = Theme.px(18);
         root.addView(clock, clockLp);
 
-        // --- 第三栏：EPG 节目信息（始终显示，随选中频道切换）---
-        int epgW = Theme.px(300);
+        // --- EPG 节目单：点「节目 » 信息」展开，盖住左侧分类列 ---
+        int epgW = Theme.px(380);   // 分类栏 300 + 竖轨 64，正好盖住
         epgScroll = new ScrollView(this);
         epgScroll.setVerticalScrollBarEnabled(false);
         epgScroll.setOverScrollMode(View.OVER_SCROLL_NEVER);
@@ -264,15 +269,9 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                 android.widget.FrameLayout.LayoutParams.MATCH_PARENT));
         FrameLayout.LayoutParams epgLp = new FrameLayout.LayoutParams(
                 epgW, FrameLayout.LayoutParams.MATCH_PARENT);
-        epgLp.leftMargin = Theme.px(Theme.NAV_W + Theme.CHAN_W + 1);
+        epgLp.leftMargin = 0;              // 盖住分类栏位置
+        epgScroll.setVisibility(View.GONE);
         root.addView(epgScroll, epgLp);
-        // 左侧分隔线
-        View epgLine = new View(this);
-        epgLine.setBackgroundColor(Theme.LINE);
-        FrameLayout.LayoutParams lineLp = new FrameLayout.LayoutParams(
-                Math.max(1, Theme.px(1)), FrameLayout.LayoutParams.MATCH_PARENT);
-        lineLp.leftMargin = Theme.px(Theme.NAV_W + Theme.CHAN_W);
-        root.addView(epgLine, lineLp);
 
         // --- OSD ---
         osd = new OsdView(this);
@@ -674,41 +673,58 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         osd.setProgram(nowText, nextText, prog);
     }
 
-    /** 把某个频道的节目单填进右侧第三栏。 */
+    /** 展开 EPG 节目单：盖住左侧分类栏，只留频道列 + 节目单。 */
     private void showEpgPanel(int channelIndex) {
-        if (epgPanel == null) return;
-        if (channelIndex < 0 || channelIndex >= channels.size()) return;
+        if (epgPanel == null || channelIndex < 0 || channelIndex >= channels.size()) return;
         PlaylistParser.Channel ch = channels.get(channelIndex);
-        if (epg == null) {
-            epgPanel.setData(ch.name + " · 节目单", new EpgPanelView.Item[0]);
-            return;
-        }
-        String id = epgIdOf.get(channelIndex);
-        java.util.List<EpgParser.Program> list = epg.of(id);
+        java.util.List<EpgParser.Program> list = epg == null ? null : epg.of(epgIdOf.get(channelIndex));
         if (list == null || list.isEmpty()) {
             epgPanel.setData(ch.name + " · 暂无节目单", new EpgPanelView.Item[0]);
-            return;
+        } else {
+            long now = System.currentTimeMillis();
+            java.util.ArrayList<EpgPanelView.Item> items = new java.util.ArrayList<>();
+            for (EpgParser.Program p : list) {
+                items.add(new EpgPanelView.Item(EpgParser.hm(p.startMs), p.title,
+                        p.isLive(now), p.stopMs < now));
+            }
+            epgPanel.setData(ch.name + " · 一周回看", items.toArray(new EpgPanelView.Item[0]));
         }
-        long now = System.currentTimeMillis();
-        java.util.ArrayList<EpgPanelView.Item> items = new java.util.ArrayList<>();
-        for (EpgParser.Program p : list) {
-            items.add(new EpgPanelView.Item(EpgParser.hm(p.startMs), p.title,
-                    p.isLive(now), p.stopMs < now));
-        }
-        int h = (int) EpgPanelView.heightFor(items.size());
-        epgPanel.setData(ch.name + " · 节目单", items.toArray(new EpgPanelView.Item[0]));
+        // 高度撑满视口
+        int vh = getWindow().getDecorView().getHeight();
         android.view.ViewGroup.LayoutParams lp = epgPanel.getLayoutParams();
-        if (lp != null && lp.height != h) {
-            lp.height = h;
+        if (lp != null && vh > 0 && lp.height != vh) {
+            lp.height = vh;
             epgPanel.setLayoutParams(lp);
         }
+        openEpgPanel();
+    }
+
+    /** 展开：分类栏淡出，EPG 面板淡入。 */
+    private void openEpgPanel() {
+        if (epgPanelOpen) return;
+        epgPanelOpen = true;
+        epgScroll.setVisibility(View.VISIBLE);
+        epgScroll.setAlpha(0f);
+        epgScroll.animate().alpha(1f).setDuration(Theme.T_PANEL).start();
+        navPanel.animate().alpha(0f).setDuration(Theme.T_PANEL).start();
+        railView.animate().alpha(0f).setDuration(Theme.T_PANEL).start();
+    }
+
+    /** 收起：恢复分类栏。 */
+    private void closeEpgPanel() {
+        if (!epgPanelOpen) return;
+        epgPanelOpen = false;
+        epgScroll.animate().alpha(0f).setDuration(Theme.T_PANEL)
+                .withEndAction(new Runnable() {
+                    @Override public void run() { epgScroll.setVisibility(View.GONE); }
+                }).start();
+        navPanel.animate().alpha(panelVisible ? 1f : 0f).setDuration(Theme.T_PANEL).start();
+        railView.animate().alpha(panelVisible ? 1f : 0f).setDuration(Theme.T_PANEL).start();
     }
 
     private boolean epgPanelOpen = false;
 
-    private void hideEpgPanel() {
-        epgPanelOpen = false;
-    }
+
 
     // ================= 设置弹窗 =================
 
@@ -882,14 +898,16 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             case android.view.MotionEvent.ACTION_UP: {
                 // 节目单面板打开时，点面板内切换条目，点外面收起
                 if (epgPanelOpen) {
-                    int px = epgPanel.getLeft(), py = epgPanel.getTop();
-                    int pw = epgPanel.getRight(), ph = epgPanel.getBottom();
-                    if (ev.getX() >= px && ev.getX() <= pw && ev.getY() >= py && ev.getY() <= ph) {
-                        int idx = epgPanel.itemAt(ev.getY() - py);
+                    int pw = Theme.px(380);
+                    if (ev.getX() <= pw) {
+                        // 点在节目单里：选中一条
+                        int idx = epgPanel.itemAt(ev.getY() - epgScroll.getScrollY());
                         if (idx >= 0) epgPanel.setFocus(idx);
-                    } else {
-                        hideEpgPanel();
+                        return true;
                     }
+                    // 点频道列：换台并刷新节目单
+                    if (hitTest(ev.getX(), ev.getY())) return true;
+                    closeEpgPanel();
                     return true;
                 }
                 float dx = ev.getX() - downX;
@@ -956,6 +974,12 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                 focusOnChannel(idx);
                 showEpgPanel(idx);
             }
+            return true;
+        }
+
+        // --- 竖轨「节目 » 信息」：点它展开节目单 ---
+        if (x >= navW + chanW && x <= navW + chanW + Theme.px(Theme.RAIL_W)) {
+            showEpgPanel(focus.chanIndex());
             return true;
         }
 
@@ -1038,6 +1062,11 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             }
         }
 
+        if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT && focus.zone() == FocusEngine.Zone.CHAN) {
+            showEpgPanel(focus.chanIndex());
+            return true;
+        }
+
         if (focus.onKey(keyCode)) return true;
 
         switch (keyCode) {
@@ -1047,11 +1076,13 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                     switchCategory(focus.navIndex());
                 } else {
                     playChannel(focus.chanIndex());
-                    hidePanel();
+                    showEpgPanel(focus.chanIndex());   // 选中频道 → 右侧出节目单
                 }
                 return true;
             case KeyEvent.KEYCODE_BACK:
-                if (panelVisible) {
+                if (epgPanelOpen) {
+                    closeEpgPanel();
+                } else if (panelVisible) {
                     hidePanel();
                 } else {
                     finish();
