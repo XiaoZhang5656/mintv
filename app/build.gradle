@@ -3,15 +3,15 @@ plugins {
 }
 
 android {
-    namespace 'com.gg.tv'
+    namespace 'com.mintv.tv'
     compileSdk 34
 
     defaultConfig {
-        applicationId "com.gg.tvui"
+        applicationId "com.mintv.tvui"
         // TV 盒子覆盖最广的下限，Android 5.0
         minSdk 21
         targetSdk 34
-        versionCode 6
+        versionCode 7
         versionName "1.0.1"
     }
 
