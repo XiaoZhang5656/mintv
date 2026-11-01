@@ -54,9 +54,9 @@ public class EpgPanelView extends android.view.View {
     private int focusIndex = -1;
 
     private final float padH = Theme.px(22);
-    private final float headerH = Theme.px(58);
-    private final float itemH = Theme.px(52);
-    private final float timeW = Theme.px(64);
+    private final float headerH = Theme.px(66);
+    private final float itemH = Theme.px(62);
+    private final float timeW = Theme.px(76);
 
     public EpgPanelView(Context c) {
         super(c);
@@ -125,9 +125,9 @@ public class EpgPanelView extends android.view.View {
     protected void onDraw(Canvas c) {
         // 标题
         p.setColor(0xFFECECEE);
-        p.setTextSize(Theme.sp(21));
+        p.setTextSize(Theme.sp(24));
         p.setFakeBoldText(false);
-        c.drawText(fit(header, getWidth() - padH * 2, Theme.sp(21)), padH, Theme.px(36), p);
+        c.drawText(fit(header, getWidth() - padH * 2, Theme.sp(24)), padH, Theme.px(42), p);
 
         // 标题分隔线
         fill.setColor(0x1AFFFFFF);
@@ -153,20 +153,20 @@ public class EpgPanelView extends android.view.View {
 
             // 时间
             p.setColor(it.live ? Theme.FOCUS_BLUE : 0xFF9A9A9E);
-            p.setTextSize(Theme.sp(18));
+            p.setTextSize(Theme.sp(20));
             c.drawText(it.time, padH, baseline, p);
 
             // 标题
             p.setColor(it.live ? Theme.TEXT : 0xFFE2E2E6);
-            p.setTextSize(Theme.sp(19));
+            p.setTextSize(Theme.sp(21));
             float tx = padH + timeW;
-            float maxW = getWidth() - tx - padH - Theme.px(70);
-            c.drawText(fit(it.title, maxW, Theme.sp(19)), tx, baseline, p);
+            float maxW = getWidth() - tx - padH - Theme.px(86);
+            c.drawText(fit(it.title, maxW, Theme.sp(21)), tx, baseline, p);
 
             // 右侧标记：直播中 / 可回看（可点才亮）
             String mark = it.live ? "直播中" : (it.replay ? "回看" : null);
             if (mark != null) {
-                p.setTextSize(Theme.sp(14));
+                p.setTextSize(Theme.sp(16));
                 p.setColor(it.live ? Theme.FOCUS_BLUE
                         : (it.replay ? 0xFF6FD08A : 0xFF6A6A70));
                 p.setTextAlign(Paint.Align.RIGHT);
