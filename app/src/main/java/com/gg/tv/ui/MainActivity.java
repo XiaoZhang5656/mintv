@@ -366,27 +366,82 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             p.bottomMargin = Theme.px(Theme.CHAN_ITEM_GAP / 2);
             chanColumn.addView(v, p);
             chanViews.add(v);
+        }
+        focus.setChannelCount(channels.size());
+        // 台标改成按可见范围惰性加载，绝不在绑定阶段全量入队
+        attachScrollLoader();
+        ui.post(new Runnable() {
+            @Override public void run() { loadVisibleLogos(); }
+        });
+    }
 
-            // 只有源里带 tvg-logo 才去加载，没有就不占图标位
-            if (ch.logo != null && !ch.logo.isEmpty()) {
-                Bitmap cached = logos.peek(ch.logo);
-                if (cached != null) {
-                    v.setLogo(cached);
-                    v.requestLayout();
-                } else {
-                    logos.load(ch.logo, new LogoLoader.Callback() {
-                        @Override public void onLogo(String url, final Bitmap bmp) {
-                            ui.post(new Runnable() {
-                                @Override public void run() {
-                                    if (!bmp.isRecycled()) { v.setLogo(bmp); v.invalidate(); }
-                                }
-                            });
+    /** 列表滚动时补加载新露出行的台标。只挂一次监听。 */
+    private void attachScrollLoader() {
+        ViewGroup parent = (ViewGroup) chanColumn.getParent();
+        if (parent instanceof ScrollView) {
+            ScrollView sv = (ScrollView) parent;
+            if (sv.getTag() == null) {
+                sv.setTag(Boolean.TRUE);
+                sv.setOnScrollChangeListener(new View.OnScrollChangeListener() {
+                    @Override public void onScrollChange(View v, int sx, int sy, int osx, int osy) {
+                        // 滚完再拉，避免滚动中频繁触发
+                        ui.removeCallbacks(scrollLogoTask);
+                        ui.postDelayed(scrollLogoTask, 120);
+                    }
+                });
+            }
+        }
+    }
+
+    private final Runnable scrollLogoTask = new Runnable() {
+        @Override public void run() { loadVisibleLogos(); }
+    };
+
+    /** 只给「当前屏幕能看到 + 前后各 2 行」的频道请求台标。 */
+    private void loadVisibleLogos() {
+        if (chanViews.isEmpty()) return;
+        ViewGroup parent = (ViewGroup) chanColumn.getParent();
+        if (!(parent instanceof ScrollView)) {
+            requestLogos(0, chanViews.size());
+            return;
+        }
+        ScrollView sv = (ScrollView) parent;
+        int scrollY = sv.getScrollY();
+        int viewH = sv.getHeight();
+        if (viewH <= 0) { viewH = getWindow().getDecorView().getHeight(); }
+        int itemH = Theme.px(Theme.CHAN_ITEM_H + Theme.CHAN_ITEM_GAP);
+        int listTop = Theme.px(26) + Theme.px(50);
+
+        int first = Math.max(0, (scrollY + listTop) / itemH - 2);
+        int last = Math.min(chanViews.size() - 1, (scrollY + viewH) / itemH + 2);
+        requestLogos(first, last + 1);
+    }
+
+    private void requestLogos(int from, int to) {
+        for (int i = Math.max(0, from); i < Math.min(to, channels.size()); i++) {
+            final PlaylistParser.Channel ch = channels.get(i);
+            if (ch.logo == null || ch.logo.isEmpty()) continue;
+            final ChannelView v = chanViews.get(i);
+            if (v.hasLogo()) continue;
+
+            Bitmap cached = logos.peek(ch.logo);
+            if (cached != null) {
+                v.setLogo(cached);
+                continue;
+            }
+            logos.load(ch.logo, new LogoLoader.Callback() {
+                @Override public void onLogo(String url, final Bitmap bmp) {
+                    ui.post(new Runnable() {
+                        @Override public void run() {
+                            if (bmp != null && !bmp.isRecycled()) {
+                                v.setLogo(bmp);
+                                v.invalidate();
+                            }
                         }
                     });
                 }
-            }
+            });
         }
-        focus.setChannelCount(channels.size());
     }
 
     private void updateNavFocus(int index) {
@@ -864,5 +919,6 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             player.release();
             player = null;
         }
+        logos.shutdown();
     }
 }
