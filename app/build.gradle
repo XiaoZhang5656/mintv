@@ -11,8 +11,8 @@ android {
         // TV 盒子覆盖最广的下限，Android 5.0
         minSdk 21
         targetSdk 34
-        versionCode 1
-        versionName "1.0.0"
+        versionCode 2
+        versionName "1.0.1"
     }
 
     buildTypes {
@@ -20,7 +20,7 @@ android {
             minifyEnabled true
             shrinkResources true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
-            // 用本机调试签名，开箱即装；正式发布请换成自己的 keystore
+            // 用 CI 生成的固定调试签名（口令 android/android），保证版本可覆盖升级
             signingConfig signingConfigs.debug
         }
     }
