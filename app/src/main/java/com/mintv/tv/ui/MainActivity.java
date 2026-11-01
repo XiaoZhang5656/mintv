@@ -219,6 +219,11 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             DemoData.Category cat = categories.get(i);
             NavItemView v = new NavItemView(this);
             v.bind(cat.name, cat.count, cat.glyph);
+            final int catIndex = i;
+            v.setClickable(true);
+            v.setOnClickListener(new View.OnClickListener() {
+                @Override public void onClick(View view) { onCategoryClicked(catIndex); }
+            });
             LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, Theme.px(Theme.NAV_ITEM_H));
             p.bottomMargin = Theme.px(2);
@@ -276,6 +281,10 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                 railW, FrameLayout.LayoutParams.MATCH_PARENT);
         railLp.leftMargin = navW + chanW + Theme.px(1);
         railView = rail;
+        rail.setClickable(true);
+        rail.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { showEpgPanel(playingChannel >= 0 ? playingChannel : 0); }
+        });
         root.addView(rail, railLp);
 
         // --- 时钟 ---
@@ -289,7 +298,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
 
         // --- 抽屉式 EPG：展开后分类栏收起，频道列左移，右边是节目单 ---
         //    布局：[频道列 476][间隔 8][节目单 776]
-        int epgW = Theme.px(300);
+        int epgW = Theme.px(560);
         epgScroll = new ScrollView(this);
         epgScroll.setVerticalScrollBarEnabled(false);
         epgScroll.setOverScrollMode(View.OVER_SCROLL_NEVER);
@@ -300,7 +309,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                 android.widget.FrameLayout.LayoutParams.MATCH_PARENT));
         FrameLayout.LayoutParams epgLp = new FrameLayout.LayoutParams(
                 epgW, FrameLayout.LayoutParams.MATCH_PARENT);
-        epgLp.leftMargin = Theme.px(Theme.CHAN_W + 8);   // 抽屉展开后频道列贴边，节目单紧跟其后
+        epgLp.leftMargin = Theme.px(Theme.CHAN_W + 8);   // 抽屉展开后紧贴左移的频道列
         epgScroll.setVisibility(View.GONE);
         root.addView(epgScroll, epgLp);
 
@@ -442,6 +451,11 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             v.setSub("");                       // 没接 EPG 就不画副行，不编造假节目
             v.setBadge(null);
 
+            final int chanIndex = i;
+            v.setClickable(true);
+            v.setOnClickListener(new View.OnClickListener() {
+                @Override public void onClick(View view) { onChannelClicked(chanIndex); }
+            });
             LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, Theme.px(Theme.CHAN_ITEM_H));
             p.leftMargin = Theme.px(14);
@@ -524,6 +538,22 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                 }
             });
         }
+    }
+
+    /** 点分类：切分类，焦点交给频道列。 */
+    private void onCategoryClicked(int index) {
+        switchCategory(index);
+        focus.setZone(FocusEngine.Zone.CHAN);
+        focus.setNavIndexSilently(index);
+        updateNavFocus(index);
+        updateChannelFocus(0);
+    }
+
+    /** 点频道：切台 + 选中框 + 刷新节目单。 */
+    private void onChannelClicked(int index) {
+        playChannel(index);
+        focusOnChannel(index);
+        fillEpg(index);
     }
 
     private void updateNavFocus(int index) {
@@ -983,67 +1013,16 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     private boolean moved;
     private final int slop = (int) (24 * Theme.scale());
 
-    @Override
-    public boolean dispatchTouchEvent(android.view.MotionEvent ev) {
-        if (dialogRoot != null && dialogRoot.getVisibility() == View.VISIBLE) {
-            return handleSettingsTouch(ev);
-        }
-
-        switch (ev.getActionMasked()) {
-            case android.view.MotionEvent.ACTION_DOWN:
-                downX = ev.getX();
-                downY = ev.getY();
-                moved = false;
-                // 交给子 View（ScrollView）先处理，滑动才能滚动；
-                // 如果是单击，会在 UP 里补一次命中处理。
-                super.dispatchTouchEvent(ev);
-                return false;
-
-            case android.view.MotionEvent.ACTION_CANCEL:
-                return false;
-
-            case android.view.MotionEvent.ACTION_UP:
-                super.dispatchTouchEvent(ev);
-                return handleSingleTapOrSwipe(ev.getX(), ev.getY());
-
-            default:
-                return false;
-        }
-    }
-
-    /** 抬起时：位移小 → 当点击；位移大 → 交给 ScrollView 自己滚（这里不处理）。 */
-    private boolean handleSingleTapOrSwipe(float x, float y) {
-        float dx = x - downX;
-        float dy = y - downY;
-        if (Math.abs(dx) > slop * 3 || Math.abs(dy) > slop * 3) {
-            return false;   // 是滑动，滚动由 ScrollView 处理，不切台不换分类
-        }
-        // 面板收起时，单击先唤出面板
-        if (!panelVisible) {
-            showPanel();
-            return true;
-        }
-        if (epgPanelOpen) {
-            // 左半边是频道列
-            if (x < Theme.px(Theme.CHAN_W)) {
-                hitTest(x + Theme.px(Theme.NAV_W), y);
-                return true;
-            }
-            // 右半边是节目单：点条目就回看
-            int panelLeft = Theme.px(Theme.CHAN_W + 8);
-            if (x >= panelLeft) {
-                int idx = epgPanel.itemAt(y);
-                if (idx >= 0) {
-                    playReplay(playingChannel, idx);
-                    return true;
-                }
-            }
-            closeEpgPanel();
-            return true;
-        }
-        if (hitTest(x, y)) return true;
-        hidePanel();
-        return true;
+    /**
+     * 触摸策略（重要）：
+     * <b>不要重写 dispatchTouchEvent</b> —— 一旦在 ACTION_DOWN 返回 false，
+     * 后续的 MOVE/UP 就再也收不到，ScrollView 完全无法滚动。
+     *
+     * 正确做法：完全不拦截，让事件正常下发；点击用各控件自己的
+     * OnClickListener 处理（自绘 View 默认不消费触摸，加 listener 即可）。
+     */
+    private void bindClickListeners() {
+        // 每个自绘 View 加点击回调后，才会消费 DOWN/UP 并能正常参与滚动判定
     }
 
     /** 按屏幕坐标判断点到了哪一栏哪一项。 */
