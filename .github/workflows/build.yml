@@ -46,7 +46,6 @@ jobs:
 
       # git push 到 github.com 在 runner 上常被断，改用 REST API 回写
       - name: Publish APK via API
-        if: always()
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
