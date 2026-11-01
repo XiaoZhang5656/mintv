@@ -272,7 +272,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                 android.widget.FrameLayout.LayoutParams.MATCH_PARENT));
         FrameLayout.LayoutParams epgLp = new FrameLayout.LayoutParams(
                 epgW, FrameLayout.LayoutParams.MATCH_PARENT);
-        epgLp.leftMargin = Theme.px(Theme.CHAN_W - Theme.NAV_W + 8);   // 抽屉展开后紧贴左移的频道列
+        epgLp.leftMargin = Theme.px(Theme.CHAN_W + 8);   // 抽屉展开后频道列贴边，节目单紧跟其后
         epgScroll.setVisibility(View.GONE);
         root.addView(epgScroll, epgLp);
 
@@ -906,64 +906,49 @@ public class MainActivity extends Activity implements FocusEngine.Host {
 
     @Override
     public boolean dispatchTouchEvent(android.view.MotionEvent ev) {
-        // 设置弹窗打开时交给弹窗自己的触摸逻辑
         if (dialogRoot != null && dialogRoot.getVisibility() == View.VISIBLE) {
             return handleSettingsTouch(ev);
         }
-        // 弹窗关闭时把 touch 标记清掉，避免上一次残留
 
         switch (ev.getActionMasked()) {
             case android.view.MotionEvent.ACTION_DOWN:
                 downX = ev.getX();
                 downY = ev.getY();
                 moved = false;
-                return true;
+                // 关键：DOWN 必须返回 false，事件才会继续派发给下面的 ScrollView，
+                // 手指滑动才能滚动列表。我们只在 UP 时自己补一次点击处理。
+                return false;
 
-            case android.view.MotionEvent.ACTION_MOVE:
-                if (Math.abs(ev.getY() - downY) > slop * 3 || Math.abs(ev.getX() - downX) > slop * 3) {
-                    moved = true;
-                }
-                return true;
+            case android.view.MotionEvent.ACTION_UP:
+                return handleSingleTapOrSwipe(ev.getX(), ev.getY());
 
-            case android.view.MotionEvent.ACTION_UP: {
-                // 节目单面板打开时，点面板内切换条目，点外面收起
-                if (epgPanelOpen) {
-                    // 抽屉展开：左半是频道列，右半是节目单
-                    if (ev.getX() < Theme.px(Theme.CHAN_W)) {
-                        hitTest(ev.getX() + Theme.px(Theme.NAV_W), ev.getY());
-                        return true;
-                    }
-                    // 点节目单里的条目 → 收起抽屉
-                    closeEpgPanel();
-                    return true;
-                }
-                float dx = ev.getX() - downX;
-                float dy = ev.getY() - downY;
+            default:
+                return false;
+        }
+    }
 
-                if (moved) {
-                    // 上下滑 = 换频道；左右滑 = 换分类
-                    if (Math.abs(dy) > Math.abs(dx)) {
-                        if (!panelVisible) showPanel();
-                        int step = dy < 0 ? 1 : -1;
-                        moveChannel(step);
-                    } else {
-                        int step = dx < 0 ? 1 : -1;
-                        switchCategory((focus.navIndex() + step + categories.size()) % categories.size());
-                    }
-                    return true;
-                }
-
-                // 单击：先按坐标命中，命中不到再退化成「唤出面板 / 播放」
-                if (!panelVisible) {
-                    showPanel();
-                    return true;
-                }
-                // 右侧播放区单击：只收起面板看画面，不切台
-                if (hitTest(ev.getX(), ev.getY())) return true;
-                hidePanel();
+    /** 抬起时：位移小 → 当点击；位移大 → 交给 ScrollView 自己滚（这里不处理）。 */
+    private boolean handleSingleTapOrSwipe(float x, float y) {
+        float dx = x - downX;
+        float dy = y - downY;
+        if (Math.abs(dx) > slop * 3 || Math.abs(dy) > slop * 3) {
+            return false;   // 是滑动，滚动由 ScrollView 处理，不切台不换分类
+        }
+        // 面板收起时，单击先唤出面板
+        if (!panelVisible) {
+            showPanel();
+            return true;
+        }
+        if (epgPanelOpen) {
+            if (x < Theme.px(Theme.NAV_W + Theme.CHAN_W) - Theme.px(Theme.NAV_W)) {
+                hitTest(x + Theme.px(Theme.NAV_W), y);
                 return true;
             }
+            closeEpgPanel();
+            return true;
         }
+        if (hitTest(x, y)) return true;
+        hidePanel();
         return true;
     }
 
