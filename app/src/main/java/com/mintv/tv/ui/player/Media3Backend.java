@@ -34,6 +34,29 @@ public final class Media3Backend implements PlaybackBackend {
     private String currentUrl;
     private boolean released = false;
     private Mode mode = Mode.LIVE;
+    private String lastDecoder = null;
+
+    /** 诊断用：当前视频解码器名与轨道信息。 */
+    public String diagnostics() {
+        StringBuilder sb = new StringBuilder();
+        sb.append("mode=").append(mode);
+        sb.append(" decoder=").append(lastDecoder == null ? "(未初始化)" : lastDecoder);
+        sb.append(" canSeek=").append(canSeek());
+        sb.append(" dur=").append(durationMs());
+        sb.append(" pos=").append(positionMs());
+        if (player != null) {
+            try {
+                androidx.media3.common.Tracks t = player.getCurrentTracks();
+                boolean hasVideo = t.containsType(androidx.media3.common.C.TRACK_TYPE_VIDEO);
+                boolean hasAudio = t.containsType(androidx.media3.common.C.TRACK_TYPE_AUDIO);
+                sb.append(" videoTrack=").append(hasVideo);
+                sb.append(" audioTrack=").append(hasAudio);
+                sb.append(" vSupported=").append(
+                        t.isTypeSupported(androidx.media3.common.C.TRACK_TYPE_VIDEO));
+            } catch (Throwable ignored) { }
+        }
+        return sb.toString();
+    }
 
     @Override
     public void setCallback(Callback cb) { this.cb = cb; }
@@ -74,6 +97,7 @@ public final class Media3Backend implements PlaybackBackend {
             @Override public void onRenderedFirstFrame() {
                 if (cb != null) cb.onFirstFrame();
             }
+
 
             @Override public void onVideoSizeChanged(androidx.media3.common.VideoSize vs) {
                 if (vs == null || vs.width == 0 || vs.height == 0) return;
