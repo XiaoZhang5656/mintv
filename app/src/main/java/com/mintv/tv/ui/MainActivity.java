@@ -59,6 +59,22 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     private View navPanel, chanPanel, railView, scrim;
     private View chanContainer;   // 频道列的外层，抽屉展开时整体左移
     private ScrollView chanScroll;
+
+    // ---- 长按快进 ----
+    private SeekOverlayView seekOverlay;
+    private boolean seeking = false;
+    private long seekBaseMs = 0;      // 长按起点位置
+    private long seekStartWall = 0;   // 长按开始的墙钟时间
+    private long seekTargetMs = 0;
+    private long curPosition = 0, curDuration = -1;
+    private final Handler seekHandler = new Handler(Looper.getMainLooper());
+    private final Runnable seekTick = new Runnable() {
+        @Override public void run() {
+            if (!seeking) return;
+            updateSeekTarget();
+            seekHandler.postDelayed(this, 60);
+        }
+    };
     private ClockView clock;
 
     // ---- 状态 ----
@@ -136,6 +152,12 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             }
             @Override public void onFirstFrame() { }
 
+            @Override public void onTimeline(long pos, long dur, long buf) {
+                curPosition = pos;
+                curDuration = dur;
+                if (!seeking && seekOverlay != null) seekOverlay.hide();
+            }
+
             @Override public void onVideoFormat(String res, String vc, String ac, String ch, String fps) {
                 if (res != null) lastResolution = res;
                 if (fps != null) lastFps = fps;
@@ -203,7 +225,9 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             navList.addView(v, p);
             navViews.add(v);
         }
-        navScroll.addView(navList);
+        navScroll.addView(navList, new ScrollView.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT));
         nav.addView(navScroll, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
@@ -232,7 +256,10 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         chanScroll.setOverScrollMode(View.OVER_SCROLL_NEVER);
         chanColumn = new LinearLayout(this);
         chanColumn.setOrientation(LinearLayout.VERTICAL);
-        chanScroll.addView(chanColumn);
+        // 高度必须 WRAP_CONTENT，ScrollView 才知道内容比视口高、可以滚动
+        chanScroll.addView(chanColumn, new ScrollView.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT));
         chan.addView(chanScroll, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
         chanPanel = chan;
@@ -277,6 +304,11 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         epgScroll.setVisibility(View.GONE);
         root.addView(epgScroll, epgLp);
 
+        // --- 长按快进预览 ---
+        seekOverlay = new SeekOverlayView(this);
+        root.addView(seekOverlay, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
         // --- OSD ---
         osd = new OsdView(this);
         root.addView(osd, new FrameLayout.LayoutParams(
@@ -315,7 +347,14 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             body = SourceStore.cachedBody(this);
         }
         if (body == null || body.trim().isEmpty()) {
-            body = DemoData.SAMPLE_M3U;
+            if (url == null || url.isEmpty()) {
+                // 完全没配源 → 用内置示范
+                body = DemoData.SAMPLE_M3U;
+            } else {
+                // 配了源但还没缓存 → 先留空，等网络拉回来再渲染，
+                // 绝不拿示范数据冒充，否则会闪出一个"省内"分类
+                body = "#EXTM3U\n";
+            }
         }
         applyPlaylist(body);
 
@@ -551,9 +590,9 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         if (currentLine >= ch.sources.size()) { src = ch.sources.get(0); currentLine = 0; }
         if (player instanceof Media3Backend) {
             ((Media3Backend) player).play(getApplicationContext(),
-                    PlaylistParser.cleanUrl(src.url), src.headers, true);
+                    PlaylistParser.cleanUrl(src.url), src.headers, PlaybackBackend.Mode.LIVE);
         } else {
-            player.play(getApplicationContext(), PlaylistParser.cleanUrl(src.url), true);
+            player.play(getApplicationContext(), PlaylistParser.cleanUrl(src.url), PlaybackBackend.Mode.LIVE);
         }
     }
 
@@ -781,7 +820,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         osd.showChannel(no, ch.name + " · 回看 " + EpgParser.hm(prog.startMs), ch.group);
         osd.setProgram(null, null, -1f);
         refreshOsdTags();
-        player.play(getApplicationContext(), url, true);
+        player.play(getApplicationContext(), url, PlaybackBackend.Mode.TIMESHIFT);
         closeEpgPanel();
     }
 
@@ -955,11 +994,16 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                 downX = ev.getX();
                 downY = ev.getY();
                 moved = false;
-                // 关键：DOWN 必须返回 false，事件才会继续派发给下面的 ScrollView，
-                // 手指滑动才能滚动列表。我们只在 UP 时自己补一次点击处理。
+                // 交给子 View（ScrollView）先处理，滑动才能滚动；
+                // 如果是单击，会在 UP 里补一次命中处理。
+                super.dispatchTouchEvent(ev);
+                return false;
+
+            case android.view.MotionEvent.ACTION_CANCEL:
                 return false;
 
             case android.view.MotionEvent.ACTION_UP:
+                super.dispatchTouchEvent(ev);
                 return handleSingleTapOrSwipe(ev.getX(), ev.getY());
 
             default:
@@ -1109,6 +1153,65 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         return true;
     }
 
+    // ================= 长按快进 =================
+
+    /** 按住时长 → 快进速率（毫秒每秒）。越按越快，跟主流播放器一致。 */
+    private float speedFactor(long heldMs) {
+        if (heldMs < 1500) return 8f;      // 1:8
+        if (heldMs < 4000) return 30f;     // 1:30
+        if (heldMs < 8000) return 60f;     // 1:60
+        return 120f;                       // 1:120
+    }
+
+    /**
+     * 开始长按快进。
+     * 直播流（canSeek=false）直接不启动 —— 直播没有可跳转的时间轴，
+     * 强行 seek 只会跳回直播点，那就不是「快进」了。
+     */
+    private boolean startSeek(boolean forward) {
+        if (player == null || !player.canSeek()) {
+            osd.setStatus("直播流不支持快进");
+            return false;
+        }
+        if (curDuration <= 0) return false;
+
+        seeking = true;
+        seekBaseMs = Math.max(0, curPosition);
+        seekStartWall = SystemClock.uptimeMillis();
+        seekTargetMs = seekBaseMs;
+        seekForward = forward;
+        seekOverlay.update(seekBaseMs, seekTargetMs, curDuration);
+        seekOverlay.show();
+        seekHandler.removeCallbacks(seekTick);
+        seekHandler.post(seekTick);
+        return true;
+    }
+
+    private boolean seekForward = true;
+
+    private void updateSeekTarget() {
+        long held = SystemClock.uptimeMillis() - seekStartWall;
+        long delta = (long) (held / 1000f * speedFactor(held));
+        long t = seekForward ? seekBaseMs + delta : seekBaseMs - delta;
+        if (t < 0) t = 0;
+        if (t > curDuration) t = curDuration;
+        seekTargetMs = t;
+        seekOverlay.update(seekBaseMs, t, curDuration);
+    }
+
+    /** 松手：真正 seek，并让预览多留 400ms 再淡出。 */
+    private void endSeek() {
+        if (!seeking) return;
+        seeking = false;
+        seekHandler.removeCallbacks(seekTick);
+        if (player != null && player.canSeek()) {
+            player.seekTo(seekTargetMs);
+        }
+        seekHandler.postDelayed(new Runnable() {
+            @Override public void run() { if (seekOverlay != null) seekOverlay.hide(); }
+        }, 450);
+    }
+
     // ================= 按键 =================
 
     @Override
@@ -1132,6 +1235,21 @@ public class MainActivity extends Activity implements FocusEngine.Host {
 
         if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT && focus.zone() == FocusEngine.Zone.CHAN) {
             showEpgPanel(focus.chanIndex());
+            return true;
+        }
+
+        // 面板收起（看视频）时，左右键是快进/快退，按住可长按加速
+        if (!panelVisible && (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT
+                || keyCode == KeyEvent.KEYCODE_DPAD_LEFT)) {
+            if (event.getRepeatCount() == 0) {
+                event.startTracking();          // 交给 onKeyLongPress 判定
+            } else if (!seeking) {
+                // 不支持长按的设备：连续按每下跳 10 秒
+                if (player != null && player.canSeek()) {
+                    long step = keyCode == KeyEvent.KEYCODE_DPAD_RIGHT ? 10_000 : -10_000;
+                    player.seekTo(Math.max(0, player.positionMs() + step));
+                }
+            }
             return true;
         }
 
@@ -1159,6 +1277,26 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             default:
                 return super.onKeyDown(keyCode, event);
         }
+    }
+
+    @Override
+    public boolean onKeyLongPress(int keyCode, KeyEvent event) {
+        if (dialogRoot != null && dialogRoot.getVisibility() == View.VISIBLE) {
+            return super.onKeyLongPress(keyCode, event);
+        }
+        if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) return startSeek(true);
+        if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT) return startSeek(false);
+        return super.onKeyLongPress(keyCode, event);
+    }
+
+    @Override
+    public boolean onKeyUp(int keyCode, KeyEvent event) {
+        if (seeking && (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT
+                || keyCode == KeyEvent.KEYCODE_DPAD_LEFT)) {
+            endSeek();
+            return true;
+        }
+        return super.onKeyUp(keyCode, event);
     }
 
     private boolean handleSettingsKey(int keyCode, KeyEvent event) {
