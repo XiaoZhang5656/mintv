@@ -62,16 +62,40 @@ public class EpgPanelView extends android.view.View {
         fill.setStyle(Paint.Style.FILL);
     }
 
-    /** 第三栏自己负责滚动，这里告诉外面总高度。 */
+    /** 内容总高度，供 ScrollView 正确测量。 */
     public float contentHeight() {
         return headerH + items.length * itemH + Theme.px(12);
+    }
+
+    /**
+     * ScrollView 里放 MATCH_PARENT 高度的子 View 会被测量成 0，
+     * 必须自己按内容算高度（WRAP_CONTENT 模式）。
+     */
+    @Override
+    protected void onMeasure(int widthSpec, int heightSpec) {
+        int w = MeasureSpec.getSize(widthSpec);
+        int h = (int) contentHeight();
+        int mode = MeasureSpec.getMode(heightSpec);
+        if (mode == MeasureSpec.EXACTLY) {
+            h = MeasureSpec.getSize(heightSpec);
+        }
+        setMeasuredDimension(w, Math.max(h, Theme.px(120)));
     }
 
     public void setData(String header, Item[] items) {
         this.header = header == null ? "" : header;
         this.items = items == null ? new Item[0] : items;
         this.focusIndex = -1;
+        requestLayout();
         invalidate();
+    }
+
+    /** 正在播的那条的下标，-1 表示没有。用于把列表滚到当前节目。 */
+    public int liveIndex() {
+        for (int i = 0; i < items.length; i++) {
+            if (items[i].live) return i;
+        }
+        return -1;
     }
 
     public void setFocus(int i) {
