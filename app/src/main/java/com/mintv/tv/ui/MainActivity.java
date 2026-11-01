@@ -150,7 +150,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         player = new Media3Backend();
         player.setCallback(new PlaybackBackend.Callback() {
             @Override public void onState(PlaybackBackend.State s) {
-                osd.setStatus(OsdView.stateText(s));
+                osd.setStatus(OsdView.stateText(s));   // READY 返回 null，会自动清空
             }
             @Override public void onError(String msg) {
                 osd.setStatus("源失效：" + msg);
@@ -828,9 +828,27 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             epgPanel.setData(ch.name + " · 暂无节目单", new EpgPanelView.Item[0]);
         } else {
             long now = System.currentTimeMillis();
-            boolean canReplay = PlaylistParser.canReplay(ch);
+            boolean canReplay = hasReplay(channelIndex);
+
+            // 一天几十个节目全列出来没意义：只显示「当前 + 前 4 + 后 4」，
+            // 正好一屏，滚一下就能看前后，跟主流播放器一致。
+            int liveIdx = -1;
+            for (int i = 0; i < list.size(); i++) {
+                if (list.get(i).isLive(now)) { liveIdx = i; break; }
+            }
+            if (liveIdx < 0) {
+                for (int i = 0; i < list.size(); i++) {
+                    if (list.get(i).startMs > now) { liveIdx = i; break; }
+                }
+            }
+            if (liveIdx < 0) liveIdx = 0;
+
+            int from = Math.max(0, liveIdx - 4);
+            int to = Math.min(list.size(), liveIdx + 5);
+
             java.util.ArrayList<EpgPanelView.Item> items = new java.util.ArrayList<>();
-            for (EpgParser.Program p : list) {
+            for (int i = from; i < to; i++) {
+                EpgParser.Program p = list.get(i);
                 boolean live = p.isLive(now);
                 boolean ended = p.stopMs <= now;
                 // 只有「已播完 + 源支持回看」的条目才可点
@@ -915,7 +933,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             url = null;
         }
         if (url == null) {
-            osd.setStatus("该源不支持回看");
+            osd.toast("该源不支持回看");
             return;
         }
         epgPanel.setFocus(idx);
@@ -1223,7 +1241,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
      */
     private boolean startSeek(boolean forward) {
         if (player == null || !player.canSeek()) {
-            osd.setStatus("直播流不支持快进");
+            osd.toast("直播流不支持快进");
             return false;
         }
         if (curDuration <= 0) return false;
