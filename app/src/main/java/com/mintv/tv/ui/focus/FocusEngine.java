@@ -70,6 +70,13 @@ public final class FocusEngine {
     }
 
     public Zone zone() { return zone; }
+
+    /** 外部直接指定焦点区（触屏用）。 */
+    public void setZone(Zone z) {
+        if (z == zone) return;
+        zone = z;
+        if (host != null) host.onZoneChanged(zone);
+    }
     public boolean inSettings() { return settingsMode; }
     public int navIndex() { return navIndex; }
     public int chanIndex() { return chanIndex; }
