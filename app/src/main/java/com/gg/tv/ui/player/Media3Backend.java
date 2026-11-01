@@ -6,11 +6,9 @@ import android.os.Handler;
 import android.os.Looper;
 import android.view.Surface;
 
-import androidx.annotation.OptIn;
 import androidx.media3.common.MediaItem;
 import androidx.media3.common.PlaybackException;
 import androidx.media3.common.Player;
-import androidx.media3.common.util.UnstableApi;
 import androidx.media3.datasource.DefaultHttpDataSource;
 import androidx.media3.exoplayer.DefaultLoadControl;
 import androidx.media3.exoplayer.ExoPlayer;
@@ -27,7 +25,6 @@ import java.util.Map;
  *   2. 所有请求统一走一个 DefaultHttpDataSource.Factory，带 UA 和超时；
  *   3. 切台必须 stop → setMediaItem → prepare，千万别用 seekTo 换源。
  */
-@OptIn(markerClass = UnstableApi.class)
 public final class Media3Backend implements PlaybackBackend {
 
     private final Handler main = new Handler(Looper.getMainLooper());
@@ -80,10 +77,19 @@ public final class Media3Backend implements PlaybackBackend {
             @Override public void onVideoSizeChanged(androidx.media3.common.VideoSize vs) {
                 if (vs == null || vs.width == 0 || vs.height == 0) return;
                 final String res = vs.width + "x" + vs.height;
-                final String fps = vs.frameRate > 0
-                        ? Math.round(vs.frameRate) + "fps" : null;
+                // Media3 1.3.x 的 VideoSize 没有 frameRate 字段，
+                // 帧率只能从 Format 的 frameRate 拿；拿不到就留 null，不编。
+                final String fps = formatFps();
                 if (cb != null) main.post(new Runnable() {
                     @Override public void run() { cb.onVideoFormat(res, null, null, null, fps); }
+                });
+            }
+
+            @Override public void onTracksChanged(androidx.media3.common.Tracks tracks) {
+                final String fps = formatFps();
+                if (fps == null) return;
+                if (cb != null) main.post(new Runnable() {
+                    @Override public void run() { cb.onVideoFormat(null, null, null, null, fps); }
                 });
             }
         });
@@ -186,6 +192,27 @@ public final class Media3Backend implements PlaybackBackend {
     }
 
     public String currentUrl() { return currentUrl; }
+
+    /** 从当前视频轨的 Format 里取帧率。取不到返回 null。 */
+    private String formatFps() {
+        if (player == null) return null;
+        try {
+            androidx.media3.common.Tracks tracks = player.getCurrentTracks();
+            if (tracks == null) return null;
+            for (androidx.media3.common.Tracks.Group g : tracks.getGroups()) {
+                if (g.getType() != androidx.media3.common.C.TRACK_TYPE_VIDEO) continue;
+                for (int i = 0; i < g.length; i++) {
+                    if (!g.isTrackSupported(i)) continue;
+                    androidx.media3.common.Format f = g.getTrackFormat(i);
+                    if (f != null && f.frameRate > 0) {
+                        return Math.round(f.frameRate) + "fps";
+                    }
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        return null;
+    }
 
     private void notifyState(State s) {
         final State st = s;
