@@ -33,9 +33,20 @@ import java.util.concurrent.atomic.AtomicInteger;
 public final class LogoLoader {
 
     private static final int TARGET_PX = 96;
-    private static final int MAX_QUEUE = 24;
+    private static final int MAX_QUEUE = 64;
 
-    private final LruCache<String, Bitmap> mem = new LruCache<String, Bitmap>(64) {
+    /**
+     * 台标内存缓存，上限按**字节**算。
+     *
+     * <p>这里原来写的是 {@code new LruCache<>(64)}，但 sizeOf() 返回的是
+     * {@code getByteCount()} —— 等于把上限设成了 64 字节。任何一张图放进去
+     * 都立刻超限被清掉，缓存形同虚设：每次滚动、每次重绑都要重新下载/解码，
+     * 表现就是用户看到的"拖一下没图标，过一会儿又冒出来"。
+     * 96px 的 PNG 一般 4~10KB，8MB 能装近千张，所有台标都留得住。
+     */
+    private static final int MEM_CACHE_BYTES = 8 * 1024 * 1024;
+
+    private final LruCache<String, Bitmap> mem = new LruCache<String, Bitmap>(MEM_CACHE_BYTES) {
         @Override protected int sizeOf(String k, Bitmap v) { return v.getByteCount(); }
     };
     private final LruCache<String, Boolean> failed = new LruCache<>(256);

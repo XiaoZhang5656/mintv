@@ -872,7 +872,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     //   · 行池里每个 View 用 topMargin 定位到它当前绑定的那一行；
     //   · 滚动停止/变化时，只在「首个可见行变了」的时候重新绑定。
 
-    private static final int POOL_EXTRA_ROWS = 4;
+    private static final int POOL_EXTRA_ROWS = 8;   // 视口外再备 8 行，快速滑动不露白
 
     /** 行池里每个 View 当前绑定的频道下标，与 chanViews 一一对应。-1 表示空。 */
     private final List<Integer> chanBind = new ArrayList<>();
@@ -989,6 +989,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         if (first < 0) first = 0;
         if (!force && first == poolStart) return;
         poolStart = first;
+        boolean changed = force;
 
         for (int k = 0; k < chanViews.size(); k++) {
             ChannelView v = chanViews.get(k);
@@ -1012,9 +1013,14 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             chanBind.set(k, idx);
             v.setTag(idx);
             bindRow(v, idx);
+            changed = true;
         }
-        refreshChannelSubs();
-        requestLogosForPool();
+        // 副标题和台标只在换绑时刷，滚动过程中不重复跑
+        if (changed) {
+            refreshChannelSubs();
+            requestLogosForPool();
+            prefetchLogosAround(first);
+        }
     }
 
     /** 把一个池化的行绑到具体频道。 */
@@ -1051,18 +1057,17 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         chanScroll.setTag(Boolean.TRUE);
         chanScroll.setOnScrollChangeListener(new View.OnScrollChangeListener() {
             @Override public void onScrollChange(View v, int sx, int sy, int osx, int osy) {
-                ui.removeCallbacks(scrollPoolTask);
-                ui.postDelayed(scrollPoolTask, 16);
+                // 必须当场同步，不能丢给延迟任务。
+                // 延迟任务在滚动过程中会被不断"再推迟 16ms"，等于整段滚动期间
+                // 行池停在原位、跟着内容一起被推上去，下方就露白；
+                // 松手才一次性补回来 —— 用户看到的就是"拖动不加载、突然又出来"。
+                // 现在 syncPool 内部只有真正换绑的行才重绘，
+                // 同步执行的开销就是改几个 topMargin，可以接受。
+                syncPool(false);
+                applyFocusToPool();
             }
         });
     }
-
-    private final Runnable scrollPoolTask = new Runnable() {
-        @Override public void run() {
-            syncPool(false);
-            applyFocusToPool();
-        }
-    };
 
     private void requestLogosForPool() {
         for (int k = 0; k < chanViews.size(); k++) {
@@ -1092,6 +1097,27 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                         }
                     });
                 }
+            });
+        }
+    }
+
+    /**
+     * 预先加载行池上下各若干行的台标。
+     *
+     * <p>只加载可见行的话，往下拖一屏就要等一次网络 —— 那就是"突然又加载出来"。
+     * 提前把附近的图灌进内存缓存（现在缓存上限是 8MB，装得下），
+     * 滚动到位时直接命中，图标不会跳。
+     */
+    private void prefetchLogosAround(int first) {
+        if (channels == null || channels.isEmpty()) return;
+        int from = Math.max(0, first - 10);
+        int to = Math.min(channels.size(), first + chanViews.size() + 10);
+        for (int i = from; i < to; i++) {
+            PlaylistParser.Channel ch = channels.get(i);
+            if (ch.logo == null || ch.logo.isEmpty()) continue;
+            if (logos.peek(ch.logo) != null) continue;
+            logos.load(ch.logo, new LogoLoader.Callback() {
+                @Override public void onLogo(String url, Bitmap bmp) { }
             });
         }
     }
