@@ -27,7 +27,8 @@ public abstract class BaseCardView extends android.view.View {
     protected final Path  path = new Path();
 
     protected float radius = Theme.px(Theme.RADIUS_ITEM);
-    protected float strokeW = Theme.px(Theme.FOCUS_STROKE);
+    /** 绘制时再取，主题切换后立刻生效。 */
+    protected float strokeW() { return Theme.px(Theme.FOCUS_STROKE); }
 
     /** 0 = 常态，1 = 焦点；由 animateFocus 驱动 */
     protected float focusProgress = 0f;
@@ -42,7 +43,7 @@ public abstract class BaseCardView extends android.view.View {
         // 默认不可点；需要响应触摸的子类在外部 setClickable(true) + setOnClickListener
         setClickable(false);
         strokePaint.setStyle(Paint.Style.STROKE);
-        strokePaint.setStrokeWidth(strokeW);
+        strokePaint.setStrokeWidth(strokeW());
 
         animator.setDuration(Theme.T_FOCUS);
         animator.setInterpolator(new DecelerateInterpolator(2f));
@@ -86,9 +87,9 @@ public abstract class BaseCardView extends android.view.View {
     protected void drawFocusStroke(Canvas c, int color) {
         if (focusProgress <= 0f) return;
         strokePaint.setColor(Theme.alpha(color, focusProgress));
-        strokePaint.setStrokeWidth(strokeW * focusProgress);
+        strokePaint.setStrokeWidth(strokeW() * focusProgress);
         // 内缩半个描边宽，描边才不会被裁掉
-        float inset = strokeW * focusProgress * 0.5f;
+        float inset = strokeW() * focusProgress * 0.5f;
         rect.set(inset, inset, getWidth() - inset, getHeight() - inset);
         path.reset();
         path.addRoundRect(rect, radius, radius, Path.Direction.CW);

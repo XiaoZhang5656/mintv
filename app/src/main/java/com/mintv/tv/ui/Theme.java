@@ -78,6 +78,7 @@ public final class Theme {
                 BADGE_BG     = 0x33FFFFFF;
                 EPG_LIVE_BG  = 0x331E9BFF;
                 EPG_FOCUS_BG = 0x1EFFFFFF;
+                FOCUS_STROKE = 3;
                 HEADER_TEXT  = 0xFFEAF4FF;
                 RAIL_TEXT    = 0xFFCFE6FF;
                 SCRIM_COLORS = new int[]{0xF0000812, 0xE0000812, 0x8C000812, 0x00000000};
@@ -99,6 +100,7 @@ public final class Theme {
                 BADGE_BG     = 0x33FFE9C8;
                 EPG_LIVE_BG  = 0x33FFA53D;
                 EPG_FOCUS_BG = 0x1EFFE9C8;
+                FOCUS_STROKE = 3;
                 HEADER_TEXT  = 0xFFFFF1E0;
                 RAIL_TEXT    = 0xFFF0DCC4;
                 SCRIM_COLORS = new int[]{0xF01A0F06, 0xE01A0F06, 0x8C1A0F06, 0x00000000};
@@ -138,7 +140,7 @@ public final class Theme {
     public static final int CHAN_ITEM_GAP = 10;
 
     public static final int RADIUS_ITEM  = 10;
-    public static final int FOCUS_STROKE = 2;
+    public static int FOCUS_STROKE = 2;
 
     // ---------- 字号（px @1080p）----------
     public static final int TS_NAV_TITLE = 29;

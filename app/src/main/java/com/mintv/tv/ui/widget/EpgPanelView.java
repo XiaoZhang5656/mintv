@@ -234,7 +234,7 @@ public class EpgPanelView extends android.view.View {
             // 光标描边
             if (cursor) {
                 stroke.setColor(0xFFFFFFFF);
-                stroke.setStrokeWidth(Theme.px(2));
+                stroke.setStrokeWidth(Theme.px(Theme.FOCUS_STROKE));
                 r.set(padH - Theme.px(8), y + Theme.px(1),
                         getWidth() - padH + Theme.px(8), y + itemH - Theme.px(1));
                 c.drawRoundRect(r, Theme.px(4), Theme.px(4), stroke);
