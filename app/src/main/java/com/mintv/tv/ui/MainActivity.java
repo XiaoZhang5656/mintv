@@ -957,6 +957,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             @Override public void run() {
                 syncPool(true);
                 applyFocusToPool();
+                tryRestoreIfPending();   // 源异步回来后重建列表，也要回到上次那台
             }
         });
     }
@@ -1092,6 +1093,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
 
     /** 点分类：切分类，焦点交给频道列。 */
     private void onCategoryClicked(int index) {
+        clearRestorePending();
         switchCategory(index);
         focus.setZone(FocusEngine.Zone.CHAN);
         focus.setNavIndexSilently(index);
@@ -1101,6 +1103,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
 
     /** 点频道：切台 + 选中框 + 刷新节目单。 */
     private void onChannelClicked(int index) {
+        clearRestorePending();
         resetNoVideoStage();
         playChannel(index);
         focusOnChannel(index);
@@ -1395,6 +1398,17 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     private static final String KEY_FAVS = "favorites";
     private static final String KEY_LAST_CHAN = "last_chan";
     private static final String KEY_LAST_CAT = "last_cat";
+
+    /**
+     * 启动后要恢复到的频道/分类。
+     *
+     * <p>不能只在 onCreate 里恢复一次：源是**异步**拉的，拉回来之后会
+     * applyPlaylist + bindChannels + updateChannelFocus(0)，把刚恢复的位置整个冲掉。
+     * 所以把它当成一个"待办目标"，每次列表重建后都重新应用一次，
+     * 直到用户自己点了频道 / 切了分类才清掉。
+     */
+    private String restoreChanKey;
+    private String restoreCatName;
     private static final String FAV_CATEGORY = "我的收藏";
 
     /** 收藏的频道，key = 台号|台名。用 LinkedHashSet 保住收藏顺序。 */
@@ -1526,31 +1540,28 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     }
 
     /** 启动时恢复上次的频道。找不到就保持默认（第一个台）。 */
-    private void restoreLastChannel() {
-        android.content.SharedPreferences p = getSharedPreferences(PREF, MODE_PRIVATE);
-        String key = p.getString(KEY_LAST_CHAN, null);
-        if (key == null || key.isEmpty()) return;
+    /** 列表重建后调用：把「上次在看的那台」重新定位出来。用户一动手就放弃。 */
+    private void tryRestoreIfPending() {
+        if (restoreChanKey == null || restoreChanKey.isEmpty()) return;
+        if (categories == null || categories.isEmpty() || channels == null) return;
 
-        // ① 先回到上次所在的分类，列表内容才对得上
-        String cat = p.getString(KEY_LAST_CAT, null);
-        int ci = indexOfCategory(cat);
-        if (ci >= 0 && !cat.equals(currentCategoryName())) {
+        // ① 分类
+        int ci = indexOfCategory(restoreCatName);
+        if (ci >= 0 && !restoreCatName.equals(currentCategoryName())) {
             focus.setNavIndexSilently(ci);
             switchCategory(ci);
             updateNavFocus(ci);
         }
-
-        // ② 再在该分类里定位上次那个台
+        // ② 频道
         int idx = -1;
         for (int i = 0; i < channels.size(); i++) {
-            if (favKey(channels.get(i)).equals(key)) { idx = i; break; }
+            if (favKey(channels.get(i)).equals(restoreChanKey)) { idx = i; break; }
         }
         if (idx < 0) return;
+        final int prev = playingChannel;
         playingChannel = idx;
         focus.setChannelCount(channels.size());
         focus.resetChannelFocus();
-        // onCreate 阶段 ScrollView 还没测量，getHeight() 是 0，这时候滚不动。
-        // 等一帧、布局完成后再定位。
         final int target = idx;
         if (chanScroll != null) {
             chanScroll.post(new Runnable() {
@@ -1560,6 +1571,24 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                 }
             });
         }
+        // 界面已经起播了（Surface 先就绪、源后回来）就把正在播的台也切过去，
+        // 否则会出现"列表停在那台、声音还是第一台"的错位。
+        if (prev != idx && currentPlayUrl != null) {
+            playChannelInternal(idx, false);
+        }
+    }
+
+    /** 用户自己动手了，启动恢复目标作废。 */
+    private void clearRestorePending() {
+        restoreChanKey = null;
+        restoreCatName = null;
+    }
+
+    private void restoreLastChannel() {
+        android.content.SharedPreferences p = getSharedPreferences(PREF, MODE_PRIVATE);
+        restoreChanKey = p.getString(KEY_LAST_CHAN, null);
+        restoreCatName = p.getString(KEY_LAST_CAT, null);
+        tryRestoreIfPending();
     }
 
     private void loadLinePrefs() {
@@ -2907,6 +2936,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     }
 
     private void moveChannel(int step) {
+        clearRestorePending();
         resetNoVideoStage();
         int n = focus.chanIndex() + step;
         if (n < 0) n = 0;
