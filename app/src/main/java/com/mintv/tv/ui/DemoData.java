@@ -67,6 +67,7 @@ public final class DemoData {
             {"请求头", "该源需要特定 UA/Referer 时才填，全局生效"},
             {"播放内核", "Exo 起播快 / VLC 格式覆盖最广"},
             {"时钟显示", "面板收起看片时是否保留右上角日期时间"},
+            {"画面输出", "黑屏只有声音时切到 SurfaceView 试试"},
     };
 
     public static final String[][] ROW_OPTIONS = {
@@ -84,9 +85,10 @@ public final class DemoData {
             {"未设置", "编辑…"},
             {"ExoPlayer", "VLC"},
             {"随面板隐藏", "始终显示"},
+            {"TextureView", "SurfaceView"},
     };
 
-    public static final int[] ROW_DEFAULT = {0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0};
+    public static final int[] ROW_DEFAULT = {0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0};
 
     // ---------- 无源时的示范 M3U ----------
 

@@ -53,6 +53,11 @@ public class MainActivity extends Activity implements FocusEngine.Host {
 
     // ---- 播放 ----
     private SurfaceView surfaceView;
+    private android.view.TextureView textureView;
+
+    /** 画面输出方式：0 = TextureView（默认，能出图优先）, 1 = SurfaceView */
+    private static final int OUTPUT_TEXTURE = 0;
+    private static final int OUTPUT_SURFACE = 1;
     private PlayerManager playerManager;
     private PlaybackBackend.Callback playerCallback;
     private PlaybackBackend player;
@@ -202,6 +207,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
 
         focus.attach(this);
         loadHeaders();
+        applyOutputMode();
         recoverFromEngineCrash();
         focus.setNavCount(categories.size());
         focus.setChannelCount(channels.size());
@@ -264,7 +270,8 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         // Surface 一就绪就开播，避免先黑屏再起播
         surfaceView.getHolder().addCallback(new SurfaceHolder.Callback() {
             @Override public void surfaceCreated(SurfaceHolder h) {
-                playerManager.setSurfaceView(surfaceView);   // VLC 需要 SurfaceView 本体
+                if (selections[ROW_OUTPUT] != OUTPUT_SURFACE) return;  // 当前用 TextureView
+                playerManager.setSurfaceView(surfaceView);
                 player.setSurface(h.getSurface());
                 playChannel(playingChannel);
             }
@@ -292,15 +299,71 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     // ================= 布局 =================
 
     private void buildPlayer(FrameLayout root) {
-        surfaceView = new SurfaceView(this);
-        // 不要改 SurfaceView 的 PixelFormat：默认就是解码器直出的格式，
-        // 设成 RGBA_8888 会强制走 GPU 合成，MediaCodec 就出不了画面。
-        surfaceView.setZOrderMediaOverlay(false);
-        surfaceView.setBackgroundColor(Color.BLACK);
         FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
         lp.gravity = Gravity.CENTER;
-        root.addView(surfaceView, lp);
+
+        // TextureView：走 GPU 合成，跟着视图树走。默认用它。
+        textureView = new android.view.TextureView(this);
+        textureView.setBackgroundColor(Color.BLACK);
+        // TextureView 没有 SurfaceHolder.Callback，必须走 SurfaceTextureListener。
+        // 不接这个回调，默认用 TextureView 时就没人触发起播（只有 SurfaceView
+        // 那条 surfaceCreated 会调用 playChannel），表现为一直黑屏不播。
+        textureView.setSurfaceTextureListener(new android.view.TextureView.SurfaceTextureListener() {
+            @Override public void onSurfaceTextureAvailable(android.graphics.SurfaceTexture st, int w, int h) {
+                if (selections[ROW_OUTPUT] != OUTPUT_TEXTURE) return;
+                playerManager.setTextureView(textureView);
+                playChannel(playingChannel);
+            }
+            @Override public void onSurfaceTextureSizeChanged(android.graphics.SurfaceTexture st, int w, int h) {
+                if (selections[ROW_OUTPUT] != OUTPUT_TEXTURE) return;
+                playerManager.setTextureView(textureView);
+            }
+            @Override public boolean onSurfaceTextureDestroyed(android.graphics.SurfaceTexture st) {
+                return true;
+            }
+            @Override public void onSurfaceTextureUpdated(android.graphics.SurfaceTexture st) { }
+        });
+        root.addView(textureView, lp);
+
+        // SurfaceView：独立图层，低端盒子省电省内存，但在部分机型上
+        // 解码器出帧却合成不到屏幕（有声音没画面），所以降级为备选。
+        surfaceView = new SurfaceView(this);
+        surfaceView.setZOrderMediaOverlay(false);
+        surfaceView.setBackgroundColor(Color.BLACK);
+        FrameLayout.LayoutParams lp2 = new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
+        lp2.gravity = Gravity.CENTER;
+        surfaceView.setVisibility(View.GONE);
+        root.addView(surfaceView, lp2);
+    }
+
+    /** 当前真正在输出的 View（画面比例要作用在它身上）。 */
+    private View outputView() {
+        return selections[ROW_OUTPUT] == OUTPUT_TEXTURE ? textureView : surfaceView;
+    }
+
+    /**
+     * 应用「画面输出」设置。
+     *
+     * <p>TextureView 和 SurfaceView 只能有一个可见：两个都挂在树里会同时占
+     * 一条合成路径，低端机上直接掉帧。切的时候必须把播放器的输出面也一起换掉，
+     * 只改 View 可见性是不生效的。
+     */
+    private void applyOutputMode() {
+        if (textureView == null || surfaceView == null) return;
+        boolean tex = selections[ROW_OUTPUT] == OUTPUT_TEXTURE;
+        textureView.setVisibility(tex ? View.VISIBLE : View.GONE);
+        surfaceView.setVisibility(tex ? View.GONE : View.VISIBLE);
+        if (playerManager == null) return;
+        if (tex) {
+            playerManager.setTextureView(textureView);
+        } else {
+            playerManager.setTextureView(null);
+            if (surfaceView.getHolder().getSurface() != null) {
+                playerManager.setSurface(surfaceView.getHolder().getSurface());
+            }
+        }
     }
 
     private int chanWidth() {
@@ -856,6 +919,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     private static final int ROW_HEADERS        = 11;
     private static final int ROW_ENGINE         = 12;
     private static final int ROW_CLOCK          = 13;
+    private static final int ROW_OUTPUT         = 14;
 
     /**
      * 「没画面」自愈的进度。0 = 还没处理，1 = 已切软解，2 = 已换过线路。
@@ -1944,6 +2008,9 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             playChannel(playingChannel);
         } else if (row == ROW_HEADERS) {
             openHeaderEditor();
+        } else if (row == ROW_OUTPUT) {
+            applyOutputMode();
+            playChannel(playingChannel);
         } else if (row == ROW_SPEED) {
             updateSpeedLabel();
             refreshOsdTags();
@@ -1973,8 +2040,9 @@ public class MainActivity extends Activity implements FocusEngine.Host {
      * 对 4:3 老频道的用户来说，这是「画面被拉扁」的唯一解法。
      */
     private void applyAspectRatio(int mode) {
-        if (surfaceView == null || surfaceView.getLayoutParams() == null) return;
-        FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) surfaceView.getLayoutParams();
+        View out = outputView();
+        if (out == null || out.getLayoutParams() == null) return;
+        FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) out.getLayoutParams();
         if (mode == 0) {                       // 自动适应：铺满全屏
             lp.width = ViewGroup.LayoutParams.MATCH_PARENT;
             lp.height = ViewGroup.LayoutParams.MATCH_PARENT;
@@ -1998,7 +2066,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             }
         }
         lp.gravity = Gravity.CENTER;
-        surfaceView.setLayoutParams(lp);
+        out.setLayoutParams(lp);
         ui.postDelayed(new Runnable() {
             @Override public void run() {
                 SurfaceHolder h = surfaceView.getHolder();

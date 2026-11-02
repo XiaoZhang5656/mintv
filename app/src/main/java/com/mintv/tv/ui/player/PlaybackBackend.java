@@ -52,6 +52,16 @@ public interface PlaybackBackend {
 
     void setSurface(Surface surface);
 
+    /**
+     * 用 TextureView 输出画面。
+     *
+     * <p>为什么两种都要：SurfaceView 走独立图层，性能好，但在部分机型
+     * （尤其 MIUI / Android 12+）上解码器出帧却合成不到屏幕，表现就是
+     * 「有声音没画面」。TextureView 走 GPU 合成、跟着视图树走，画面一定能出来，
+     * 代价是多一次纹理拷贝。默认给 TextureView，能出图优先。
+     */
+    default void setTextureView(android.view.TextureView tv) { }
+
     /** 播放。mode 决定内核怎么配置（直播用低延迟缓冲，回看用可 seek 的缓冲）。 */
     void play(Context appCtx, String url, Mode mode);
 

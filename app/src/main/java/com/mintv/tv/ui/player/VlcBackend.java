@@ -30,6 +30,7 @@ public final class VlcBackend implements PlaybackBackend {
     private LibVLC libVlc;
     private MediaPlayer player;
     private SurfaceView surfaceView;
+    private android.view.TextureView textureView;
     private Callback cb;
     private Mode mode = Mode.LIVE;
     private boolean released = false;
@@ -72,6 +73,18 @@ public final class VlcBackend implements PlaybackBackend {
         // VLC 这条路径无效，保留接口兼容
     }
 
+    @Override public void setTextureView(android.view.TextureView tv) {
+        this.textureView = tv;
+        if (player != null && tv != null) {
+            try {
+                if (viewsAttached) player.getVLCVout().detachViews();
+                player.getVLCVout().setVideoView(tv);
+                player.getVLCVout().attachViews();
+                viewsAttached = true;
+            } catch (Throwable ignored) { }
+        }
+    }
+
     private void ensureLibVlc(Context ctx) {
         if (libVlc != null) return;
         List<String> args = new ArrayList<>();
@@ -94,9 +107,11 @@ public final class VlcBackend implements PlaybackBackend {
     }
 
     private void attach() {
-        if (player == null || surfaceView == null) return;
+        if (player == null) return;
+        if (surfaceView == null && textureView == null) return;
         try {
-            player.getVLCVout().setVideoView(surfaceView);
+            if (surfaceView != null) player.getVLCVout().setVideoView(surfaceView);
+            else player.getVLCVout().setVideoView(textureView);
             player.getVLCVout().attachViews();
             viewsAttached = true;
         } catch (Throwable t) {
@@ -153,7 +168,7 @@ public final class VlcBackend implements PlaybackBackend {
             }
         });
 
-        if (surfaceView != null) attach();
+        attach();
 
         Media media = new Media(libVlc, Uri.parse(url));
         // 低延迟直播：不走本地缓存文件，直接吃网络流

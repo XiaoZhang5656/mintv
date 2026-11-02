@@ -33,6 +33,7 @@ public final class PlayerManager implements PlaybackBackend {
 
     private Callback cb;
     private SurfaceView surfaceView;
+    private android.view.TextureView textureView;
     private Surface surface;
 
     public PlayerManager(Context ctx) {
@@ -88,6 +89,10 @@ public final class PlayerManager implements PlaybackBackend {
 
     private void bindSurface() {
         if (impl == null) return;
+        if (textureView != null) {
+            impl.setTextureView(textureView);
+            return;
+        }
         if (impl instanceof VlcBackend) {
             if (surfaceView != null) ((VlcBackend) impl).setSurfaceView(surfaceView);
         } else {
@@ -113,6 +118,12 @@ public final class PlayerManager implements PlaybackBackend {
     public void setSurfaceView(SurfaceView sv) {
         this.surfaceView = sv;
         bindSurface();
+    }
+
+    /** 切到 TextureView 输出（SurfaceView 出不了图时的解法）。 */
+    public void setTextureView(android.view.TextureView tv) {
+        this.textureView = tv;
+        if (impl != null) impl.setTextureView(tv);
     }
 
     @Override

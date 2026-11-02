@@ -70,6 +70,7 @@ public final class Media3Backend implements PlaybackBackend {
     private final Handler main = new Handler(Looper.getMainLooper());
     private ExoPlayer player;
     private Surface surface;
+    private android.view.TextureView textureView;
     private Callback cb;
     private String currentUrl;
     private boolean released = false;
@@ -226,7 +227,7 @@ public final class Media3Backend implements PlaybackBackend {
             }
         });
 
-        if (surface != null) player.setVideoSurface(surface);
+        bindOutput(player);
         startTimelineTicker();
         return player;
     }
@@ -273,7 +274,8 @@ public final class Media3Backend implements PlaybackBackend {
         main.postDelayed(new Runnable() {
             @Override public void run() {
                 if (player == null || released) return;
-                if (surface != null && surface.isValid()) player.setVideoSurface(surface);
+                if (textureView != null) player.setVideoTextureView(textureView);
+                else if (surface != null && surface.isValid()) player.setVideoSurface(surface);
             }
         }, 120);
     }
@@ -281,7 +283,22 @@ public final class Media3Backend implements PlaybackBackend {
     @Override
     public void setSurface(Surface s) {
         surface = s;
-        if (player != null) player.setVideoSurface(s);
+        if (player != null && textureView == null) player.setVideoSurface(s);
+    }
+
+    @Override
+    public void setTextureView(android.view.TextureView tv) {
+        textureView = tv;
+        if (player != null) {
+            if (tv != null) player.setVideoTextureView(tv);
+            else player.setVideoSurface(surface);
+        }
+    }
+
+    /** 起播前把输出面绑好，别等 prepare 之后再补。 */
+    private void bindOutput(ExoPlayer p) {
+        if (textureView != null) p.setVideoTextureView(textureView);
+        else if (surface != null && surface.isValid()) p.setVideoSurface(surface);
     }
 
     /** 带自定义请求头播放（源里写成 url|User-Agent=xx 的情况）。 */
@@ -315,7 +332,7 @@ public final class Media3Backend implements PlaybackBackend {
         surfaceRebindTried = false;
         noVideoReported = false;
         hasMedia = true;
-        if (surface != null && surface.isValid()) p.setVideoSurface(surface);
+        bindOutput(p);
 
         currentUrl = url;
         notifyState(State.BUFFERING);
