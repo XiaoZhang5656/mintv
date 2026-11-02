@@ -53,7 +53,10 @@ public final class LogoLoader {
      * 表现就是用户看到的"拖一下没图标，过一会儿又冒出来"。
      * 96px 的 PNG 一般 4~10KB，8MB 能装近千张，所有台标都留得住。
      */
-    private static final int MEM_CACHE_BYTES = 8 * 1024 * 1024;
+    // 16MB：4K 盒子上台标解码高度是 192px，单张字节数是 1080p 的 4 倍，
+    // 8MB 装不下几百个台，滚动又会开始反复重载。图片按 RGB_565/ARGB 存，
+    // 16MB 在现在的设备上不算什么，缓存命中比省这点内存重要得多。
+    private static final int MEM_CACHE_BYTES = 16 * 1024 * 1024;
 
     private final LruCache<String, Bitmap> mem = new LruCache<String, Bitmap>(MEM_CACHE_BYTES) {
         @Override protected int sizeOf(String k, Bitmap v) { return v.getByteCount(); }
