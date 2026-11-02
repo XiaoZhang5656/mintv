@@ -99,7 +99,26 @@ public class CrashActivity extends Activity {
         btns.setOrientation(LinearLayout.HORIZONTAL);
         btns.setGravity(Gravity.END);
 
-        btns.addView(mkBtn("复制全部", 0xFF2F7BFF, new View.OnClickListener() {
+        // 顺序按 TV 遥控器的使用频率排：先「继续用」，再「复制」，最后才是「退出」。
+        // 原来只有复制/退出，等于强制用户看完日志就滚蛋 —— 大多数时候用户
+        // 只是想赶紧回去看片，日志事后还能从 logcat 取。
+        btns.addView(mkBtn("继续使用", 0xFF2F7BFF, new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                // 回到主界面。本页在 :crash 进程里，直接拉起主进程的 Activity，
+                // 再把自己关掉，两个进程互不干扰。
+                try {
+                    Intent i = new Intent();
+                    i.setClassName(CrashActivity.this,
+                            "com.mintv.tv.ui.MainActivity");
+                    i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
+                            | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+                    startActivity(i);
+                } catch (Throwable ignored) { }
+                finish();
+            }
+        }));
+
+        btns.addView(mkBtn("复制全部", 0xFF3A3B3E, new View.OnClickListener() {
             @Override public void onClick(View v) {
                 ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
                 cm.setPrimaryClip(ClipData.newPlainText("mintv-crash", bodyView.getText()));
@@ -107,7 +126,7 @@ public class CrashActivity extends Activity {
             }
         }));
 
-        btns.addView(mkBtn("关闭并退出", 0xFF5A2E2E, new View.OnClickListener() {
+        btns.addView(mkBtn("退出", 0xFF5A2E2E, new View.OnClickListener() {
             @Override public void onClick(View v) {
                 finishAffinity();
                 android.os.Process.killProcess(android.os.Process.myPid());
@@ -116,6 +135,24 @@ public class CrashActivity extends Activity {
 
         root.addView(btns);
         setContentView(root);
+        if (btns.getChildCount() > 0) {
+            final View first = btns.getChildAt(0);
+            first.post(new Runnable() {
+                @Override public void run() { first.requestFocus(); }
+            });
+        }
+    }
+
+    /** 返回键 = 继续使用，别让用户只能靠退出跑掉。 */
+    @Override
+    public void onBackPressed() {
+        try {
+            Intent i = new Intent();
+            i.setClassName(this, "com.mintv.tv.ui.MainActivity");
+            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+            startActivity(i);
+        } catch (Throwable ignored) { }
+        finish();
     }
 
     private Button mkBtn(String text, int bg, View.OnClickListener l) {
