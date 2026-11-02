@@ -86,7 +86,7 @@ public final class DemoData {
             {"TextureView", "SurfaceView"},
     };
 
-    public static final int[] ROW_DEFAULT = {0, 0, 0, 0, 0, 0, 0, 1, 0, 2, 0, 0, 0, 0};
+    public static final int[] ROW_DEFAULT = {0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0};
 
     // ---------- 无源时的示范 M3U ----------
 

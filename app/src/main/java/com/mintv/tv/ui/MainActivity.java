@@ -235,6 +235,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
 
         focus.attach(this);
         loadHeaders();
+        loadAutoPlayPref();
         loadLinePrefs();
         loadFavorites();
         applyOutputMode();
@@ -317,7 +318,8 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                 if (selections[ROW_OUTPUT] != OUTPUT_SURFACE) return;  // 当前用 TextureView
                 playerManager.setSurfaceView(surfaceView);
                 player.setSurface(h.getSurface());
-                playChannelInternal(playingChannel, true);
+                if (autoPlayOnBoot()) playChannelInternal(playingChannel, true);
+                else setPanelVisible(true);
             }
             @Override public void surfaceChanged(SurfaceHolder h, int f, int w, int ht) {
                 // 尺寸变化后解码器的输出面会失效，必须重新绑一次。
@@ -359,7 +361,8 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             @Override public void onSurfaceTextureAvailable(android.graphics.SurfaceTexture st, int w, int h) {
                 if (selections[ROW_OUTPUT] != OUTPUT_TEXTURE) return;
                 playerManager.setTextureView(textureView);
-                playChannelInternal(playingChannel, true);
+                if (autoPlayOnBoot()) playChannelInternal(playingChannel, true);
+                else setPanelVisible(true);
             }
             @Override public void onSurfaceTextureSizeChanged(android.graphics.SurfaceTexture st, int w, int h) {
                 if (selections[ROW_OUTPUT] != OUTPUT_TEXTURE) return;
@@ -1495,6 +1498,17 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         return ch.number + "|" + ch.name;
     }
 
+    /** 启动时把"开机自动播放"的选择读回来，并同步给接收器。 */
+    private void loadAutoPlayPref() {
+        boolean on = getSharedPreferences(PREF, MODE_PRIVATE)
+                .getBoolean(KEY_BOOT_AUTOPLAY, true);
+        selections[ROW_AUTOPLAY] = on ? 0 : 1;
+        if (rowViews.size() > ROW_AUTOPLAY) {
+            rowViews.get(ROW_AUTOPLAY).setSelected(selections[ROW_AUTOPLAY]);
+        }
+        saveAutoPlayFlag();
+    }
+
     private void loadFavorites() {
         favorites.clear();
         String raw = getSharedPreferences(PREF, MODE_PRIVATE).getString(KEY_FAVS, "");
@@ -1744,6 +1758,19 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         }
         getSharedPreferences(PREF, MODE_PRIVATE).edit()
                 .putString(KEY_LINE_PREFS, sb.toString()).apply();
+    }
+
+    private static final String KEY_BOOT_AUTOPLAY = "boot_autoplay";
+
+    /** 「开机自动播放」是否开启（对应设置行 0=开启 1=关闭）。 */
+    private boolean autoPlayOnBoot() {
+        return selections[ROW_AUTOPLAY] == 0;
+    }
+
+    /** 把开关同步给 BootReceiver 用（它读同一个 SP）。 */
+    private void saveAutoPlayFlag() {
+        getSharedPreferences(PREF, MODE_PRIVATE).edit()
+                .putBoolean(KEY_BOOT_AUTOPLAY, autoPlayOnBoot()).apply();
     }
 
     private void loadHeaders() {
@@ -2921,6 +2948,8 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             playChannel(playingChannel);
         } else if (row == ROW_HEADERS) {
             openHeaderEditor();
+        } else if (row == ROW_AUTOPLAY) {
+            saveAutoPlayFlag();
         } else if (row == ROW_OUTPUT) {
             applyOutputMode();
             playChannel(playingChannel);

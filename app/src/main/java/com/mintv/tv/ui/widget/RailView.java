@@ -8,44 +8,41 @@ import android.graphics.Typeface;
 import com.mintv.tv.ui.Theme;
 
 /**
- * 频道列与播放区之间那条 64px 竖轨：「节目 » 信息」。
+ * 频道列与播放区之间那条竖轨。
  *
- * 竖排不做逐字 TextView（一屏要 10 个 View，低端机上测量开销不小），
- * 直接逐字 drowText + 手动换行，一个 View 搞定，且完全可控字距。
+ * <p>原来是把「节目 » 信息」逐字往下画，56px 宽的轨道里每个字占一行，
+ * 结果加上空格和 » 一共要断成六七行，看着像一列散字。
+ * 现在改成**整行旋转 -90°**（从下往上读），一条完整的文字，
+ * 和两边面板的视觉重量也匹配。
  */
 public class RailView extends android.view.View {
 
     private final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final String text = "节目 » 信息";
-    private final float size = Theme.sp(Theme.TS_RAIL);
-    private final float letterSpace = Theme.px(10);
 
     public RailView(Context c) {
         super(c);
         setWillNotDraw(false);
         p.setTypeface(Typeface.DEFAULT);
         p.setColor(0xFFE8E8EA);
-        p.setTextSize(size);
+        p.setTextSize(Theme.sp(Theme.TS_RAIL));
         p.setTextAlign(Paint.Align.CENTER);
     }
 
     @Override
     protected void onDraw(Canvas c) {
         float cx = getWidth() / 2f;
-        float step = size + letterSpace;
-        float total = text.length() * step;
-        float y = (getHeight() - total) / 2f + size;
+        float cy = getHeight() / 2f;
 
         // 左侧 1px 分隔线
         p.setColor(Theme.LINE);
-        c.drawRect(0, 0, Theme.px(1), getHeight(), p);
+        c.drawRect(0, 0, Math.max(1, Theme.px(1)), getHeight(), p);
 
         p.setColor(0xFFE8E8EA);
-        for (int i = 0; i < text.length(); i++) {
-            char ch = text.charAt(i);
-            if (ch == ' ') { y += step; continue; }   // 空格处断行，跟设计稿一致
-            c.drawText(String.valueOf(ch), cx, y, p);
-            y += step;
-        }
+        c.save();
+        c.rotate(-90f, cx, cy);              // 逆时针 90°，文字从下往上读
+        float base = cy - (p.descent() + p.ascent()) / 2f;
+        c.drawText(text, cx, base, p);
+        c.restore();
     }
 }

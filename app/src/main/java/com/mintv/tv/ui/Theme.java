@@ -93,9 +93,15 @@ public final class Theme {
     public static int px(float design) { return Math.round(design * sScale); }
 
     /** 设计稿字号 → 实际像素 */
+    /** 低分辨率下字号的绝对下限（实际像素）。低于这个值，远看就是一团灰。 */
+    private static final float MIN_FONT_PX = 12f;
+
     public static float sp(float design) {
         // TV 上 dpi 常被厂商写乱，字号统一按屏宽缩放，不用 sp 避免被系统字体放大破坏版式
-        return design * sScale;
+        float v = design * sScale;
+        // 1024 长边这种老盒子 scale≈0.53，16px 的副标题会缩到 8.5px，
+        // 接大电视根本看不清。这里给个绝对下限，宁可让排版略微挤一点。
+        return v < MIN_FONT_PX ? MIN_FONT_PX : v;
     }
 
     public static int alpha(int color, float a) {
