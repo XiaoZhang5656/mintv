@@ -210,6 +210,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         focus.attach(this);
         loadHeaders();
         loadLinePrefs();
+        loadFavorites();
         applyOutputMode();
         recoverFromEngineCrash();
         focus.setNavCount(categories.size());
@@ -217,6 +218,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         bindChannels();
         updateNavFocus(1);
         updateChannelFocus(0);
+        restoreLastChannel();     // 回到上次看的台
 
         playerManager = new PlayerManager(this);
         player = playerManager;
@@ -723,6 +725,11 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     private void applyPlaylist(String body) {
         playlist = PlaylistParser.parse(body);
         categories = DemoData.toCategories(playlist);
+        // 「我的收藏」固定在第二位（「全部」之后），其余分类顺延
+        if (!categories.isEmpty() && !FAV_CATEGORY.equals(categories.get(0).name)) {
+            categories.add(categories.size() > 0 ? 1 : 0,
+                    new DemoData.Category(FAV_CATEGORY, favorites.size(), 0));
+        }
         channels = playlist.all;
     }
 
@@ -894,6 +901,17 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                     if (tag instanceof Integer) onChannelClicked((Integer) tag);
                 }
             });
+            // 长按 = 收藏 / 取消收藏。用 tag 里当前的绑定下标，滚动后也不会认错台。
+            v.setOnLongClickListener(new View.OnLongClickListener() {
+                @Override public boolean onLongClick(View view) {
+                    Object tag = view.getTag();
+                    if (!(tag instanceof Integer)) return false;
+                    int idx = (Integer) tag;
+                    if (idx < 0 || idx >= channels.size()) return false;
+                    toggleFavorite(channels.get(idx));
+                    return true;
+                }
+            });
             FrameLayout.LayoutParams p = new FrameLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, Theme.px(Theme.CHAN_ITEM_H));
             p.leftMargin = Theme.px(14);
@@ -965,6 +983,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         v.setSub("");
         v.setBadge(null);
         v.setLogo(null);
+        v.setFavorite(isFavorite(ch));
     }
 
     /** 频道下标 → 池里正在显示它的 View；不在池里返回 null。 */
@@ -1148,6 +1167,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         if (index < 0 || index >= channels.size()) return;
         playingChannel = index;
         PlaylistParser.Channel ch = channels.get(index);
+        saveLastChannel(ch);
         String no = String.valueOf(ch.number);
         while (no.length() < 4) no = "0" + no;
         lastResolution = null;
@@ -1348,10 +1368,141 @@ public class MainActivity extends Activity implements FocusEngine.Host {
 
     // ---- 每个频道上次能播的线路 ----
     private static final String KEY_LINE_PREFS = "line_prefs";
+    private static final String KEY_FAVS = "favorites";
+    private static final String KEY_LAST_CHAN = "last_chan";
+    private static final String FAV_CATEGORY = "我的收藏";
+
+    /** 收藏的频道，key = 台号|台名。用 LinkedHashSet 保住收藏顺序。 */
+    private final java.util.LinkedHashSet<String> favorites = new java.util.LinkedHashSet<>();
     private final java.util.Map<String, Integer> linePref = new java.util.HashMap<>();
 
     private static String lineKey(PlaylistParser.Channel ch) {
         return ch.number + "|" + ch.name;
+    }
+
+    private static String favKey(PlaylistParser.Channel ch) {
+        return ch.number + "|" + ch.name;
+    }
+
+    private void loadFavorites() {
+        favorites.clear();
+        String raw = getSharedPreferences(PREF, MODE_PRIVATE).getString(KEY_FAVS, "");
+        if (raw == null || raw.isEmpty()) return;
+        for (String line : raw.split("\n")) {
+            if (!line.trim().isEmpty()) favorites.add(line.trim());
+        }
+    }
+
+    private void saveFavorites() {
+        StringBuilder sb = new StringBuilder();
+        for (String k : favorites) {
+            if (sb.length() > 0) sb.append('\n');
+            sb.append(k);
+        }
+        getSharedPreferences(PREF, MODE_PRIVATE).edit()
+                .putString(KEY_FAVS, sb.toString()).apply();
+    }
+
+    private boolean isFavorite(PlaylistParser.Channel ch) {
+        return favorites.contains(favKey(ch));
+    }
+
+    /**
+     * 长按频道 = 收藏 / 取消收藏。
+     *
+     * <p>先判断再改：返回 true 表示这次是「收藏」，false 表示「取消」。
+     */
+    private boolean toggleFavorite(PlaylistParser.Channel ch) {
+        String k = favKey(ch);
+        boolean added;
+        if (favorites.contains(k)) { favorites.remove(k); added = false; }
+        else { favorites.add(k); added = true; }
+        saveFavorites();
+        refreshFavCategory();
+        // 在收藏页里取消收藏，要把这一行从当前列表里去掉
+        if (currentCategoryName().equals(FAV_CATEGORY)) {
+            applyCategoryChannels(currentNavIndex());
+        } else {
+            syncPool(true);
+        }
+        osd.toast(added ? ("已收藏 " + ch.name) : ("已取消收藏 " + ch.name));
+        return added;
+    }
+
+    /** 收藏分类的计数要跟着变。 */
+    private void refreshFavCategory() {
+        if (categories == null || categories.isEmpty()) return;
+        for (int i = 0; i < categories.size(); i++) {
+            DemoData.Category c = categories.get(i);
+            if (FAV_CATEGORY.equals(c.name)) {
+                categories.set(i, new DemoData.Category(FAV_CATEGORY, favorites.size(), c.glyph));
+                rebuildCategoryColumn();
+                updateNavFocus(focus.navIndex());
+                return;
+            }
+        }
+    }
+
+    /** 当前选中的分类名。 */
+    private String currentCategoryName() {
+        int i = focus.navIndex();
+        if (categories == null || i < 0 || i >= categories.size()) return "";
+        return categories.get(i).name;
+    }
+
+    private int currentNavIndex() { return focus.navIndex(); }
+
+    /** 按分类名重新算 channels 并重建列表（收藏页会动态变化）。 */
+    private void applyCategoryChannels(int catIndex) {
+        if (categories == null || catIndex < 0 || catIndex >= categories.size()) return;
+        String name = categories.get(catIndex).name;
+        List<PlaylistParser.Channel> list;
+        if (FAV_CATEGORY.equals(name)) {
+            list = new ArrayList<>();
+            for (PlaylistParser.Channel ch : playlist.all) {
+                if (favorites.contains(favKey(ch))) list.add(ch);
+            }
+        } else if ("全部".equals(name)) {
+            list = playlist.all;
+        } else {
+            list = playlist.byGroup.get(name);
+            if (list == null) list = new ArrayList<>();
+        }
+        channels = list;
+        currentLine = 0;
+        bindChannels();
+        focus.resetChannelFocus();
+        updateChannelFocus(0);
+    }
+
+    /**
+     * 记住「上次在看哪个台」。
+     *
+     * <p>以前只记住了每个频道各自的线路，却没记住"当前是哪个频道" ——
+     * 重启后永远从第一个台开始，用户得自己翻回去。这个键存的是 台号|台名，
+     * 频道列表重建、换源之后只要台还在就能对上。
+     */
+    private void saveLastChannel(PlaylistParser.Channel ch) {
+        if (ch == null) return;
+        getSharedPreferences(PREF, MODE_PRIVATE).edit()
+                .putString(KEY_LAST_CHAN, favKey(ch)).apply();
+    }
+
+    /** 启动时恢复上次的频道。找不到就保持默认（第一个台）。 */
+    private void restoreLastChannel() {
+        String key = getSharedPreferences(PREF, MODE_PRIVATE).getString(KEY_LAST_CHAN, null);
+        if (key == null || key.isEmpty()) return;
+        int idx = -1;
+        for (int i = 0; i < channels.size(); i++) {
+            if (favKey(channels.get(i)).equals(key)) { idx = i; break; }
+        }
+        if (idx < 0) return;
+        playingChannel = idx;
+        focus.setChannelCount(channels.size());
+        focus.resetChannelFocus();
+        // 焦点也跟着落到那个台上，用户一进来就看到自己在看哪一台
+        while (focus.chanIndex() < idx) focus.onKey(KeyEvent.KEYCODE_DPAD_DOWN);
+        updateChannelFocus(idx);
     }
 
     private void loadLinePrefs() {
@@ -2948,15 +3099,8 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         for (int i = 0; i < navViews.size(); i++) {
             navViews.get(i).setActive(i == index);
         }
-        String name = categories.get(index).name;
-        List<PlaylistParser.Channel> list = "全部".equals(name)
-                ? playlist.all
-                : playlist.byGroup.get(name);
-        channels = list == null ? new ArrayList<PlaylistParser.Channel>() : list;
-        currentLine = 0;
-        bindChannels();
-        focus.resetChannelFocus();
-        updateChannelFocus(0);
+        applyCategoryChannels(index);
+        if (channels.isEmpty()) osd.toast("这个分类还没有频道");
     }
 
     private void hidePanel() { enterFullPlayer(); }

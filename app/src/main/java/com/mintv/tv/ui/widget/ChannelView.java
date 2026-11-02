@@ -30,6 +30,9 @@ public class ChannelView extends BaseCardView {
     private int number = 0;
     private String numberText = "";
     private String name = "";
+    /** 是否已收藏。收藏的台在台名前画一颗金色星。 */
+    private boolean favorite = false;
+    private final Paint favPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private String sub = "";
     private String badge;
     private Bitmap logo;
@@ -57,6 +60,13 @@ public class ChannelView extends BaseCardView {
     }
 
     public void setName(String n) { name = n == null ? "" : n; }
+
+    public void setFavorite(boolean f) {
+        if (favorite != f) {
+            favorite = f;
+            invalidate();
+        }
+    }
 
     /** 节目信息。源里没有 EPG 时传空串，副行就不画。 */
     public void setSub(String s) { sub = s == null ? "" : s; }
@@ -122,6 +132,15 @@ public class ChannelView extends BaseCardView {
 
         // ---- 台名 ----
         float nameBaseline = sub.isEmpty() ? cy - (t.descent() + t.ascent()) / 2f : cy - Theme.px(10);
+
+        // 收藏标记：台名前一颗金星。用文字画，省一个图标资源。
+        if (favorite) {
+            favPaint.setColor(0xFFFFC53D);
+            favPaint.setTextSize(Theme.sp(16));
+            favPaint.setFakeBoldText(true);
+            c.drawText("★", tx, nameBaseline, favPaint);
+            tx += favPaint.measureText("★") + Theme.px(6);
+        }
         t.setColor(Theme.TEXT);
         t.setTextSize(nameSize);
         t.setFakeBoldText(false);
