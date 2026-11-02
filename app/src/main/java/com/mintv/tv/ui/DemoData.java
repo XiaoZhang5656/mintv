@@ -68,6 +68,7 @@ public final class DemoData {
             {"时钟显示", "面板收起看片时是否保留右上角日期时间"},
             {"画面输出", "黑屏只有声音时切到 SurfaceView 试试"},
             {"界面主题", "只换配色，布局与操作完全一致"},
+            {"频道分组管理", "隐藏不看的分类，只留常用的"},
     };
 
     public static final String[][] ROW_OPTIONS = {
@@ -86,9 +87,10 @@ public final class DemoData {
             {"随面板隐藏", "始终显示"},
             {"TextureView", "SurfaceView"},
             {"暗黑", "盒子蓝", "暖色"},
+            {"打开管理"},
     };
 
-    public static final int[] ROW_DEFAULT = {0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0};
+    public static final int[] ROW_DEFAULT = {0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0};
 
     // ---------- 无源时的示范 M3U ----------
 

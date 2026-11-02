@@ -228,6 +228,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         android.util.Log.i("MinTV", "screen realMetrics=" + dm.widthPixels + "x" + dm.heightPixels + " base=" + base);
         Theme.init(base);
         loadSelections();
+        loadHiddenCats();
         Theme.applyPalette(getSharedPreferences(PREF, MODE_PRIVATE).getInt(KEY_UI_THEME, 0));
 
         errorPanel = ErrorPanel.install(this);
@@ -776,12 +777,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
 
     private void applyPlaylist(String body) {
         playlist = PlaylistParser.parse(body);
-        categories = DemoData.toCategories(playlist);
-        // 「我的收藏」放在最顶上（第 0 项），用户打开就能直接进收藏，
-        // 不用先划过「全部」。其余分类整体顺延一位。
-        if (!categories.isEmpty() && !FAV_CATEGORY.equals(categories.get(0).name)) {
-            categories.add(0, new DemoData.Category(FAV_CATEGORY, favorites.size(), 0));
-        }
+        rebuildCategories();
         channels = playlist.all;
     }
 
@@ -1347,6 +1343,11 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     private static final int ROW_THEME          = 14;
     private static final String KEY_UI_THEME    = "ui_theme";
     private static final String KEY_SELECTIONS  = "selections";
+    private static final String KEY_HIDDEN_CATS = "hidden_cats";
+    private static final int ROW_GROUP_MGR      = 15;
+
+    /** 被用户隐藏的分类名（「全部」和「我的收藏」不允许隐藏）。 */
+    private final java.util.LinkedHashSet<String> hiddenCats = new java.util.LinkedHashSet<>();
 
     /**
      * 「没画面」自愈的进度。0 = 还没处理，1 = 已切软解，2 = 已换过线路。
@@ -1849,6 +1850,153 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         }
         getSharedPreferences(PREF, MODE_PRIVATE).edit()
                 .putString(KEY_SELECTIONS, sb.toString()).apply();
+    }
+
+    /**
+     * 重新生成左侧分类列表。
+     *
+     * <p>顺序：「我的收藏」置顶 → 「全部」→ 源里的各个分组。
+     * 用户隐藏的分组整条去掉；「全部」和「我的收藏」不允许隐藏，
+     * 否则隐藏完最后一个分组就再也没法从界面里找回频道了。
+     */
+    private void rebuildCategories() {
+        List<DemoData.Category> all = DemoData.toCategories(playlist);
+        if (!all.isEmpty() && !FAV_CATEGORY.equals(all.get(0).name)) {
+            all.add(0, new DemoData.Category(FAV_CATEGORY, favorites.size(), 0));
+        }
+        List<DemoData.Category> keep = new ArrayList<>();
+        for (DemoData.Category c : all) {
+            if (FAV_CATEGORY.equals(c.name) || "全部".equals(c.name)
+                    || !hiddenCats.contains(c.name)) {
+                keep.add(c);
+            }
+        }
+        categories = keep;
+    }
+
+    /** 可隐藏的全部分类名（用于管理弹窗），按源里的顺序。 */
+    private java.util.List<String> manageableCategories() {
+        java.util.List<String> out = new java.util.ArrayList<>();
+        if (playlist == null) return out;
+        for (String g : playlist.byGroup.keySet()) {
+            if (!FAV_CATEGORY.equals(g) && !"全部".equals(g)) out.add(g);
+        }
+        return out;
+    }
+
+    /**
+     * 频道分组管理弹窗。
+     *
+     * <p>源里动辄二十几个分组（央视、各省、港澳台…），用户实际只看其中几个。
+     * 这里把所有分组列出来，点一下切换显示/隐藏，关掉后左侧分类栏立刻重建。
+     *
+     * <p>「全部」和「我的收藏」不在列表里 —— 它们不允许被隐藏，
+     * 否则隐藏光了就再也找不回频道入口。
+     */
+    private void openGroupManager() {
+        final java.util.List<String> names = manageableCategories();
+        if (names.isEmpty()) { osd.toast("当前源没有可管理的分组"); return; }
+
+        final int cols = 3;
+        LinearLayout container = new LinearLayout(this);
+        container.setOrientation(LinearLayout.VERTICAL);
+        container.setPadding(Theme.px(20), Theme.px(16), Theme.px(20), Theme.px(8));
+
+        final java.util.List<TextView> chips = new java.util.ArrayList<>();
+        LinearLayout row = null;
+        for (int i = 0; i < names.size(); i++) {
+            if (i % cols == 0) {
+                row = new LinearLayout(this);
+                row.setOrientation(LinearLayout.HORIZONTAL);
+                container.addView(row, new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+            }
+            final String name = names.get(i);
+            final TextView chip = new TextView(this);
+            chip.setText(chipLabel(name));
+            chip.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, Theme.sp(19));
+            chip.setGravity(Gravity.CENTER);
+            chip.setPadding(Theme.px(10), Theme.px(14), Theme.px(10), Theme.px(14));
+            chip.setFocusable(true);
+            chip.setClickable(true);
+            chip.setTextColor(Theme.TEXT);
+            styleChip(chip, !hiddenCats.contains(name));
+            chip.setOnClickListener(new View.OnClickListener() {
+                @Override public void onClick(View v) {
+                    if (hiddenCats.contains(name)) hiddenCats.remove(name);
+                    else hiddenCats.add(name);
+                    saveHiddenCats();
+                    chip.setText(chipLabel(name));
+                    styleChip(chip, !hiddenCats.contains(name));
+                }
+            });
+            chips.add(chip);
+
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0,
+                    ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+            lp.rightMargin = Theme.px(8);
+            lp.bottomMargin = Theme.px(8);
+            row.addView(chip, lp);
+        }
+
+        ScrollView sc = new ScrollView(this);
+        sc.addView(container, new ScrollView.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        new android.app.AlertDialog.Builder(this)
+                .setTitle("频道分组管理（点一下切换显示/隐藏）")
+                .setView(sc)
+                .setPositiveButton("关闭", new android.content.DialogInterface.OnClickListener() {
+                    @Override public void onClick(android.content.DialogInterface d, int w) {
+                        applyGroupChanges();
+                    }
+                })
+                .setOnCancelListener(new android.content.DialogInterface.OnCancelListener() {
+                    @Override public void onCancel(android.content.DialogInterface d) {
+                        applyGroupChanges();
+                    }
+                })
+                .show();
+    }
+
+    private String chipLabel(String name) {
+        return hiddenCats.contains(name) ? (name + "  ⊘") : (name + "  ✓");
+    }
+
+    private void styleChip(TextView chip, boolean visible) {
+        chip.setBackgroundColor(visible ? Theme.DLG_OPT_SEL : Theme.DLG_OPT_BG);
+        chip.setTextColor(visible ? Theme.DLG_OPT_TXT_ON : Theme.TEXT_DIM);
+    }
+
+    /** 管理弹窗关掉后重建左侧分类栏。 */
+    private void applyGroupChanges() {
+        rebuildCategories();
+        rebuildCategoryColumn();
+        int nav = Math.min(focus.navIndex(), Math.max(0, categories.size() - 1));
+        focus.setNavCount(categories.size());
+        focus.setNavIndexSilently(nav);
+        updateNavFocus(nav);
+        switchCategory(nav);
+        osd.toast("已更新分组显示");
+    }
+
+    private void loadHiddenCats() {
+        hiddenCats.clear();
+        String raw = getSharedPreferences(PREF, MODE_PRIVATE).getString(KEY_HIDDEN_CATS, "");
+        if (raw == null || raw.isEmpty()) return;
+        for (String line : raw.split("\n")) {
+            if (!line.trim().isEmpty()) hiddenCats.add(line.trim());
+        }
+    }
+
+    private void saveHiddenCats() {
+        StringBuilder sb = new StringBuilder();
+        for (String n : hiddenCats) {
+            if (sb.length() > 0) sb.append('\n');
+            sb.append(n);
+        }
+        getSharedPreferences(PREF, MODE_PRIVATE).edit()
+                .putString(KEY_HIDDEN_CATS, sb.toString()).apply();
     }
 
     private void loadHeaders() {
@@ -3031,6 +3179,8 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         } else if (row == ROW_AUTOPLAY) {
             saveAutoStartFlag();
             if (value == 0) showAutoStartGuide();
+        } else if (row == ROW_GROUP_MGR) {
+            openGroupManager();
         } else if (row == ROW_THEME) {
             getSharedPreferences(PREF, MODE_PRIVATE).edit()
                     .putInt(KEY_UI_THEME, value).apply();
