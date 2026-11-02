@@ -128,11 +128,20 @@ public final class IjkBackend implements PlaybackBackend {
         // 实测 backtrace：libijkffmpeg.so (offset 0x4f0000)
         //                 av_application_on_http_event+24
         // 低延迟改用 packet-buffering=0 + probe 调小，不碰 fflags。
+        //
+        // 也绝对不能设 "reconnect" / "dns_cache_clear"。
+        // 这两个是 IJK 自己的 **ijkio** 协议选项（不是 FFmpeg 原生的），
+        // 一旦设了，FFmpeg 会切到 ijkio 这条自定义 IO 通道，而 ijkio 每发生一次
+        // HTTP 事件都回调 av_application_will_http_open / did_http_open。
+        // 这套回调结构体在本机这条路径上没有被完整注册，直接解引用空指针：
+        //   SIGSEGV signal 11, fault addr 0x...b4
+        //   libijkffmpeg.so  av_application_on_http_event+24
+        // 崩在 ff_read 线程里，Java 层连 Throwable 都拿不到，所以表现为直接闪退。
+        // 实测 strings libijkffmpeg.so 能搜到 ijkio / reconnect / dns_cache_clear
+        // 三个符号，印证它们同属 ijkio 这一层。
         p.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "timeout", 8_000_000L);
         p.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "probesize", live ? 512 * 1024L : 2 * 1024 * 1024L);
         p.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "analyzeduration", live ? 800_000L : 2_000_000L);
-        p.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "reconnect", 1L);
-        p.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "dns_cache_clear", 1L);
         // FFmpeg 的 http 协议只有两个入口：user_agent 和 headers（多行字符串）。
         // 以前 referer / cookie 单独当 option 塞进去，FFmpeg 根本不认，
         // 需要特定头的 ts 就这么黑着。现在按 FFmpeg 的实际语义翻译。

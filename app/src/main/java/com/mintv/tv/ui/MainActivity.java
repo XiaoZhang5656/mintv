@@ -86,6 +86,8 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         }
     };
     private ClockView clock;
+    /** 右下角常显的网速标签，独立于 OSD，实时更新。 */
+    private TextView speedLabel;
 
     // ---- 状态 ----
     private final FocusEngine focus = new FocusEngine();
@@ -142,6 +144,36 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             ui.postDelayed(this, 30_000);
         }
     };
+
+    /**
+     * 网速刷新节拍。
+     *
+     * <p>为什么不挂在 OSD 上：OSD 4 秒后自动淡出，网速跟着消失就谈不上"实时"了。
+     * 这个标签独立存在，只在「网速显示 = 显示」且确实有流量时出现。
+     */
+    private final Runnable speedTick = new Runnable() {
+        @Override public void run() {
+            updateSpeedLabel();
+            ui.postDelayed(this, 1000);
+        }
+    };
+
+    private void updateSpeedLabel() {
+        if (speedLabel == null) return;
+        boolean want = selections[ROW_SPEED] == 0;
+        if (!want) {
+            if (speedLabel.getVisibility() != View.GONE) speedLabel.setVisibility(View.GONE);
+            return;
+        }
+        speedMeter.sample();
+        String t = speedMeter.text();
+        if (t.isEmpty()) {
+            if (speedLabel.getVisibility() != View.GONE) speedLabel.setVisibility(View.GONE);
+            return;
+        }
+        if (!t.equals(speedLabel.getText().toString())) speedLabel.setText(t);
+        if (speedLabel.getVisibility() != View.VISIBLE) speedLabel.setVisibility(View.VISIBLE);
+    }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -249,6 +281,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         }
 
         ui.post(clockTick);
+        ui.post(speedTick);
         loadEpgAsync();
     }
 
@@ -405,6 +438,20 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         clockLp.rightMargin = Theme.px(36);
         clockLp.topMargin = Theme.px(18);
         root.addView(clock, clockLp);
+
+        // --- 右下角网速（常显，不跟 OSD 一起消失）---
+        speedLabel = new TextView(this);
+        speedLabel.setTextColor(0xFFFFFFFF);
+        speedLabel.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, Theme.sp(19));
+        speedLabel.setShadowLayer(Theme.px(4), 0, Theme.px(1), 0xCC000000);
+        speedLabel.setGravity(Gravity.END);
+        speedLabel.setVisibility(View.GONE);
+        FrameLayout.LayoutParams spLp = new FrameLayout.LayoutParams(
+                Theme.px(320), Theme.px(44));
+        spLp.gravity = Gravity.BOTTOM | Gravity.END;
+        spLp.rightMargin = Theme.px(40);
+        spLp.bottomMargin = Theme.px(30);
+        root.addView(speedLabel, spLp);
 
         // --- 抽屉式 EPG ---
         // 展开后布局：[频道列 476][间隔 8][节目单 422][播放画面 剩余]
@@ -1837,6 +1884,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         } else if (row == ROW_HEADERS) {
             openHeaderEditor();
         } else if (row == ROW_SPEED) {
+            updateSpeedLabel();
             refreshOsdTags();
         } else if (row == ROW_SOURCE) {
             switchSource(value == 0 ? -1 : +1);
@@ -2222,6 +2270,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     protected void onDestroy() {
         super.onDestroy();
         ui.removeCallbacks(clockTick);
+        ui.removeCallbacks(speedTick);
         if (player != null) {
             player.release();
             player = null;

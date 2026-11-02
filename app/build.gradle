@@ -11,8 +11,8 @@ android {
         // TV 盒子覆盖最广的下限，Android 5.0
         minSdk 21
         targetSdk 34
-        versionCode 31
-        versionName "1.1.0"
+        versionCode 32
+        versionName "1.2.0"
 
         // 只打两个 ARM 变体：盒子没有 x86 真机。
         // 不过滤的话 libvlc 的 x86/x86_64 两个 so 会白塞进来 +47MB。
@@ -45,8 +45,8 @@ android {
         abortOnError false
     }
 
-    // Android 15+ 要求 .so 按 16KB 页对齐，否则拒绝加载（libijkplayer/libvlc 都会中招）。
-    // AGP 8.5.1 起支持这个开关，会自动把 so 重排到 16KB 边界。
+    // 必须保持 so 不压缩（STORED），这样它能被直接 mmap 加载。
+    // 一旦压缩，解压副本会额外占一倍 data 空间，低端盒子上就是装不下。
     packaging {
         jniLibs {
             useLegacyPackaging = false
