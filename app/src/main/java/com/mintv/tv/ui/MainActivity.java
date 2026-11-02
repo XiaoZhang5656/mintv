@@ -565,8 +565,21 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                 if (ch < 0 || ch >= channels.size()) return false;
                 EpgParser.Program prog = programAt(ch, idx);
                 if (prog == null) return false;
-                boolean ended = prog.stopMs <= System.currentTimeMillis();
-                if (!ended) {
+                long now = System.currentTimeMillis();
+
+                // 「直播中」那一行不是回看，是"切回直播"。
+                // 以前这里一律按"已播完才可点"判断，点直播行就只弹一句
+                // "还没播完，回看不了"，于是从回看状态永远回不到直播。
+                boolean isLive = prog.startMs <= now && prog.stopMs > now;
+                if (isLive) {
+                    returnToLive(ch);
+                    return true;
+                }
+                if (prog.startMs > now) {
+                    osd.toast("该节目还没开始");
+                    return true;
+                }
+                if (prog.stopMs > now) {
                     osd.toast("该节目还没播完，回看不了");
                     return true;
                 }
@@ -1879,6 +1892,27 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         epgPanel.setReplayIndex(idx);
         playUrl(url, null, PlaybackBackend.Mode.TIMESHIFT);
         // 不再自动收起节目单：收起就看不到回放高亮了。想全屏看片自己按返回。
+    }
+
+    /**
+     * 回到直播。
+     *
+     * <p>回看状态下没有任何入口能回到当前直播 —— 这在使用上是死路：
+     * 用户点错一条老节目，就只能换台再换回来。EPG 上「直播中」那一行
+     * 就是最自然的入口，点它就回直播。
+     */
+    private void returnToLive(int channelIndex) {
+        replayStartMs = -1;
+        if (epgPanel != null) epgPanel.setReplayIndex(-1);
+        if (channelIndex >= 0 && channelIndex < channels.size()
+                && channelIndex != playingChannel) {
+            playChannel(channelIndex);
+            fillEpg(channelIndex);
+        } else {
+            // 同一个频道：重开直播地址，走 LIVE 模式
+            playChannel(playingChannel);
+        }
+        osd.toast("已回到直播");
     }
 
     /** 取节目单窗口里的第 idx 条（idx 是界面行号，不是全量列表下标）。 */
