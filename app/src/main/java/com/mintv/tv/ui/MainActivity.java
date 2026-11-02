@@ -1402,6 +1402,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     private static final String KEY_FAVS = "favorites";
     private static final String KEY_LAST_CHAN = "last_chan";
     private static final String KEY_LAST_CAT = "last_cat";
+    private static final String KEY_LAST_NUM = "last_num";
 
     /**
      * 启动后要恢复到的频道/分类。
@@ -1413,6 +1414,8 @@ public class MainActivity extends Activity implements FocusEngine.Host {
      */
     private String restoreChanKey;
     private String restoreCatName;
+    /** 上次观看的台号（从 1 开始）。列表变了拿名字找不到时，用它就近兜底。 */
+    private int restoreChanNum = -1;
     private static final String FAV_CATEGORY = "我的收藏";
 
     /** 收藏的频道，key = 台号|台名。用 LinkedHashSet 保住收藏顺序。 */
@@ -1527,12 +1530,61 @@ public class MainActivity extends Activity implements FocusEngine.Host {
      */
     private void saveLastChannel(PlaylistParser.Channel ch) {
         if (ch == null) return;
-        // 频道和它所在的分类要一起记。只记频道的话，重启后列表停在「全部」、
-        // 焦点还在第一个台上，用户看到的和正在播的根本对不上。
+        // 三样一起记：台名（最稳的身份）、分类、台号（名字变了就用它兜底）。
+        // 只记频道的下标是完全不行的 —— 源一更新，整份列表的顺序就变了。
         getSharedPreferences(PREF, MODE_PRIVATE).edit()
                 .putString(KEY_LAST_CHAN, favKey(ch))
                 .putString(KEY_LAST_CAT, currentCategoryName())
+                .putInt(KEY_LAST_NUM, ch.number)
                 .apply();
+    }
+
+    /**
+     * 找"上次那个台"：**以台号为锚点由近及远搜，名字匹配上才算命中**。
+     *
+     * <p>为什么是这个顺序：
+     * <ul>
+     *   <li>源每天更新，频道会增删，但**顺序基本稳定** —— 所以上次的台号
+     *       仍然是位置的最佳估计，"附近"大概率就是它；</li>
+     *   <li>光看台号不安全：中间要是插了一个台，台号就整体错位了。
+     *       所以每个候选都必须**名字对得上**才认，避免点开一个不相干的台；</li>
+     *   <li>由近及远一圈圈扩，命中的第一个就是最近的同名台 ——
+     *       列表小幅变动（插 1~2 个台）时一次就中。</li>
+     * </ul>
+     *
+     * <p>名称对不上名字时，才做全表的包含匹配（源里常给台名加前后缀），
+     * 最后实在没有就退回锚点位置本身（夹紧到有效范围），至少不跑到第一台。
+     *
+     * @param key       形如 "76|浙江钱江台"
+     * @param anchorNum 上次的台号，从 1 开始
+     */
+    private int resolveChannelIndex(String key, int anchorNum) {
+        if (channels == null || channels.isEmpty()) return -1;
+        String name = key;
+        int bar = key.indexOf('|');
+        if (bar >= 0 && bar + 1 < key.length()) name = key.substring(bar + 1);
+
+        int n = channels.size();
+        int anchor = anchorNum > 0 ? anchorNum - 1 : 0;
+        if (anchor < 0) anchor = 0;
+        if (anchor >= n) anchor = n - 1;
+
+        // ① 以锚点为中心向两边扩散，第一个同名即为最近命中
+        for (int r = 0; r < n; r++) {
+            int lo = anchor - r;
+            int hi = anchor + r;
+            if (lo >= 0 && lo < n && channels.get(lo).name.equals(name)) return lo;
+            if (r != 0 && hi >= 0 && hi < n && channels.get(hi).name.equals(name)) return hi;
+        }
+        // ② 名字被改过（加了 HD / 后缀）：全表包含匹配
+        if (name.length() >= 2) {
+            for (int i = 0; i < n; i++) {
+                String cn = channels.get(i).name;
+                if (cn.contains(name) || name.contains(cn)) return i;
+            }
+        }
+        // ③ 这条台没了：停在原来的位置附近
+        return anchor;
     }
 
     private int indexOfCategory(String name) {
@@ -1543,7 +1595,6 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         return -1;
     }
 
-    /** 启动时恢复上次的频道。找不到就保持默认（第一个台）。 */
     /** 恢复只做一次：成功定位后就不再碰滚动位置，避免和用户滚动打架。 */
     private boolean restoreDone = false;
 
@@ -1559,10 +1610,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             updateNavFocus(ci);
         }
 
-        int idx = -1;
-        for (int i = 0; i < channels.size(); i++) {
-            if (favKey(channels.get(i)).equals(restoreChanKey)) { idx = i; break; }
-        }
+        int idx = resolveChannelIndex(restoreChanKey, restoreChanNum);
         if (idx < 0) { restoreDone = true; return; }
 
         restoreDone = true;          // 先置位，后面的滚动/渲染不要再被打断
@@ -1602,6 +1650,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         android.content.SharedPreferences p = getSharedPreferences(PREF, MODE_PRIVATE);
         restoreChanKey = p.getString(KEY_LAST_CHAN, null);
         restoreCatName = p.getString(KEY_LAST_CAT, null);
+        restoreChanNum = p.getInt(KEY_LAST_NUM, -1);
         tryRestoreIfPending();
     }
 
