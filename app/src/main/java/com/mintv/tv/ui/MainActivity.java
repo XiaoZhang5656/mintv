@@ -588,13 +588,18 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         gestureLayer = new View(this);
         gestureLayer.setBackgroundColor(0x00000000);
         gestureLayer.setClickable(true);
-        gestureLayer.setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View v) {
-                // 纯播放态下点一下：先弹信息条（能看进度/编码），
-                // 信息条已经在显示时再点才展开左侧面板。两段式，跟主流播放器一致。
-                if (osd != null && osd.reshow()) return;
-                showPanel();
+        // 记录点击坐标：靠它区分"点左边"和"点右边"
+        gestureLayer.setOnTouchListener(new View.OnTouchListener() {
+            @Override public boolean onTouch(View v, android.view.MotionEvent e) {
+                if (e.getActionMasked() == android.view.MotionEvent.ACTION_DOWN) {
+                    tapX = e.getX();
+                    tapY = e.getY();
+                }
+                return false;      // 不消费，交给 OnClickListener
             }
+        });
+        gestureLayer.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { onVideoTapped(); }
         });
         gestureLayer.setOnLongClickListener(new View.OnLongClickListener() {
             @Override public boolean onLongClick(View v) {
@@ -2209,6 +2214,28 @@ public class MainActivity extends Activity implements FocusEngine.Host {
      * </ul>
      */
     /**
+     * 纯播放态下点画面的统一处理。
+     *
+     * <p>规则（就是用户要的那套，别再自作聪明搞两段式）：
+     * <ul>
+     *   <li>信息条正在显示 → 先把它收掉；点在左半边就顺势把频道列表打开；</li>
+     *   <li>信息条没显示 → 弹出来（看进度/编码/网速）。</li>
+     * </ul>
+     *
+     * <p>以前写成"先 reshow() 再 showPanel()"，而 reshow() 只要有过频道就恒为 true，
+     * 于是频道列表永远打不开，OSD 反复弹 —— 这就是"一直显示这个、点不开列表"。
+     */
+    private void onVideoTapped() {
+        boolean left = tapX < Theme.px(Theme.NAV_W + Theme.CHAN_W + Theme.RAIL_W);
+        if (osd != null && osd.isVisible()) {
+            osd.hideNow();
+            if (left) showPanel();     // 点左边 → 收 OSD 并打开频道列表
+            return;
+        }
+        if (osd != null) osd.reshow();
+    }
+
+    /**
      * 视频区点击层的实际范围 = 屏幕去掉左侧三栏。
      *
      * <p>抽屉展开时节目单更宽，所以要按当前状态算，不能写死。
@@ -2232,6 +2259,8 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     }
 
     private void onVideoAreaTapped(float x, float y) {
+        // 点右侧视频区就是"全都收起来"：面板 + 信息条
+        if (osd != null) osd.hideNow();
         if (epgPanelOpen) { closeEpgPanel(); return; }
         if (panelVisible) { enterFullPlayer(); }
     }

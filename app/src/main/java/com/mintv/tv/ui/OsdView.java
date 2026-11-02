@@ -150,6 +150,13 @@ public class OsdView extends View {
 
     public void tick() { invalidate(); }
 
+    /** 立刻隐藏，不等 4 秒淡出。点屏幕收起时用。 */
+    public void hideNow() {
+        removeCallbacks(fadeTask);
+        osdAlpha = 0f;
+        invalidate();
+    }
+
     /**
      * 重新显示一遍当前信息条（不换台、不重置数据）。
      *
