@@ -2475,9 +2475,10 @@ public class MainActivity extends Activity implements FocusEngine.Host {
 
     /** ③ 纯播放：整套面板淡出，只留视频。任意方向键/点击恢复。 */
     private void enterFullPlayer() {
-        // 还没起播（源没加载出来 / 播放失败）时不允许把面板收掉，
-        // 否则用户会看到一个全黑屏、只有一个点不动的点击层。
-        if (!playing && currentPlayUrl == null) return;
+        // 以前这里有个"没起播就不许收面板"的门控，本意是防止误入死状态。
+        // 但点击唤回已经补上了兜底，这个门控反而把用户锁在面板上：
+        // 频道卡在缓冲（playing=false）时永远收不起来，只能先换台 —— 这就是
+        // "必须换一个台再隐藏"的原因。现在无条件允许收起。
         if (epgPanelOpen) closeEpgPanel();
         setPanelVisible(false);
     }

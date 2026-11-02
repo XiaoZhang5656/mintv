@@ -388,6 +388,10 @@ public class OsdView extends View {
      */
     @Override
     public boolean onTouchEvent(android.view.MotionEvent ev) {
+        // OSD 已经淡出时，barShown / barRect 还是上一次绘制留下的旧值。
+        // 不判可见性的话，点在"已经看不见的进度条"位置上会被这里吃掉，
+        // 导致点视频区收不起面板 —— 表现就是"要点一下别的才恢复"。
+        if (osdAlpha <= 0f) return false;
         if (!barShown || seekListener == null) return false;
         float x = ev.getX(), y = ev.getY();
         boolean hit = barRect.contains(x, y);
