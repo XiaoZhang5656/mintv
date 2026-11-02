@@ -51,7 +51,13 @@ public final class HttpHeaderProfile {
         return n;
     }
 
-    /** 合并多份头，后出现的覆盖先出现的（同名不同大小写视为同一个）。 */
+    /** 合并多份头，后出现的覆盖先出现的（同名不同大小写视为同一个）。
+     *
+     * <p>永远返回非 null 的 Map。以前空的时候返回 null，调用方一句
+     * {@code merged.isEmpty()} 就是 NPE —— 默认源（839 个频道、没写任何请求头）
+     * 点第一个频道必崩，正是这个原因。空集合比 null 好用得多，
+     * 「没有头」用 isEmpty() 表达就够了。
+     */
     public static Map<String, String> merge(Map<String, String> base, Map<String, String> extra) {
         Map<String, String> out = new LinkedHashMap<>();
         if (base != null) for (Map.Entry<String, String> e : base.entrySet()) {
@@ -60,7 +66,7 @@ public final class HttpHeaderProfile {
         if (extra != null) for (Map.Entry<String, String> e : extra.entrySet()) {
             out.put(canon(e.getKey()), e.getValue());
         }
-        return out.isEmpty() ? null : out;
+        return out;
     }
 
     /**

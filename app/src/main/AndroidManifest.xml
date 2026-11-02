@@ -30,5 +30,15 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <!-- 崩溃日志页跑在独立进程：主进程的 looper 要停了，
+             只有在别的进程里画面板才能保证一定显示出来。 -->
+        <activity
+            android:name=".ui.CrashActivity"
+            android:exported="false"
+            android:process=":crash"
+            android:excludeFromRecents="true"
+            android:launchMode="singleTask"
+            android:screenOrientation="landscape"
+            android:theme="@style/Theme.MinTv" />
     </application>
 </manifest>

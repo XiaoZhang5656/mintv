@@ -124,6 +124,7 @@ public final class PlayerManager implements PlaybackBackend {
     public void play(Context appCtx, String url, Mode mode) { play(appCtx, url, null, mode); }
 
     public void play(Context appCtx, String url, Map<String, String> headers, Mode mode) {
+        if (headers == null) headers = java.util.Collections.emptyMap();
         if (impl == null) rebuild();
         bindSurface();
         if (impl instanceof Media3Backend) {

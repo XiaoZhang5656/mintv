@@ -44,6 +44,14 @@ android {
     lint {
         abortOnError false
     }
+
+    // Android 15+ 要求 .so 按 16KB 页对齐，否则拒绝加载（libijkplayer/libvlc 都会中招）。
+    // AGP 8.5.1 起支持这个开关，会自动把 so 重排到 16KB 边界。
+    packaging {
+        jniLibs {
+            useLegacyPackaging = false
+        }
+    }
 }
 
 dependencies {

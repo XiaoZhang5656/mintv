@@ -40,6 +40,7 @@ public final class ErrorPanel {
     private final Activity activity;
     private View root;
     private TextView body;
+    private TextView titleView;
 
     public ErrorPanel(Activity a) {
         this.activity = a;
@@ -53,7 +54,11 @@ public final class ErrorPanel {
     public void show(String title, String detail) {
         if (activity.isFinishing()) return;
         if (root == null) build();
-        ((TextView) ((View) root.getTag()).findViewWithTag("title")).setText(title);
+        // 以前这里是 ((View) root.getTag()).findViewWithTag("title")：
+        // 而 root.setTag() 存进去的是 String（title），强转 View 直接
+        // ClassCastException —— 异常处理器自己再抛一次，面板永远弹不出来。
+        // 直接持有 titleView 引用，别再玩 tag。
+        if (titleView != null) titleView.setText(title);
         body.setText(detail == null ? "（无详细信息）" : detail);
         root.setVisibility(View.VISIBLE);
         root.bringToFront();
@@ -85,7 +90,7 @@ public final class ErrorPanel {
         card.setPadding(pad, pad, pad, pad);
 
         TextView title = new TextView(activity);
-        title.setTag("title");
+        titleView = title;
         title.setText("出错了");
         title.setTextColor(0xFFFF6B6B);
         title.setTextSize(20);
@@ -142,7 +147,6 @@ public final class ErrorPanel {
         }), buttonParams(pad));
 
         card.addView(buttons);
-        overlay.setTag(title);
 
         FrameLayout.LayoutParams cardLp = new FrameLayout.LayoutParams(
                 (int) (activity.getResources().getDisplayMetrics().widthPixels * 0.62f),
@@ -192,15 +196,26 @@ public final class ErrorPanel {
 
         Thread.setDefaultUncaughtExceptionHandler(new Thread.UncaughtExceptionHandler() {
             @Override public void uncaughtException(Thread thread, final Throwable ex) {
-                // 拿不到 UI 线程就直接交回系统，避免死得更难看
-                activity.runOnUiThread(new Runnable() {
-                    @Override public void run() {
-                        java.io.StringWriter sw = new java.io.StringWriter();
-                        ex.printStackTrace(new java.io.PrintWriter(sw));
-                        panel.show("崩溃 · " + ex.getClass().getSimpleName(), sw.toString());
-                    }
-                });
-                try { Thread.sleep(1200); } catch (InterruptedException ignored) { }
+                java.io.StringWriter sw = new java.io.StringWriter();
+                ex.printStackTrace(new java.io.PrintWriter(sw));
+                final String detail = sw.toString();
+
+                String title = "崩溃 · " + ex.getClass().getSimpleName();
+                // 主进程里画面板是赌运气（looper 要停了），改由 :crash 独立进程接管。
+                CrashActivity.launch(activity.getApplicationContext(), title, detail);
+                if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) {
+                    try {
+                        panel.show(title, detail);
+                    } catch (Throwable ignored) { }
+                } else {
+                    activity.runOnUiThread(new Runnable() {
+                        @Override public void run() {
+                            try { panel.show("崩溃 · " + ex.getClass().getSimpleName(), detail); }
+                            catch (Throwable ignored) { }
+                        }
+                    });
+                }
+                try { Thread.sleep(1500); } catch (InterruptedException ignored) { }
                 // 不调用 previous：让面板停留在屏幕上，用户可复制后再点退出
             }
         });

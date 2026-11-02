@@ -179,6 +179,8 @@ public final class VlcBackend implements PlaybackBackend {
     /** VLC 3.x 只有三个请求头入口，其余只能丢。丢了的必须记下来。 */
     private static String applyHeaders(Media media, Map<String, String> headers) {
         if (headers == null || headers.isEmpty()) return "";
+        // 注意：这里绝不能假设 headers 非 null —— 调用链上游曾经在无头时给 null，
+        // 结果点一个不带任何请求头的频道就 NPE 崩掉。
         StringBuilder lost = new StringBuilder();
         for (Map.Entry<String, String> e : headers.entrySet()) {
             String k = e.getKey().toLowerCase(java.util.Locale.US);
