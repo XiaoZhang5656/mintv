@@ -1395,22 +1395,27 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         int navW = Theme.px(Theme.NAV_W);
         int chanW = chanWidth();
 
-        // 抽屉态：左边整块是频道列（已左移到 0），右边是节目单
+        // ===== 抽屉态 =====
+        // [频道列 476][节目单 422][视频]
+        // 规则：
+        //   · 点节目单里的条目 → 回看
+        //   · 点左侧频道列      → 换台
+        //   · 点节目单右侧（视频区）→ 整个抽屉收起，回到「分类+频道」常态
         if (epgPanelOpen) {
-            // 最左侧一条热区：退出抽屉，恢复分类栏
-            if (x < Theme.px(48)) {
-                closeEpgPanel();
-                return true;
-            }
-            if (x < chanW) {
-                hitChannelColumn(x, y, 0);      // 频道列左移到 0 起
-                return true;
-            }
             int epgLeft = chanW + Theme.px(8);
-            if (x >= epgLeft) {
+            int epgRight = epgLeft + Theme.px(Theme.EPG_W);
+
+            if (x < chanW) {
+                hitChannelColumn(x, y, 0);
+                return true;
+            }
+            if (x < epgRight) {
                 int idx = epgPanel.itemAt(y);
                 if (idx >= 0) playReplay(playingChannel, idx);
+                return true;
             }
+            // 点在节目单右边（视频区）→ 收起抽屉，唤回分类栏
+            closeEpgPanel();
             return true;
         }
 
