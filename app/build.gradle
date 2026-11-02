@@ -14,8 +14,8 @@ android {
         // 两个一起用，卡在 19。要到 4.2.2(17) 就必须砍掉 media3。
         minSdk 19
         targetSdk 34
-        versionCode 83
-        versionName "2.5.1"
+        versionCode 84
+        versionName "2.5.2"
 
         // 注意：这里不能再写 ndk { abiFilters ... }。
         // AGP 会直接报 "Conflicting configuration : 'arm64-v8a,armeabi-v7a'

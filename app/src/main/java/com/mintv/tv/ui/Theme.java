@@ -69,9 +69,9 @@ public final class Theme {
                 FOCUS_BLUE   = 0xFF1E9BFF;
                 GOLD         = 0xFF7F93A8;
                 SEL_GREEN    = 0xFF2FA36B;
-                PANEL_NAV    = 0x14FFFFFF;
-                PANEL_ITEM   = 0x14FFFFFF;
-                PANEL_ACTIVE = 0x2A1E9BFF;
+                PANEL_NAV    = 0x24FFFFFF;
+                PANEL_ITEM   = 0x1CFFFFFF;
+                PANEL_ACTIVE = 0x3A1E9BFF;
                 FOCUS_BG     = 0x331E9BFF;
                 LINE         = 0x22FFFFFF;
                 CARD_BG      = 0xE60A1A26;
@@ -90,9 +90,9 @@ public final class Theme {
                 FOCUS_BLUE   = 0xFFFFA53D;
                 GOLD         = 0xFF9C8A70;
                 SEL_GREEN    = 0xFF8FB05A;
-                PANEL_NAV    = 0x12FFE9C8;
-                PANEL_ITEM   = 0x14FFE9C8;
-                PANEL_ACTIVE = 0x2AFFA53D;
+                PANEL_NAV    = 0x24FFE9C8;
+                PANEL_ITEM   = 0x1CFFE9C8;
+                PANEL_ACTIVE = 0x3AFFA53D;
                 FOCUS_BG     = 0x33FFA53D;
                 LINE         = 0x22FFE9C8;
                 CARD_BG      = 0xE61A1410;

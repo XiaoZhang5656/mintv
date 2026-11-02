@@ -219,7 +219,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-        getWindow().setBackgroundDrawable(new android.graphics.drawable.ColorDrawable(Color.BLACK));
+        getWindow().setBackgroundDrawable(new android.graphics.drawable.ColorDrawable(0xFF000000));
 
         // 用真实屏幕像素的长边做基准（与当前方向无关）。
         android.util.DisplayMetrics dm = new android.util.DisplayMetrics();
@@ -235,7 +235,9 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         loadPlaylist();
 
         FrameLayout root = new FrameLayout(this);
-        root.setBackgroundColor(Color.BLACK);
+        // 底色必须跟随主题：这是屏幕最大的面积，
+        // 写死黑色的话换主题看起来"完全没变"。
+        root.setBackgroundColor(Theme.BG);
 
         buildPlayer(root);
         buildOverlay(root);
