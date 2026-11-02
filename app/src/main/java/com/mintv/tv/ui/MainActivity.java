@@ -227,6 +227,8 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         int base = Math.max(dm.widthPixels, dm.heightPixels);
         android.util.Log.i("MinTV", "screen realMetrics=" + dm.widthPixels + "x" + dm.heightPixels + " base=" + base);
         Theme.init(base);
+        loadSelections();
+        Theme.applyPalette(getSharedPreferences(PREF, MODE_PRIVATE).getInt(KEY_UI_THEME, 0));
 
         errorPanel = ErrorPanel.install(this);
         CatchupProbe.init(this);
@@ -501,7 +503,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         LinearLayout nav = new LinearLayout(this);
         nav.setOrientation(LinearLayout.VERTICAL);
         nav.setPadding(Theme.px(22), Theme.px(34), Theme.px(22), 0);
-        nav.setBackgroundColor(0x0AFFFFFF);
+        nav.setBackgroundColor(Theme.PANEL_NAV);
 
         nav.addView(buildNavHeader(), new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, Theme.px(76)));
@@ -551,7 +553,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
 
         TextView chanHead = new TextView(this);
         chanHead.setText("节目 » 信息");
-        chanHead.setTextColor(0xFFECECEE);
+        chanHead.setTextColor(Theme.HEADER_TEXT);
         chanHead.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, Theme.sp(19));
         chanHead.setPadding(Theme.px(22), 0, 0, Theme.px(10));
         chan.addView(chanHead, new LinearLayout.LayoutParams(
@@ -621,7 +623,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         epgScroll = new ScrollView(this);
         epgScroll.setVerticalScrollBarEnabled(false);
         epgScroll.setOverScrollMode(View.OVER_SCROLL_NEVER);
-        epgScroll.setBackgroundColor(0x0AFFFFFF);
+        epgScroll.setBackgroundColor(Theme.PANEL_NAV);
         epgPanel = new EpgPanelView(this);
         epgScroll.addView(epgPanel, new android.widget.FrameLayout.LayoutParams(
                 android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
@@ -1340,6 +1342,9 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     private static final int ROW_ENGINE         = 11;
     private static final int ROW_CLOCK          = 12;
     private static final int ROW_OUTPUT         = 13;
+    private static final int ROW_THEME          = 14;
+    private static final String KEY_UI_THEME    = "ui_theme";
+    private static final String KEY_SELECTIONS  = "selections";
 
     /**
      * 「没画面」自愈的进度。0 = 还没处理，1 = 已切软解，2 = 已换过线路。
@@ -1815,6 +1820,33 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     private void saveAutoStartFlag() {
         getSharedPreferences(PREF, MODE_PRIVATE).edit()
                 .putBoolean(KEY_BOOT_AUTOSTART, autoStartOnBoot()).apply();
+    }
+
+    /**
+     * 设置项持久化。
+     *
+     * <p>以前这些选择只活在内存里，重启就回默认值 —— 用户改过解码方式、
+     * 超时秒数，下次打开又变回去。主题切换要 recreate()，不存就会把
+     * 其它设置一起冲掉，所以顺手把这块补齐。
+     */
+    private void loadSelections() {
+        String raw = getSharedPreferences(PREF, MODE_PRIVATE).getString(KEY_SELECTIONS, null);
+        if (raw == null || raw.isEmpty()) return;
+        String[] parts = raw.split(",");
+        for (int i = 0; i < parts.length && i < selections.length; i++) {
+            try { selections[i] = Integer.parseInt(parts[i].trim()); }
+            catch (NumberFormatException ignored) { }
+        }
+    }
+
+    private void saveSelections() {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < selections.length; i++) {
+            if (i > 0) sb.append(',');
+            sb.append(selections[i]);
+        }
+        getSharedPreferences(PREF, MODE_PRIVATE).edit()
+                .putString(KEY_SELECTIONS, sb.toString()).apply();
     }
 
     private void loadHeaders() {
@@ -2970,6 +3002,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     /** 设置项写入后调用：只处理需要立刻生效的项。 */
     private void onSettingCommitted(int row, int value) {
         selections[row] = value;
+        saveSelections();
         if (row == ROW_TIMEOUT) {
             armWatchdog();     // 立即按新策略重新计时
         } else if (row == ROW_DECODER) {
@@ -2995,6 +3028,13 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         } else if (row == ROW_AUTOPLAY) {
             saveAutoStartFlag();
             if (value == 0) showAutoStartGuide();
+        } else if (row == ROW_THEME) {
+            getSharedPreferences(PREF, MODE_PRIVATE).edit()
+                    .putInt(KEY_UI_THEME, value).apply();
+            Theme.applyPalette(value);
+            // 整套界面按新配色重建。只换颜色不动布局，所以重建是安全的，
+            // 玩家设置、播放状态都会在 recreate 后由各自的持久化恢复。
+            recreate();
         } else if (row == ROW_OUTPUT) {
             applyOutputMode();
             playChannel(playingChannel);

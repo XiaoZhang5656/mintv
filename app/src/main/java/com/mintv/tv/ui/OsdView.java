@@ -467,7 +467,7 @@ public class OsdView extends View {
 
         // 卡片底
         r.set(left, top, left + cardW, bottom);
-        fill.setColor(0xE0101216);
+        fill.setColor(Theme.CARD_BG);
         c.drawRoundRect(r, Theme.px(8), Theme.px(8), fill);
         // 左侧蓝条
         fill.setColor(Theme.FOCUS_BLUE);
@@ -514,11 +514,11 @@ public class OsdView extends View {
         float rowX = x;
         if (nowText != null) {
             y += lineSub * 0.8f;
-            p.setColor(0xFF8E8E93);
+            p.setColor(Theme.TEXT_SUB);
             p.setTextSize(Theme.sp(17));
             c.drawText("目前播放:", rowX, y, p);
             float labelW = p.measureText("目前播放:");
-            p.setColor(0xFFE6E6E8);
+            p.setColor(Theme.TEXT);
             p.setTextSize(lineSub);
             c.drawText(fit(nowText, cardW - padH * 2 - labelW - Theme.px(10), lineSub),
                     rowX + labelW + Theme.px(10), y, p);
@@ -539,7 +539,7 @@ public class OsdView extends View {
             fill.setColor(0xFF2F7BFF);
             r.set(rowX, barTop, rowX + barW * Math.min(1f, progress), barTop + barH);
             c.drawRoundRect(r, barH / 2f, barH / 2f, fill);
-            p.setColor(0xFFB9B9BD);
+            p.setColor(Theme.TEXT_SUB);
             p.setTextSize(Theme.sp(16));
             c.drawText(Math.round(progress * 100) + "%", rowX + barW + Theme.px(12),
                     barTop + barH + Theme.px(4), p);
@@ -549,11 +549,11 @@ public class OsdView extends View {
         // ---- 第 4 行：下个节目 ----
         if (nextText != null) {
             y += lineSub * 0.8f;
-            p.setColor(0xFF8E8E93);
+            p.setColor(Theme.TEXT_SUB);
             p.setTextSize(Theme.sp(17));
             c.drawText("下个节目:", rowX, y, p);
             float labelW = p.measureText("下个节目:");
-            p.setColor(0xFFC9C9CE);
+            p.setColor(Theme.TEXT);
             p.setTextSize(Theme.sp(17));
             c.drawText(fit(nextText, cardW - padH * 2 - labelW - Theme.px(10), Theme.sp(17)),
                     rowX + labelW + Theme.px(10), y, p);
@@ -578,7 +578,7 @@ public class OsdView extends View {
 
         // 右下角时钟
         String t = clockText != null ? clockText : nowClock();
-        p.setColor(0xFF9A9A9E);
+        p.setColor(Theme.TEXT_DIM);
         p.setTextSize(Theme.sp(16));
         p.setTextAlign(Paint.Align.RIGHT);
         c.drawText(t, left + cardW - padH, chipTop + chipH / 2f + Theme.px(5), p);

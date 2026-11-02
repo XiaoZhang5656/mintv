@@ -129,7 +129,7 @@ public class ChannelView extends BaseCardView {
         path.addRoundRect(rect, Theme.px(4), Theme.px(4), android.graphics.Path.Direction.CW);
         c.drawPath(path, numBg);
 
-        t.setColor(0xFFB9B9BD);
+        t.setColor(Theme.TEXT_SUB);
         t.setTextSize(numSize);
         t.setFakeBoldText(false);
         t.setTextAlign(Paint.Align.CENTER);
@@ -172,7 +172,7 @@ public class ChannelView extends BaseCardView {
             float bh = Theme.px(22);
             // 徽标贴右对齐，不和台名挤在一起
             float bx = getWidth() - padH - bw;
-            badgeBg.setColor("播放中".equals(badge) ? Theme.FOCUS_BLUE : 0x29FFFFFF);
+            badgeBg.setColor("播放中".equals(badge) ? Theme.FOCUS_BLUE : Theme.BADGE_BG);
             rect.set(bx, nameBaseline - bh + Theme.px(3), bx + bw, nameBaseline + Theme.px(3));
             path.reset();
             path.addRoundRect(rect, bh / 2f, bh / 2f, android.graphics.Path.Direction.CW);

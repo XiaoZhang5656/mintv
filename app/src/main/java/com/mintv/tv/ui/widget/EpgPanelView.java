@@ -145,13 +145,13 @@ public class EpgPanelView extends android.view.View {
     @Override
     protected void onDraw(Canvas c) {
         // 标题
-        p.setColor(0xFFECECEE);
+        p.setColor(Theme.HEADER_TEXT);
         p.setTextSize(Theme.sp(24));
         p.setFakeBoldText(false);
         c.drawText(fit(header, getWidth() - padH * 2, Theme.sp(24)), padH, Theme.px(42), p);
 
         // 标题分隔线
-        fill.setColor(0x1AFFFFFF);
+        fill.setColor(Theme.EPG_FOCUS_BG);
         c.drawRect(padH, headerH, getWidth() - padH, headerH + Theme.px(1), fill);
 
         float y = headerH;
@@ -174,11 +174,11 @@ public class EpgPanelView extends android.view.View {
                 r.set(padH - Theme.px(8), y, padH - Theme.px(6), y + itemH);
                 c.drawRect(r, fill);       // 左侧黄条
             } else if (it.live) {
-                fill.setColor(0x332F7BFF);
+                fill.setColor(Theme.EPG_LIVE_BG);
                 r.set(padH - Theme.px(8), y, getWidth() - padH + Theme.px(8), y + itemH);
                 c.drawRoundRect(r, Theme.px(4), Theme.px(4), fill);
             } else if (i == focusIndex && it.replay) {
-                fill.setColor(0x1AFFFFFF);
+                fill.setColor(Theme.EPG_FOCUS_BG);
                 r.set(padH - Theme.px(8), y, getWidth() - padH + Theme.px(8), y + itemH);
                 c.drawRoundRect(r, Theme.px(4), Theme.px(4), fill);
             }
@@ -187,13 +187,13 @@ public class EpgPanelView extends android.view.View {
 
             // 时间
             p.setColor(i == replayIndex ? 0xFFFFC53D
-                    : (it.live ? Theme.FOCUS_BLUE : 0xFF9A9A9E));
+                    : (it.live ? Theme.FOCUS_BLUE : Theme.TEXT_DIM));
             p.setTextSize(Theme.sp(20));
             c.drawText(it.time, padH, baseline, p);
 
             // 标题
             p.setColor(i == replayIndex ? 0xFFFFE3A3
-                    : (it.live ? Theme.TEXT : 0xFFE2E2E6));
+                    : (it.live ? Theme.TEXT : Theme.TEXT));
             p.setTextSize(Theme.sp(21));
             float tx = padH + timeW;
             float maxW = getWidth() - tx - padH - Theme.px(76);

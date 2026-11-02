@@ -24,7 +24,7 @@ public class RailView extends android.view.View {
         super(c);
         setWillNotDraw(false);
         p.setTypeface(Typeface.DEFAULT);
-        p.setColor(0xFFE8E8EA);
+        p.setColor(Theme.RAIL_TEXT);
         p.setTextSize(Theme.sp(Theme.TS_RAIL));
         p.setTextAlign(Paint.Align.CENTER);
     }
@@ -38,7 +38,7 @@ public class RailView extends android.view.View {
         p.setColor(Theme.LINE);
         c.drawRect(0, 0, Math.max(1, Theme.px(1)), getHeight(), p);
 
-        p.setColor(0xFFE8E8EA);
+        p.setColor(Theme.RAIL_TEXT);
         c.save();
         c.rotate(-90f, cx, cy);              // 逆时针 90°，文字从下往上读
         float base = cy - (p.descent() + p.ascent()) / 2f;
