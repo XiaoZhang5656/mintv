@@ -14,9 +14,10 @@ android {
         versionCode 43
         versionName "1.6.0"
 
-        // 只打两个 ARM 变体：盒子没有 x86 真机。
-        // 不过滤的话 libvlc 的 x86/x86_64 两个 so 会白塞进来 +47MB。
-        ndk { abiFilters 'arm64-v8a', 'armeabi-v7a' }
+        // 注意：这里不能再写 ndk { abiFilters ... }。
+        // AGP 会直接报 "Conflicting configuration : 'arm64-v8a,armeabi-v7a'
+        // in ndk abiFilters cannot be present when splits abi filters are set"。
+        // ABI 过滤统一由下面的 splits.abi.include 负责。
     }
 
     // 按 ABI 拆包。
