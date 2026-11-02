@@ -130,6 +130,8 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     private TextView infoPageText;
     /** 当前设置页的 Tab：0 账户登录 / 1 播放设置 / 2 手机助手 */
     private int currentTab = 1;
+    /** 焦点是否在顶部 Tab 条上。第一行按「上」进入，左右切页，下回列表。 */
+    private boolean tabFocus = false;
     private final int[] selections = DemoData.ROW_DEFAULT.clone();
 
     /**
@@ -1745,6 +1747,8 @@ public class MainActivity extends Activity implements FocusEngine.Host {
 
         epgScroll.setVisibility(View.VISIBLE);
         epgScroll.setAlpha(0f);
+        epgCursor = epgPanel == null ? -1 : epgPanel.liveIndex();
+        if (epgCursor >= 0 && epgPanel != null) epgPanel.setFocus(epgCursor);
         epgScroll.animate().alpha(1f).setDuration(Theme.T_PANEL).start();
 
         // 分类栏滑出屏幕
@@ -1876,6 +1880,8 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     }
 
     private boolean epgPanelOpen = false;
+    /** 节目单里方向键的光标位置。抽屉展开时从"正在播"那一条开始。 */
+    private int epgCursor = -1;
     /** 当前节目单窗口里每一条对应的原始节目，下标与 EpgPanelView 的行一一对应。 */
     private final java.util.ArrayList<EpgParser.Program> epgWindow = new java.util.ArrayList<>();
     /** 正在回放的节目开始时间；-1 表示当前是直播。用来在节目单里打黄色高亮。 */
@@ -1955,6 +1961,67 @@ public class MainActivity extends Activity implements FocusEngine.Host {
      * 用户点错一条老节目，就只能换台再换回来。EPG 上「直播中」那一行
      * 就是最自然的入口，点它就回直播。
      */
+    /**
+     * 节目单的方向键操作。
+     *
+     * <p>之前节目单只响应触摸：遥控器能打开抽屉，却选不中任何一条节目，
+     * 「回看」在纯遥控器设备上等于不存在。
+     * 这里补上标准做法：上下移光标、OK 确认、左键收起。
+     */
+    private boolean handleEpgKey(int keyCode) {
+        if (epgPanel == null) { closeEpgPanel(); return false; }
+
+        switch (keyCode) {
+            case KeyEvent.KEYCODE_DPAD_UP:
+            case KeyEvent.KEYCODE_DPAD_DOWN: {
+                int n = epgPanel.count();
+                if (n <= 0) return true;
+                if (epgCursor < 0) epgCursor = Math.max(0, epgPanel.liveIndex());
+                epgCursor += (keyCode == KeyEvent.KEYCODE_DPAD_DOWN) ? 1 : -1;
+                if (epgCursor < 0) epgCursor = 0;
+                if (epgCursor > n - 1) epgCursor = n - 1;
+                epgPanel.setFocus(epgCursor);
+                scrollEpgTo(epgCursor);
+                return true;
+            }
+            case KeyEvent.KEYCODE_DPAD_CENTER:
+            case KeyEvent.KEYCODE_ENTER: {
+                int ch = focus.chanIndex() >= 0 ? focus.chanIndex() : playingChannel;
+                EpgParser.Program prog = programAt(ch, epgCursor);
+                if (prog == null) return true;
+                long now = System.currentTimeMillis();
+                if (prog.startMs <= now && prog.stopMs > now) {
+                    returnToLive(ch);
+                } else if (prog.stopMs <= now) {
+                    playReplay(ch, epgCursor);
+                } else {
+                    osd.toast("该节目还没开始");
+                }
+                return true;
+            }
+            case KeyEvent.KEYCODE_DPAD_LEFT:
+                closeEpgPanel();
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    /** 让光标那一行保持可见。 */
+    private void scrollEpgTo(int index) {
+        if (epgScroll == null || epgPanel == null) return;
+        float top = epgPanel.topOf(index);
+        float h = epgPanel.itemHeightPx();
+        int viewH = epgScroll.getHeight();
+        int scrollY = epgScroll.getScrollY();
+        int target = scrollY;
+        if (top < scrollY + Theme.px(20)) target = (int) (top - Theme.px(20));
+        else if (top + h > scrollY + viewH - Theme.px(20)) {
+            target = (int) (top + h - viewH + Theme.px(20));
+        }
+        if (target != scrollY) epgScroll.smoothScrollTo(0, Math.max(0, target));
+    }
+
     private void returnToLive(int channelIndex) {
         replayStartMs = -1;
         if (epgPanel != null) epgPanel.setReplayIndex(-1);
@@ -2200,6 +2267,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     }
 
     private void openSettings() {
+        tabFocus = false;
         if (tabViews.size() > currentTab) showTab(Math.max(0, currentTab));
         if (gestureLayer != null) gestureLayer.setVisibility(View.GONE);
         dialogRoot.setVisibility(View.VISIBLE);
@@ -2212,6 +2280,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     }
 
     private void closeSettings() {
+        tabFocus = false;
         dialogRoot.setVisibility(View.GONE);
         if (gestureLayer != null && !panelVisible) gestureLayer.setVisibility(View.VISIBLE);
         focus.exitSettings();
@@ -2546,10 +2615,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         }
 
         // 抽屉态：左键 / 返回 → 收起抽屉，回到「分类 + 频道」
-        if (epgPanelOpen && keyCode == KeyEvent.KEYCODE_DPAD_LEFT) {
-            closeEpgPanel();
-            return true;
-        }
+        if (epgPanelOpen && handleEpgKey(keyCode)) return true;
 
         if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT && focus.zone() == FocusEngine.Zone.CHAN) {
             showEpgPanel(focus.chanIndex());
@@ -2620,6 +2686,33 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     private boolean handleSettingsKey(int keyCode, KeyEvent event) {
         if (keyCode == KeyEvent.KEYCODE_BACK || keyCode == KeyEvent.KEYCODE_ESCAPE) {
             closeSettings();
+            return true;
+        }
+
+        // Tab 条：在第一行按「上」进入，左右切页，「下」或 OK 回到列表。
+        // 以前 Tab 只响应触摸，遥控器永远切不到「账户登录 / 手机助手」。
+        if (tabFocus) {
+            if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT) {
+                currentTab = (currentTab + DemoData.TABS.length - 1) % DemoData.TABS.length;
+                showTab(currentTab);
+                return true;
+            }
+            if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) {
+                currentTab = (currentTab + 1) % DemoData.TABS.length;
+                showTab(currentTab);
+                return true;
+            }
+            if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN
+                    || keyCode == KeyEvent.KEYCODE_DPAD_CENTER
+                    || keyCode == KeyEvent.KEYCODE_ENTER) {
+                tabFocus = false;
+                applyRowFocus(focus.rowIndex());
+                return true;
+            }
+            return true;
+        }
+        if (keyCode == KeyEvent.KEYCODE_DPAD_UP && focus.rowIndex() == 0) {
+            tabFocus = true;
             return true;
         }
         if (keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER) {

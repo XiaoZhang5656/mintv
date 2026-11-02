@@ -121,6 +121,12 @@ public class EpgPanelView extends android.view.View {
         invalidate();
     }
 
+    /** 第 i 行的顶部 y（含标题高度），给方向键滚动定位用。 */
+    public float topOf(int i) { return headerH + i * itemH; }
+
+    /** 单行高度。 */
+    public float itemHeightPx() { return itemH; }
+
     public int itemAt(float y) {
         float top = headerH;
         int i = (int) ((y - top) / itemH);
