@@ -291,31 +291,29 @@ public class OsdView extends View {
         // 白色大号数字、半透明圆角底、右对齐，一眼看清已经按了几位，
         // 又不会挡住画面主体和下方 OSD 卡片。位置跟时钟错开（时钟在 topMargin 18），
         // 所以这里从上方 130px 开始往下排。
-        // 大号台号 / 数字输入：**屏幕正中**（视频区居中，让开左侧面板）。
-        // 机顶盒习惯就是这么显示的 —— 换台/按数字时一眼看到台号，
-        // 放在右上角反而要去找。垂直放 40%，上方离时钟远、下方不压 OSD 卡片。
+        // 台号 / 数字输入：**右上角**，并且压在日期时间下面，不覆盖时钟。
+        // 时钟在 top=18、高约 90（含两行），所以这里从 150 起排。
+        // 字号从 76 收到 52 —— 之前那版太大，一块黑底占掉小半个画面。
         String bigNumber = (numberInput != null && !numberInput.isEmpty())
                 ? numberInput : channelPulse;
         if (bigNumber != null && !bigNumber.isEmpty()) {
-            float avail = w - leftInset;
-            float cx = leftInset + avail / 2f;
-            float cy = h * 0.40f;
-
-            p.setTextSize(Theme.sp(76));
-            p.setTextAlign(Paint.Align.CENTER);
+            p.setTextSize(Theme.sp(52));
+            p.setTextAlign(Paint.Align.RIGHT);
             p.setFakeBoldText(true);
             float tw = p.measureText(bigNumber);
+            float right = w - Theme.px(36);
+            float top = Theme.px(150);
+            float boxH = Theme.px(74);
+            float padX = Theme.px(24);
 
             fill.setColor(0xB3000000);
-            r.set(cx - tw / 2f - Theme.px(56), cy - Theme.px(78),
-                    cx + tw / 2f + Theme.px(56), cy + Theme.px(70));
-            c.drawRoundRect(r, Theme.px(14), Theme.px(14), fill);
+            r.set(right - tw - padX, top, right + padX, top + boxH);
+            c.drawRoundRect(r, Theme.px(10), Theme.px(10), fill);
 
             p.setColor(0xFFFFFFFF);
-            p.setShadowLayer(Theme.px(8), 0, 0, 0xAA000000);
-            // 用字体度量把字垂直居中在黑底里，别再靠硬编码基线偏一点
-            float baseline = cy - (p.descent() + p.ascent()) / 2f;
-            c.drawText(bigNumber, cx, baseline, p);
+            p.setShadowLayer(Theme.px(6), 0, 0, 0xAA000000);
+            float baseline = top + boxH / 2f - (p.descent() + p.ascent()) / 2f;
+            c.drawText(bigNumber, right, baseline, p);
             p.setShadowLayer(0, 0, 0, 0);
             p.setFakeBoldText(false);
             p.setTextAlign(Paint.Align.LEFT);
