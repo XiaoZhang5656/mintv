@@ -305,7 +305,9 @@ public class MainActivity extends Activity implements FocusEngine.Host {
 
         // TextureView：走 GPU 合成，跟着视图树走。默认用它。
         textureView = new android.view.TextureView(this);
-        textureView.setBackgroundColor(Color.BLACK);
+        // 注意：TextureView 不允许 setBackgroundDrawable/setBackgroundColor，
+        // 会直接抛 UnsupportedOperationException 把 Activity 干掉。
+        // 底色交给下面垫一层的 root 背景（黑色）就够了。
         // TextureView 没有 SurfaceHolder.Callback，必须走 SurfaceTextureListener。
         // 不接这个回调，默认用 TextureView 时就没人触发起播（只有 SurfaceView
         // 那条 surfaceCreated 会调用 playChannel），表现为一直黑屏不播。
