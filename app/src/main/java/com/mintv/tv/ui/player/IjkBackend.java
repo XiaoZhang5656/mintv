@@ -139,9 +139,7 @@ public final class IjkBackend implements PlaybackBackend {
         // 崩在 ff_read 线程里，Java 层连 Throwable 都拿不到，所以表现为直接闪退。
         // 实测 strings libijkffmpeg.so 能搜到 ijkio / reconnect / dns_cache_clear
         // 三个符号，印证它们同属 ijkio 这一层。
-        p.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "timeout", 8_000_000L);
-        p.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "probesize", live ? 512 * 1024L : 2 * 1024 * 1024L);
-        p.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "analyzeduration", live ? 800_000L : 2_000_000L);
+        // format 选项也压到最少。low latency 靠 setOption 之外的默认行为。
         // FFmpeg 的 http 协议只有两个入口：user_agent 和 headers（多行字符串）。
         // 以前 referer / cookie 单独当 option 塞进去，FFmpeg 根本不认，
         // 需要特定头的 ts 就这么黑着。现在按 FFmpeg 的实际语义翻译。
@@ -166,20 +164,17 @@ public final class IjkBackend implements PlaybackBackend {
             p.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "user_agent", "MinTV/1.0");
         }
         // ---- player ----
-        p.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "framedrop", 5L);
-        p.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "max-fps", 31L);
-        p.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "packet-buffering", 0L);
-        p.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "start-on-prepared", 1L);
-        p.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "enable-accurate-seek", live ? 0L : 1L);
-        p.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "find_stream_info", 1L);
-        // ---- codec：低端 CPU 必开 ----
-        p.setOption(IjkMediaPlayer.OPT_CATEGORY_CODEC, "skip_loop_filter", 48L);   // AVDISCARD_ALL
-        p.setOption(IjkMediaPlayer.OPT_CATEGORY_CODEC, "threads", 2L);
+        //
+        // 这里刻意只留最少的选项。崩溃现场是：
+        //   fault addr 0x2d74656b636170，按 ASCII 解出来正是 "packet-"
+        //   （"packet-buffering" 的前缀），说明 native 侧把一个**选项字符串**
+        //   当成函数指针调用了 —— libijkffmpeg 里 av_application_on_http_event+24
+        //   读到的回调指针被选项字符串覆盖，本质是 ABI/结构体布局错位。
+        // 每多设一个 PLAYER 选项就多一次这种写坏的机会，所以砍到只剩必需的。
+        // 动态码率下 framedrop 交给 FFmpeg 默认值，不再显式设置。
+        // ---- codec：只留硬解开关 ----
         p.setOption(IjkMediaPlayer.OPT_CATEGORY_CODEC, "mediacodec", 1L);
-        p.setOption(IjkMediaPlayer.OPT_CATEGORY_CODEC, "mediacodec-auto-rotate", 1L);
         p.setOption(IjkMediaPlayer.OPT_CATEGORY_CODEC, "mediacodec-handle-resolution-change", 1L);
-        p.setOption(IjkMediaPlayer.OPT_CATEGORY_CODEC, "mediacodec-avc", 1L);
-        p.setOption(IjkMediaPlayer.OPT_CATEGORY_CODEC, "opensles", 0L);
 
         p.setOnPreparedListener(new IMediaPlayer.OnPreparedListener() {
             @Override public void onPrepared(IMediaPlayer mp) {
