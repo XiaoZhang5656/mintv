@@ -79,6 +79,12 @@ public final class Theme {
                 EPG_LIVE_BG  = 0x331E9BFF;
                 EPG_FOCUS_BG = 0x1EFFFFFF;
                 FOCUS_STROKE = 3;
+                DLG_BG       = 0xFF0E1A26;
+                DLG_ROW_BG   = 0xFF162639;
+                DLG_OPT_BG   = 0xFF1F3550;
+                DLG_OPT_SEL  = 0xFF1E5C3A;
+                DLG_OPT_TXT_ON = 0xFFE6FFF2;
+                DLG_CHECK    = 0xFF3FD98B;
                 HEADER_TEXT  = 0xFFEAF4FF;
                 RAIL_TEXT    = 0xFFCFE6FF;
                 SCRIM_COLORS = new int[]{0xF0000812, 0xE0000812, 0x8C000812, 0x00000000};
@@ -101,6 +107,12 @@ public final class Theme {
                 EPG_LIVE_BG  = 0x33FFA53D;
                 EPG_FOCUS_BG = 0x1EFFE9C8;
                 FOCUS_STROKE = 3;
+                DLG_BG       = 0xFF221A12;
+                DLG_ROW_BG   = 0xFF2E2418;
+                DLG_OPT_BG   = 0xFF3C2F1F;
+                DLG_OPT_SEL  = 0xFF4A3A1E;
+                DLG_OPT_TXT_ON = 0xFFFFF1DC;
+                DLG_CHECK    = 0xFFD8A54A;
                 HEADER_TEXT  = 0xFFFFF1E0;
                 RAIL_TEXT    = 0xFFF0DCC4;
                 SCRIM_COLORS = new int[]{0xF01A0F06, 0xE01A0F06, 0x8C1A0F06, 0x00000000};
@@ -122,6 +134,13 @@ public final class Theme {
                 BADGE_BG     = 0x29FFFFFF;
                 EPG_LIVE_BG  = 0x332F7BFF;
                 EPG_FOCUS_BG = 0x1AFFFFFF;
+                FOCUS_STROKE = 2;
+                DLG_BG       = 0xFF232426;
+                DLG_ROW_BG   = 0xFF2B2C2E;
+                DLG_OPT_BG   = 0xFF3A3B3E;
+                DLG_OPT_SEL  = 0xFF31543A;
+                DLG_OPT_TXT_ON = 0xFFEAF7EE;
+                DLG_CHECK    = 0xFF4ADE80;
                 HEADER_TEXT  = 0xFFECECEE;
                 RAIL_TEXT    = 0xFFE8E8EA;
                 SCRIM_COLORS = new int[]{0xF0000000, 0xE0000000, 0x8C000000, 0x00000000};
@@ -159,12 +178,12 @@ public final class Theme {
     public static final int DLG_W        = 1300;
     public static final int DLG_TOP      = 96;
     public static final int DLG_RADIUS   = 6;
-    public static final int DLG_BG       = 0xFF232426;
-    public static final int DLG_ROW_BG   = 0xFF2B2C2E;
-    public static final int DLG_OPT_BG   = 0xFF3A3B3E;
-    public static final int DLG_OPT_SEL  = 0xFF31543A;
-    public static final int DLG_OPT_TXT_ON = 0xFFEAF7EE;
-    public static final int DLG_CHECK    = 0xFF4ADE80;
+    public static int DLG_BG = 0xFF232426;
+    public static int DLG_ROW_BG = 0xFF2B2C2E;
+    public static int DLG_OPT_BG = 0xFF3A3B3E;
+    public static int DLG_OPT_SEL = 0xFF31543A;
+    public static int DLG_OPT_TXT_ON = 0xFFEAF7EE;
+    public static int DLG_CHECK = 0xFF4ADE80;
 
     // ---------- 动画时长 ----------
     public static final int T_FOCUS   = 120;
