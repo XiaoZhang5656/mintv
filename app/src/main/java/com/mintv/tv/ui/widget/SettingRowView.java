@@ -66,6 +66,17 @@ public class SettingRowView extends android.view.View {
 
     private OnOptionClick onOptionClick;
 
+    /**
+     * 动作行：选项是「上一条 / 下一条」这种一次性动作，没有"当前值"。
+     * 这种行不该常驻绿底勾 —— 否则用户永远看到 ◀ 被选中，以为选错了。
+     */
+    private boolean actionRow = false;
+
+    public void setActionRow(boolean v) {
+        this.actionRow = v;
+        if (v) setSelected(-1);
+    }
+
     public void setOnOptionClick(OnOptionClick l) { this.onOptionClick = l; }
 
     /**
@@ -83,7 +94,7 @@ public class SettingRowView extends android.view.View {
         if (x >= 0 && x <= seg.getWidth() && y >= 0 && y <= seg.getHeight()) {
             int idx = seg.indexAt(x);
             if (idx >= 0) {
-                setSelected(idx);
+                if (!actionRow) setSelected(idx);   // 动作行不留选中态
                 if (onOptionClick != null) onOptionClick.onOption(this, idx);
                 return true;
             }

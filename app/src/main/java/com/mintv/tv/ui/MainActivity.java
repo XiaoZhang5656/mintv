@@ -202,6 +202,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
 
         focus.attach(this);
         loadHeaders();
+        recoverFromEngineCrash();
         focus.setNavCount(categories.size());
         focus.setChannelCount(channels.size());
         bindChannels();
@@ -223,6 +224,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                 watchdogFired = true;
                 ui.removeCallbacks(playbackWatchdog);
                 osd.setStatus(null);
+                clearEngineAttempt();       // 出帧了，内核稳定
             }
 
             @Override public void onVideoUnavailable(String reason) {
@@ -255,7 +257,11 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         };
         playerManager.setCallback(playerCallback);
         // 解码方式那一项现在表示"内核"：0 Exo / 1 IJK / 2 VLC
-        playerManager.setEngine(engineOf(selections[ROW_DECODER]), true);
+        // 注意：这里读的是 ROW_ENGINE（播放内核），不是 ROW_DECODER（解码方式）。
+        // 之前写成 ROW_DECODER，等于把「软解=1」当成「内核=IJK」，
+        // 用户只是切了个软解，内核就悄悄换成 IJK 然后崩掉。
+        playerManager.setEngine(engineOf(selections[ROW_ENGINE]), true);
+        if (selections[ROW_ENGINE] != 0) markEngineAttempt(engineOf(selections[ROW_ENGINE]));
 
         // Surface 一就绪就开播，避免先黑屏再起播
         surfaceView.getHolder().addCallback(new SurfaceHolder.Callback() {
@@ -925,7 +931,64 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     // ================= 全局请求头 =================
 
     private static final String PREF = "mintv";
+    /** 本次会话正在试用的内核。若进程被 native 崩溃带走，下次启动靠它识别。 */
+    private static final String KEY_ENGINE_TRY = "engine_try";
     private static final String KEY_HEADERS = "global_headers";
+
+    /**
+     * 内核「试运行」标记。
+     *
+     * <p>为什么要这个：IJK 0.8.8 的崩溃是 native 层的 SIGSEGV
+     * （libijkffmpeg.so / av_application_on_http_event），崩在 ff_read 线程里，
+     * Java 的 Thread.setDefaultUncaughtExceptionHandler **完全收不到**，
+     * 进程直接被信号杀掉。所以没法在崩溃当场弹框 —— 只能提前埋标记，
+     * 下次启动发现"上次声明要用 IJK，却没走到首帧"，就判定它挂了。
+     *
+     * <p>这是 native 崩溃唯一可行的"拦截"方式：事后识别 + 自动回退，
+     * 而不是当场捕获。
+     */
+    private void markEngineAttempt(PlaybackEngine e) {
+        getSharedPreferences(PREF, MODE_PRIVATE).edit()
+                .putString(KEY_ENGINE_TRY, e.name()).apply();
+    }
+
+    /** 首帧出来了 → 内核稳定，把标记清掉。 */
+    private void clearEngineAttempt() {
+        getSharedPreferences(PREF, MODE_PRIVATE).edit()
+                .remove(KEY_ENGINE_TRY).apply();
+    }
+
+    /**
+     * 启动时检查上个会话是不是崩在内核上。
+     * 是的话把引擎退回 ExoPlayer，并明确告诉用户发生了什么。
+     */
+    private void recoverFromEngineCrash() {
+        String tried = getSharedPreferences(PREF, MODE_PRIVATE)
+                .getString(KEY_ENGINE_TRY, null);
+        if (tried == null) return;
+        getSharedPreferences(PREF, MODE_PRIVATE).edit().remove(KEY_ENGINE_TRY).apply();
+
+        PlaybackEngine bad;
+        try {
+            bad = PlaybackEngine.valueOf(tried);
+        } catch (Throwable t) {
+            return;
+        }
+        if (bad == PlaybackEngine.EXO) return;   // Exo 挂了不是内核兼容问题
+
+        selections[ROW_ENGINE] = 0;             // 退回 Exo
+        if (rowViews.size() > ROW_ENGINE) rowViews.get(ROW_ENGINE).setSelected(0);
+
+        final String msg = "上次切到 " + bad.label + " 内核后进程被原生库杀死"
+                + "（native SIGSEGV，Java 层拦不住），已自动切回 ExoPlayer。\n\n"
+                + "这不是脚本错误，是 " + bad.label + " 的 .so 与当前系统不兼容。";
+        ui.post(new Runnable() {
+            @Override public void run() {
+                osd.toast("上次 " + bad.label + " 内核崩溃，已回退 ExoPlayer");
+                CrashActivity.launch(MainActivity.this, "内核崩溃已回退", msg);
+            }
+        });
+    }
 
     private void loadHeaders() {
         String raw = getSharedPreferences(PREF, MODE_PRIVATE).getString(KEY_HEADERS, "");
@@ -1021,14 +1084,12 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         int n = ch.sources.size();
         if (n <= 1) {
             osd.toast("该频道只有一条线路");
-            if (rowViews.size() > ROW_SOURCE) rowViews.get(ROW_SOURCE).setSelected(0);
             return;
         }
         currentLine = ((currentLine + delta) % n + n) % n;
         resetNoVideoStage();          // 手动换线不算自愈，把降级进度清掉
         osd.toast("切换线路 " + (currentLine + 1) + "/" + n);
         playChannel(playingChannel);
-        if (rowViews.size() > ROW_SOURCE) rowViews.get(ROW_SOURCE).setSelected(0);
     }
 
     /** 切换内核并立刻重开当前源。 */
@@ -1136,10 +1197,12 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         PlaylistParser.Channel ch = (playingChannel >= 0 && playingChannel < channels.size())
                 ? channels.get(playingChannel) : null;
         int total = ch == null ? 1 : Math.max(1, ch.sources.size());
-        String[] labels = {"◀", "源 " + (currentLine + 1) + "/" + total, "▶"};
+        String[] labels = {"◀ 上一条", "源 " + (currentLine + 1) + "/" + total, "下一条 ▶"};
         SettingRowView row = rowViews.get(ROW_SOURCE);
+        row.setActionRow(true);
+        // -1 = 不画绿底勾：这是动作行，没有"当前值"这回事
         row.bind(DemoData.ROW_TITLES[ROW_SOURCE][0], DemoData.ROW_TITLES[ROW_SOURCE][1],
-                labels, 0);
+                labels, -1);
     }
 
     private void refreshOsdTags() {
@@ -1879,6 +1942,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                 return;
             }
             resetNoVideoStage();
+            markEngineAttempt(e);
             rebuildEngine(e, true);
             playChannel(playingChannel);
         } else if (row == ROW_HEADERS) {
