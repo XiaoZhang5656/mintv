@@ -66,7 +66,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     // ---- 三栏 ----
     private final List<NavItemView> navViews = new ArrayList<>();
     private final List<ChannelView> chanViews = new ArrayList<>();
-    private LinearLayout chanColumn;
+    private FrameLayout chanColumn;   // 频道行池容器（绝对定位）
     private View navPanel, chanPanel, railView, scrim, navDivider;
     private View chanContainer;   // 频道列的外层，抽屉展开时整体左移
     private ScrollView chanScroll;
@@ -481,9 +481,11 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         chanScroll = new ScrollView(this);
         chanScroll.setVerticalScrollBarEnabled(false);
         chanScroll.setOverScrollMode(View.OVER_SCROLL_NEVER);
-        chanColumn = new LinearLayout(this);
-        chanColumn.setOrientation(LinearLayout.VERTICAL);
+        // 用 FrameLayout + topMargin 绝对定位：行池里每个 View 会被反复绑定到
+        // 不同频道的不同位置，LinearLayout 的"顺序堆叠"语义用不上。
+        chanColumn = new FrameLayout(this);
         // 高度必须 WRAP_CONTENT，ScrollView 才知道内容比视口高、可以滚动
+        // 高度由 bindChannels() 按「频道数 × 行高」算好后设，ScrollView 才知道能滚多远
         chanScroll.addView(chanColumn, new ScrollView.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT));
@@ -817,112 +819,206 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         }
     }
 
+    // ================= 频道列表：固定行池 + 只绑可见行 =================
+    //
+    // 原来是一次性给 839 个频道各建一个 ChannelView，全部挂在 ScrollView 里。
+    // 代价：839 个自绘 View 常驻（每个带 Paint、Bitmap 引用），
+    // 切分类要全部重建，低端盒子上切一次卡一次。
+    //
+    // 现在只保留「一屏 + 上下各 2 行」个 View，滚动时重新绑定。
+    // 没有用 RecyclerView：这个项目的前提就是零第三方控件，
+    // 而且我们需要对焦点、点击命中、台标加载做精确控制，
+    // 自己写一个固定池比把 RecyclerView 调教到听话更简单。
+    //
+    // 具体做法：
+    //   · chanColumn 高度 = 频道数 × 行高，交给 ScrollView 原生滚动（保留惯性）；
+    //   · 行池里每个 View 用 topMargin 定位到它当前绑定的那一行；
+    //   · 滚动停止/变化时，只在「首个可见行变了」的时候重新绑定。
+
+    private static final int POOL_EXTRA_ROWS = 4;
+
+    /** 行池里每个 View 当前绑定的频道下标，与 chanViews 一一对应。-1 表示空。 */
+    private final List<Integer> chanBind = new ArrayList<>();
+    /** 当前行池覆盖的起始频道下标。 */
+    private int poolStart = -1;
+
+    private int rowH() {
+        return Theme.px(Theme.CHAN_ITEM_H + Theme.CHAN_ITEM_GAP);
+    }
+
+    private int listTopPx() {
+        return Theme.px(26) + Theme.px(50);
+    }
+
     private void bindChannels() {
         chanColumn.removeAllViews();
         chanViews.clear();
-        for (int i = 0; i < channels.size(); i++) {
-            final PlaylistParser.Channel ch = channels.get(i);
-            final ChannelView v = new ChannelView(this);
-            v.setNumber(ch.number);
-            v.setName(ch.name);
-            v.setSub("");                       // 没接 EPG 就不画副行，不编造假节目
-            v.setBadge(null);
+        chanBind.clear();
+        poolStart = -1;
+        resetChannelFocusCache();
 
-            final int chanIndex = i;
+        if (channels.isEmpty()) {
+            focus.setChannelCount(0);
+            return;
+        }
+
+        int total = channels.size();
+        int itemH = rowH();
+
+        // 内容总高：让 ScrollView 的滚动条和惯性按真实列表长度走
+        ViewGroup.LayoutParams clp = chanColumn.getLayoutParams();
+        int contentH = total * itemH + Theme.px(20);
+        if (clp == null) {
+            clp = new ScrollView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, contentH);
+        }
+        clp.height = contentH;
+        chanColumn.setLayoutParams(clp);
+
+        int viewH = chanScroll != null && chanScroll.getHeight() > 0
+                ? chanScroll.getHeight() : getWindow().getDecorView().getHeight();
+        int poolSize = Math.max(6, viewH / itemH + POOL_EXTRA_ROWS);
+
+        for (int i = 0; i < poolSize; i++) {
+            final ChannelView v = new ChannelView(this);
             v.setClickable(true);
             v.setOnClickListener(new View.OnClickListener() {
-                @Override public void onClick(View view) { onChannelClicked(chanIndex); }
+                @Override public void onClick(View view) {
+                    Object tag = view.getTag();
+                    if (tag instanceof Integer) onChannelClicked((Integer) tag);
+                }
             });
-            LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(
+            FrameLayout.LayoutParams p = new FrameLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, Theme.px(Theme.CHAN_ITEM_H));
             p.leftMargin = Theme.px(14);
             p.rightMargin = Theme.px(14);
-            p.topMargin = Theme.px(i == 0 ? 0 : Theme.CHAN_ITEM_GAP / 2);
-            p.bottomMargin = Theme.px(Theme.CHAN_ITEM_GAP / 2);
-            chanColumn.addView(v, p);
+            p.topMargin = Theme.px(Theme.CHAN_ITEM_GAP / 2);
+            v.setLayoutParams(p);
+            v.setVisibility(View.GONE);
+            chanColumn.addView(v);
             chanViews.add(v);
+            chanBind.add(-1);
         }
-        focus.setChannelCount(channels.size());
-        resetChannelFocusCache();
-        refreshChannelSubs();
-        // 台标改成按可见范围惰性加载，绝不在绑定阶段全量入队
+
+        // 分类切换后必须回到顶部：内容高度变了，旧 scrollY 可能越界
+        if (chanScroll != null) chanScroll.scrollTo(0, 0);
+
+        focus.setChannelCount(total);
         attachScrollLoader();
         ui.post(new Runnable() {
-            @Override public void run() { loadVisibleLogos(); }
+            @Override public void run() {
+                syncPool(true);
+                applyFocusToPool();
+            }
         });
     }
 
-    /** 列表滚动时补加载新露出行的台标。只挂一次监听。 */
+    /**
+     * 把行池滚到当前可见区域。
+     *
+     * @param force true 时无条件重绑（列表刚建好、分类切换）
+     */
+    private void syncPool(boolean force) {
+        if (chanViews.isEmpty() || channels.isEmpty()) return;
+        int itemH = rowH();
+        int scrollY = chanScroll == null ? 0 : chanScroll.getScrollY();
+        int first = (scrollY - listTopPx()) / itemH;
+        if (first < 0) first = 0;
+        if (!force && first == poolStart) return;
+        poolStart = first;
+
+        for (int k = 0; k < chanViews.size(); k++) {
+            ChannelView v = chanViews.get(k);
+            int idx = first + k;
+            if (idx >= channels.size()) {
+                chanBind.set(k, -1);
+                v.setTag(null);
+                if (v.getVisibility() != View.GONE) v.setVisibility(View.GONE);
+                continue;
+            }
+            if (v.getVisibility() != View.VISIBLE) v.setVisibility(View.VISIBLE);
+            FrameLayout.LayoutParams p = (FrameLayout.LayoutParams) v.getLayoutParams();
+            int top = listTopPx() + idx * itemH;
+            if (p.topMargin != top) {
+                p.topMargin = top;
+                v.setLayoutParams(p);
+            }
+            chanBind.set(k, idx);
+            v.setTag(idx);
+            bindRow(v, idx);
+        }
+        refreshChannelSubs();
+        requestLogosForPool();
+    }
+
+    /** 把一个池化的行绑到具体频道。 */
+    private void bindRow(ChannelView v, int idx) {
+        PlaylistParser.Channel ch = channels.get(idx);
+        v.setNumber(ch.number);
+        v.setName(ch.name);
+        v.setSub("");
+        v.setBadge(null);
+        v.setLogo(null);
+    }
+
+    /** 频道下标 → 池里正在显示它的 View；不在池里返回 null。 */
+    private ChannelView viewForChannel(int channelIndex) {
+        for (int k = 0; k < chanBind.size(); k++) {
+            if (chanBind.get(k) == channelIndex) return chanViews.get(k);
+        }
+        return null;
+    }
+
+    private void applyFocusToPool() {
+        int fi = focus.chanIndex();
+        for (int k = 0; k < chanViews.size(); k++) {
+            chanViews.get(k).setFocused(chanBind.get(k) == fi, false);
+        }
+    }
+
+    /** 列表滚动时：重绑行池 + 补台标。滚动中不重绑，等停一下再做，避免抖。 */
     private void attachScrollLoader() {
         if (chanScroll == null) return;
         if (chanScroll.getTag() != null) return;
         chanScroll.setTag(Boolean.TRUE);
         chanScroll.setOnScrollChangeListener(new View.OnScrollChangeListener() {
             @Override public void onScrollChange(View v, int sx, int sy, int osx, int osy) {
-                // 滚完再拉，避免滚动中频繁触发
-                ui.removeCallbacks(scrollLogoTask);
-                ui.postDelayed(scrollLogoTask, 80);
+                ui.removeCallbacks(scrollPoolTask);
+                ui.postDelayed(scrollPoolTask, 16);
             }
         });
     }
 
-    private final Runnable scrollLogoTask = new Runnable() {
-        @Override public void run() { loadVisibleLogos(); }
+    private final Runnable scrollPoolTask = new Runnable() {
+        @Override public void run() {
+            syncPool(false);
+            applyFocusToPool();
+        }
     };
 
-    /** 只给「当前屏幕能看到 + 前后各 2 行」的频道请求台标。 */
-    private void loadVisibleLogos() {
-        if (chanViews.isEmpty()) return;
-        ViewGroup parent = (ViewGroup) chanColumn.getParent();
-        if (!(parent instanceof ScrollView)) {
-            requestLogos(0, chanViews.size());
-            return;
-        }
-        ScrollView sv = (ScrollView) parent;
-        int scrollY = sv.getScrollY();
-        int viewH = sv.getHeight();
-        if (viewH <= 0) { viewH = getWindow().getDecorView().getHeight(); }
-        int itemH = Theme.px(Theme.CHAN_ITEM_H + Theme.CHAN_ITEM_GAP);
-        int listTop = Theme.px(26) + Theme.px(50);
-
-        int first = Math.max(0, (scrollY + listTop) / itemH - 3);
-        // 多预取一屏，滚动时不会出现「露出来还没图」的空档
-        int last = Math.min(chanViews.size() - 1, (scrollY + viewH) / itemH + 12);
-        requestLogos(first, last + 1);
-    }
-
-    /** 当前可见的频道行区间 [from, to)。滚动位置拿不到时返回全量。 */
-    private int[] visibleChannelRange() {
-        if (chanViews.isEmpty()) return new int[]{0, 0};
-        ScrollView sv = findScrollParent(chanViews.get(0));
-        if (sv == null || sv.getHeight() <= 0) return new int[]{0, chanViews.size()};
-        int itemH = Theme.px(Theme.CHAN_ITEM_H + Theme.CHAN_ITEM_GAP);
-        int listTop = Theme.px(26) + Theme.px(50);
-        int scrollY = sv.getScrollY();
-        int first = Math.max(0, (scrollY + listTop) / itemH - 2);
-        int last = Math.min(chanViews.size(), (scrollY + sv.getHeight()) / itemH + 3);
-        return new int[]{first, last};
-    }
-
-    private void requestLogos(int from, int to) {
-        for (int i = Math.max(0, from); i < Math.min(to, channels.size()); i++) {
-            final PlaylistParser.Channel ch = channels.get(i);
-            if (ch.logo == null || ch.logo.isEmpty()) continue;
-            final ChannelView v = chanViews.get(i);
+    private void requestLogosForPool() {
+        for (int k = 0; k < chanViews.size(); k++) {
+            int idx = chanBind.get(k);
+            if (idx < 0 || idx >= channels.size()) continue;
+            final ChannelView v = chanViews.get(k);
             if (v.hasLogo()) continue;
+            PlaylistParser.Channel ch = channels.get(idx);
+            if (ch.logo == null || ch.logo.isEmpty()) continue;
 
             Bitmap cached = logos.peek(ch.logo);
-            if (cached != null) {
-                v.setLogo(cached);
-                continue;
-            }
-            logos.load(ch.logo, new LogoLoader.Callback() {
+            if (cached != null) { v.setLogo(cached); continue; }
+            final String logoUrl = ch.logo;
+            final int bindIdx = idx;
+            logos.load(logoUrl, new LogoLoader.Callback() {
                 @Override public void onLogo(String url, final Bitmap bmp) {
                     ui.post(new Runnable() {
                         @Override public void run() {
+                            // 回调回来时这一格可能已经滚到别的频道了，认一下
+                            int k2 = chanBind.indexOf(bindIdx);
+                            if (k2 < 0) return;
+                            ChannelView target = chanViews.get(k2);
                             if (bmp != null && !bmp.isRecycled()) {
-                                v.setLogo(bmp);
-                                v.invalidate();
+                                target.setLogo(bmp);
+                                target.invalidate();
                             }
                         }
                     });
@@ -930,6 +1026,19 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             });
         }
     }
+
+    /** 当前可见的频道行区间 [from, to)。 */
+    private int[] visibleChannelRange() {
+        if (channels.isEmpty()) return new int[]{0, 0};
+        int itemH = rowH();
+        int scrollY = chanScroll == null ? 0 : chanScroll.getScrollY();
+        int viewH = chanScroll == null ? 0 : chanScroll.getHeight();
+        if (viewH <= 0) viewH = getWindow().getDecorView().getHeight();
+        int first = Math.max(0, (scrollY - listTopPx()) / itemH - 1);
+        int last = Math.min(channels.size(), (scrollY - listTopPx() + viewH) / itemH + 2);
+        return new int[]{first, Math.max(first, last)};
+    }
+
 
     /** 点分类：切分类，焦点交给频道列。 */
     private void onCategoryClicked(int index) {
@@ -970,35 +1079,44 @@ public class MainActivity extends Activity implements FocusEngine.Host {
      * 实际上只会有一行失去焦点、一行获得焦点，重绘 2 行就够。
      */
     private void updateChannelFocus(int index) {
-        if (lastFocusedChan >= 0 && lastFocusedChan < chanViews.size()
-                && lastFocusedChan != index) {
-            chanViews.get(lastFocusedChan).setFocused(false, true);
-        }
-        if (index >= 0 && index < chanViews.size()) {
-            chanViews.get(index).setFocused(true, true);
-        } else if (lastFocusedChan < 0) {
-            // 首次调用（列表刚绑好）没有"上一行"，不做额外处理
-        }
+        // 行池里只有一屏多的 View，焦点一定是「某个被绑定的行」，
+        // 所以先把目标行滚进可见区、必要时重绑，再套焦点样式。
         lastFocusedChan = index;
         scrollChannelIntoView(index);
+        ensureBound(index);
+        applyFocusToPool();
     }
 
     /** 列表重建后焦点状态全部失效，重置记录。 */
     private void resetChannelFocusCache() { lastFocusedChan = -1; }
 
-    /** 焦点保持可见：只在越界时动，用 translationY，不重排、不 smoothScroll。 */
+    /** 目标行不在当前行池窗口里时，直接把窗口挪过去（跳转、首尾那种大跨度）。 */
+    private void ensureBound(int index) {
+        if (index < 0 || index >= channels.size()) return;
+        if (viewForChannel(index) != null) return;
+        int itemH = rowH();
+        if (chanScroll != null) {
+            int target = listTopPx() + index * itemH - Theme.px(120);
+            chanScroll.scrollTo(0, Math.max(0, target));
+        }
+        syncPool(true);
+    }
+
+    /** 焦点保持可见：按行号算位置，不再依赖 View.getTop()。 */
     private void scrollChannelIntoView(int index) {
-        if (index < 0 || index >= chanViews.size() || chanColumn.getParent() == null) return;
-        View item = chanViews.get(index);
-        int itemTop = item.getTop(), itemBottom = item.getBottom();
-        ScrollView sv = findScrollParent(item);
-        if (sv == null) return;
-        int scrollY = sv.getScrollY();
-        int viewH = sv.getHeight();
+        if (index < 0 || index >= channels.size() || chanScroll == null) return;
+        int itemH = rowH();
+        int itemTop = listTopPx() + index * itemH;
+        int itemBottom = itemTop + itemH;
+        int scrollY = chanScroll.getScrollY();
+        int viewH = chanScroll.getHeight();
+        if (viewH <= 0) viewH = getWindow().getDecorView().getHeight();
         int target = -1;
         if (itemTop - scrollY < Theme.px(80)) target = Math.max(0, itemTop - Theme.px(80));
-        else if (itemBottom - scrollY > viewH - Theme.px(40)) target = itemBottom - viewH + Theme.px(40);
-        if (target >= 0) sv.smoothScrollTo(0, target);
+        else if (itemBottom - scrollY > viewH - Theme.px(40)) {
+            target = itemBottom - viewH + Theme.px(40);
+        }
+        if (target >= 0) chanScroll.smoothScrollTo(0, target);
     }
 
     private ScrollView findScrollParent(View v) {
@@ -1637,23 +1755,25 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     }
 
     /** 给列表每一行填「正在播放 · 节目名」。 */
+    /**
+     * 刷新可见行的「正在播放」副标题。
+     *
+     * <p>行池里的 View 会被反复绑定到不同频道，所以这里必须按
+     * chanBind 里记录的下标去取 EPG，不能拿池下标当频道下标用。
+     */
     private void refreshChannelSubs() {
         if (epg == null) return;
         long now = System.currentTimeMillis();
-        // 只刷可见区间。以前是遍历全部 839 行，每行 invalidate 一次，
-        // 而且每行还要调一次 hasReplay(i)；EPG 每 30 秒刷一轮，
-        // 等于每半分钟让整个列表重绘一遍，滚动正忙时明显卡。
-        int[] range = visibleChannelRange();
-        int from = Math.max(0, range[0]);
-        int to = Math.min(Math.min(chanViews.size(), channels.size()), range[1]);
-        for (int i = from; i < to; i++) {
-            ChannelView v = chanViews.get(i);
-            String id = epgIdOf.get(i);
+        for (int k = 0; k < chanViews.size(); k++) {
+            int idx = chanBind.get(k);
+            if (idx < 0 || idx >= channels.size()) continue;
+            ChannelView v = chanViews.get(k);
+            String id = epgIdOf.get(idx);
             if (id == null) { v.setSub(""); continue; }
             EpgParser.Program live = EpgParser.live(epg.of(id), now);
             if (live == null) { v.setSub(""); continue; }
             v.setSub("正在播放 · " + EpgParser.hm(live.startMs) + " " + live.title);
-            v.setBadge(hasReplay(i) ? "可回看" : null);
+            v.setBadge(hasReplay(idx) ? "可回看" : null);
             v.invalidate();
         }
     }
