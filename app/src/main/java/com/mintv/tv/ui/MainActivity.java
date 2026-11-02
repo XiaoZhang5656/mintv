@@ -287,6 +287,8 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         videoTap.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) { onVideoAreaTapped(tapX, tapY); }
         });
+        // 只铺右侧视频区，别盖住左侧三栏 —— 铺满全屏会让列表点击全部失效。
+        videoTap.setVisibility(View.GONE);   // 面板建好后再按布局显示
         root.addView(videoTap, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
@@ -437,6 +439,11 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         seekOverlay = new SeekOverlayView(this);
         root.addView(seekOverlay, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
+        // 视频区点击层只覆盖三栏右侧，左边距在 onLayout 后算准
+        videoTap.post(new Runnable() {
+            @Override public void run() { layoutVideoTap(); }
+        });
 
         // --- OSD ---
         osd = new OsdView(this);
@@ -1297,6 +1304,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         chanContainer.animate()
                 .translationX(-Theme.px(Theme.NAV_W))
                 .setDuration(Theme.T_PANEL).start();
+        layoutVideoTap();
     }
 
     /** 收起抽屉：分类栏滑回，频道列归位，节目单淡出。 */
@@ -1322,6 +1330,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         chanContainer.animate()
                 .translationX(0f)
                 .setDuration(Theme.T_PANEL).start();
+        layoutVideoTap();
     }
 
     /** ③ 纯播放：整套面板淡出，只留视频。任意方向键/点击恢复。 */
@@ -1375,6 +1384,10 @@ public class MainActivity extends Activity implements FocusEngine.Host {
 
         if (gestureLayer != null) {
             gestureLayer.setVisibility(visible ? View.GONE : View.VISIBLE);
+        }
+        // 面板可见时视频区可点（点一下收起）；面板收起时交给 gestureLayer 接管
+        if (videoTap != null) {
+            videoTap.setVisibility(visible ? View.VISIBLE : View.GONE);
         }
     }
 
@@ -1719,6 +1732,29 @@ public class MainActivity extends Activity implements FocusEngine.Host {
      *   <li>纯播放 → 这层已经被 gestureLayer 盖住，走不到这里。</li>
      * </ul>
      */
+    /**
+     * 视频区点击层的实际范围 = 屏幕去掉左侧三栏。
+     *
+     * <p>抽屉展开时节目单更宽，所以要按当前状态算，不能写死。
+     * 注意不要把这一层做成铺满全屏：那样它会盖在三栏上，
+     * 列表完全点不动 —— 这个坑已经踩过一次。
+     */
+    private void layoutVideoTap() {
+        if (videoTap == null) return;
+        FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) videoTap.getLayoutParams();
+        int left;
+        if (epgPanelOpen) {
+            left = Theme.px(Theme.CHAN_W + 8 + Theme.EPG_W);
+        } else {
+            left = Theme.px(Theme.NAV_W + 1 + Theme.CHAN_W + 1 + Theme.RAIL_W);
+        }
+        lp.leftMargin = left;
+        lp.width = Math.max(0, getResources().getDisplayMetrics().widthPixels - left);
+        lp.height = ViewGroup.LayoutParams.MATCH_PARENT;
+        videoTap.setLayoutParams(lp);
+        videoTap.setVisibility(panelVisible ? View.VISIBLE : View.GONE);
+    }
+
     private void onVideoAreaTapped(float x, float y) {
         if (epgPanelOpen) { closeEpgPanel(); return; }
         if (panelVisible) { enterFullPlayer(); }

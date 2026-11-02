@@ -83,6 +83,13 @@ public final class LenientHttpDataSource extends BaseDataSource implements HttpD
         @Override public boolean verify(String hostname, SSLSession session) { return true; }
     };
 
+    /** 这几个头由代码统一设置，不让自定义头覆盖，避免把 Range/UA 搞坏。 */
+    private static boolean isProtected(String name) {
+        String n = name.toLowerCase(java.util.Locale.US);
+        return n.equals("user-agent") || n.equals("range") || n.equals("accept-encoding")
+                || n.equals("connection") || n.equals("host");
+    }
+
     private final String userAgent;
     private final int connectTimeoutMs;
     private final int readTimeoutMs;
@@ -104,6 +111,9 @@ public final class LenientHttpDataSource extends BaseDataSource implements HttpD
         this.defaultHeaders = headers;
     }
 
+    /** 跨主机重定向的最大跳数。超过就当源坏了，别无限转。 */
+    private static final int MAX_REDIRECTS = 5;
+
     @Override
     public long open(DataSpec dataSpec) throws HttpDataSourceException {
         this.uri = dataSpec.uri;
@@ -111,45 +121,86 @@ public final class LenientHttpDataSource extends BaseDataSource implements HttpD
 
         try {
             URL url = new URL(dataSpec.uri.toString());
-            connection = (HttpURLConnection) url.openConnection();
+            int redirects = 0;
 
-            if (connection instanceof HttpsURLConnection) {
-                HttpsURLConnection https = (HttpsURLConnection) connection;
-                SSLContext ctx = lenientSsl();
-                if (ctx != null) {
-                    https.setSSLSocketFactory(ctx.getSocketFactory());
-                    https.setHostnameVerifier(ACCEPT_ALL);
+            // 手动跟跳转，不能交给 HttpURLConnection。
+            //
+            // 原因：setInstanceFollowRedirects(true) 在跨主机跳转时会**丢掉
+            // 所有自定义请求头**（JDK 的 HttpURLConnection 只保留系统允许的那几个）。
+            // 国内直播 CDN 基本都是「302 到另一台机器 + 靠 UA/Referer 鉴权」，
+            // 一跳之后头没了，对端直接 403/404 —— Exo 报的就是
+            // ERROR_CODE_IO_BAD_HTTP_STATUS，而且 curl 手动跟一遍是 200，
+            // 排查时会误以为「源挂了」。这里逐跳自己打，每跳都重放请求头。
+            while (true) {
+                connection = (HttpURLConnection) url.openConnection();
+
+                if (connection instanceof HttpsURLConnection) {
+                    HttpsURLConnection https = (HttpsURLConnection) connection;
+                    SSLContext ctx = lenientSsl();
+                    if (ctx != null) {
+                        https.setSSLSocketFactory(ctx.getSocketFactory());
+                        https.setHostnameVerifier(ACCEPT_ALL);
+                    }
                 }
-            }
 
-            connection.setConnectTimeout(connectTimeoutMs);
-            connection.setReadTimeout(readTimeoutMs);
-            connection.setInstanceFollowRedirects(true);
-            connection.setRequestProperty("User-Agent", userAgent);
-            connection.setRequestProperty("Accept", "*/*");
+                connection.setConnectTimeout(connectTimeoutMs);
+                connection.setReadTimeout(readTimeoutMs);
+                connection.setInstanceFollowRedirects(false);
+                String ua = userAgent;
+                if (defaultHeaders != null && defaultHeaders.containsKey("User-Agent")) {
+                    ua = defaultHeaders.get("User-Agent");
+                }
+                connection.setRequestProperty("User-Agent", ua);
+                connection.setRequestProperty("Accept", "*/*");
 
-            if (dataSpec.position != 0 || dataSpec.length != C.LENGTH_UNSET) {
-                long end = dataSpec.length == C.LENGTH_UNSET
-                        ? -1 : dataSpec.position + dataSpec.length - 1;
-                connection.setRequestProperty("Range",
-                        "bytes=" + dataSpec.position + "-" + (end == -1 ? "" : String.valueOf(end)));
-            }
+                if (dataSpec.position != 0 || dataSpec.length != C.LENGTH_UNSET) {
+                    long end = dataSpec.length == C.LENGTH_UNSET
+                            ? -1 : dataSpec.position + dataSpec.length - 1;
+                    connection.setRequestProperty("Range",
+                            "bytes=" + dataSpec.position + "-" + (end == -1 ? "" : String.valueOf(end)));
+                }
 
-            if (defaultHeaders != null) {
-                for (Map.Entry<String, String> e : defaultHeaders.entrySet()) {
+                // 自定义头每一跳都要重放，这是整段代码存在的理由
+                if (defaultHeaders != null) {
+                    for (Map.Entry<String, String> e : defaultHeaders.entrySet()) {
+                        if (isProtected(e.getKey())) continue;
+                        connection.setRequestProperty(e.getKey(), e.getValue());
+                    }
+                }
+                for (Map.Entry<String, String> e : extraHeaders.entrySet()) {
+                    if (isProtected(e.getKey())) continue;
                     connection.setRequestProperty(e.getKey(), e.getValue());
                 }
-            }
-            for (Map.Entry<String, String> e : extraHeaders.entrySet()) {
-                connection.setRequestProperty(e.getKey(), e.getValue());
-            }
-            if (dataSpec.httpRequestHeaders != null) {
-                for (Map.Entry<String, String> e : dataSpec.httpRequestHeaders.entrySet()) {
-                    connection.setRequestProperty(e.getKey(), e.getValue());
+                if (dataSpec.httpRequestHeaders != null) {
+                    for (Map.Entry<String, String> e : dataSpec.httpRequestHeaders.entrySet()) {
+                        if (isProtected(e.getKey())) continue;
+                        connection.setRequestProperty(e.getKey(), e.getValue());
+                    }
                 }
+
+                responseCode = connection.getResponseCode();
+
+                if (responseCode == 301 || responseCode == 302
+                        || responseCode == 303 || responseCode == 307 || responseCode == 308) {
+                    String loc = connection.getHeaderField("Location");
+                    connection.disconnect();
+                    connection = null;
+                    if (loc == null || redirects++ >= MAX_REDIRECTS) {
+                        throw new HttpDataSource.HttpDataSourceException(
+                                new java.io.IOException("redirect without location or too many hops"),
+                                dataSpec, HttpDataSource.HttpDataSourceException.TYPE_OPEN);
+                    }
+                    // 相对跳转
+                    url = new URL(url, loc);
+                    // 关键：把最终地址记下来。Exo 用 getUri() 解析 m3u8 里的相对
+                    // 片段路径（yss/11622.ts），不回传最终地址的话，片段会被
+                    // 拼到第一跳的主机上 —— 那边根本没有这些文件，全部 404。
+                    this.uri = Uri.parse(url.toString());
+                    continue;
+                }
+                break;
             }
 
-            responseCode = connection.getResponseCode();
             if (responseCode < 200 || responseCode > 299) {
                 throw new HttpDataSource.InvalidResponseCodeException(
                         responseCode, connection.getResponseMessage(), null,
