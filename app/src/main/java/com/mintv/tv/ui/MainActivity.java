@@ -116,6 +116,12 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     private FrameLayout dialogRoot;
     private LinearLayout rowColumn;
     private final List<SettingRowView> rowViews = new ArrayList<>();
+    private final List<TextView> tabViews = new ArrayList<>();
+    private ScrollView rowScrollView;
+    private LinearLayout infoPage;
+    private TextView infoPageText;
+    /** 当前设置页的 Tab：0 账户登录 / 1 播放设置 / 2 手机助手 */
+    private int currentTab = 1;
     private final int[] selections = DemoData.ROW_DEFAULT.clone();
 
     /**
@@ -1507,21 +1513,31 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         bar.setGravity(Gravity.CENTER_VERTICAL);
         bar.setPadding(Theme.px(24), 0, Theme.px(24), 0);
 
+        tabViews.clear();
         for (int i = 0; i < DemoData.TABS.length; i++) {
+            final int tabIndex = i;
             TextView tab = new TextView(this);
             tab.setText(DemoData.TABS[i]);
             tab.setTextColor(i == 1 ? Theme.TEXT : 0xFFD6D6D8);
             tab.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, Theme.sp(21));
             tab.setGravity(Gravity.CENTER);
             tab.setBackgroundColor(i == 1 ? 0x0FFFFFFF : Color.TRANSPARENT);
+            tab.setPadding(Theme.px(14), 0, Theme.px(14), 0);
+            // 三个 Tab 以前是死的（只有「播放设置」画了个高亮底，点了不换页）。
+            tab.setClickable(true);
+            tab.setFocusable(true);
+            tab.setOnClickListener(new View.OnClickListener() {
+                @Override public void onClick(View v) { showTab(tabIndex); }
+            });
             LinearLayout.LayoutParams tp = new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.WRAP_CONTENT, Theme.px(52));
             tp.rightMargin = Theme.px(10);
             bar.addView(tab, tp);
+            tabViews.add(tab);
         }
 
         TextView ver = new TextView(this);
-        ver.setText("v1.0.0");
+        ver.setText("v" + versionName());
         ver.setTextColor(0xFF9A9A9E);
         ver.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, Theme.sp(20));
         LinearLayout.LayoutParams vp = new LinearLayout.LayoutParams(
@@ -1535,7 +1551,15 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         close.setTextColor(0xFFD0D0D2);
         close.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, Theme.sp(26));
         close.setGravity(Gravity.CENTER);
-        LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(Theme.px(44), Theme.px(44));
+        // 以前这个 ✕ 只画了个字，没挂任何监听 —— 点了当然没反应。
+        close.setClickable(true);
+        close.setFocusable(true);
+        close.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { closeSettings(); }
+        });
+        // 触屏点击区做得比字大，遥控器上也更好点
+        close.setPadding(Theme.px(8), Theme.px(8), Theme.px(8), Theme.px(8));
+        LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(Theme.px(56), Theme.px(56));
         bar.addView(close, cp);
         card.addView(bar, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, Theme.px(76)));
@@ -1545,9 +1569,18 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         rowColumn.setOrientation(LinearLayout.VERTICAL);
         rowColumn.setPadding(Theme.px(24), Theme.px(18), Theme.px(24), Theme.px(10));
         for (int i = 0; i < DemoData.ROW_TITLES.length; i++) {
+            final int rowIndex = i;
             SettingRowView row = new SettingRowView(this);
             row.bind(DemoData.ROW_TITLES[i][0], DemoData.ROW_TITLES[i][1],
                     DemoData.ROW_OPTIONS[i], selections[i]);
+            row.setClickable(true);
+            row.setOnClickListener(new View.OnClickListener() {
+                @Override public void onClick(View v) {
+                    while (focus.rowIndex() < rowIndex) focus.onKey(KeyEvent.KEYCODE_DPAD_DOWN);
+                    while (focus.rowIndex() > rowIndex) focus.onKey(KeyEvent.KEYCODE_DPAD_UP);
+                    applyRowFocus(rowIndex);
+                }
+            });
             LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, Theme.px(82));
             p.bottomMargin = Theme.px(12);
@@ -1558,11 +1591,26 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         rowScroll.setVerticalScrollBarEnabled(false);
         rowScroll.setOverScrollMode(View.OVER_SCROLL_NEVER);
         rowScroll.addView(rowColumn);
+        rowScrollView = rowScroll;
         // 限高：卡片总高不能超出屏幕，超出部分滚动
         int maxRowsH = (int) (getResources().getDisplayMetrics().heightPixels * 0.66f);
-        card.addView(rowScroll, new LinearLayout.LayoutParams(
+        LinearLayout.LayoutParams rowsLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, Math.min(maxRowsH,
-                Theme.px(10 * (82 + 12)) + Theme.px(28))));
+                Theme.px(10 * (82 + 12)) + Theme.px(28)));
+        card.addView(rowScroll, rowsLp);
+
+        // 非「播放设置」两个 Tab 的说明页，和列表占同一个位置
+        infoPage = new LinearLayout(this);
+        infoPage.setOrientation(LinearLayout.VERTICAL);
+        infoPage.setPadding(Theme.px(28), Theme.px(20), Theme.px(28), Theme.px(20));
+        infoPage.setVisibility(View.GONE);
+        infoPageText = new TextView(this);
+        infoPageText.setTextColor(0xFFD6D6DA);
+        infoPageText.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, Theme.sp(19));
+        infoPageText.setLineSpacing(Theme.px(6), 1f);
+        infoPage.addView(infoPageText);
+        card.addView(infoPage, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, rowsLp.height));
 
         // 底栏
         TextView foot = new TextView(this);
@@ -1579,7 +1627,62 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
     }
 
+    /**
+     * 切设置页 Tab。
+     *
+     * <p>账户登录 / 手机助手 这两页没有后端支撑，但**不能装作能切**然后给一片空白。
+     * 这里给每页一张说明卡，写清楚它依赖什么、当前状态如何 ——
+     * 用户至少知道这里有什么、为什么还不能用。
+     */
+    private void showTab(int index) {
+        currentTab = index;
+        for (int i = 0; i < tabViews.size(); i++) {
+            TextView t = tabViews.get(i);
+            t.setTextColor(i == index ? Theme.TEXT : 0xFFD6D6D8);
+            t.setBackgroundColor(i == index ? 0x0FFFFFFF : Color.TRANSPARENT);
+        }
+        rowScrollView.setVisibility(index == 1 ? View.VISIBLE : View.GONE);
+        if (index != 1) {
+            fillInfoPage(index);
+            infoPage.setVisibility(View.VISIBLE);
+        } else {
+            infoPage.setVisibility(View.GONE);
+        }
+    }
+
+    /** 从 PackageManager 读版本号，不依赖 BuildConfig（javac 直编时没有它）。 */
+    private String versionName() {
+        try {
+            return getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
+        } catch (Throwable t) {
+            return "1.1.0";
+        }
+    }
+
+    private String infoText(int tab) {
+        if (tab == 0) {
+            return "账户登录\n\n"
+                    + "本版本是纯本地播放器：不注册、不上传、不联网校验账号。\n"
+                    + "直播源地址存在本机 SharedPreferences 里，没有服务器，\n"
+                    + "所以这一页暂时没有需要登录的东西。\n\n"
+                    + "将来接后端时会在这里放扫码登录 + 设备绑定。";
+        }
+        return "手机助手\n\n"
+                + "同一 Wi-Fi 下用手机浏览器遥控这台盒子。\n\n"
+                + "需要做的：\n"
+                + "  1. 盒子上开一个 HTTP 服务（监听 0.0.0.0，端口 8080）\n"
+                + "  2. 手机上访问  http://<盒子IP>:8080\n"
+                + "  3. 页面里发「换台 / 音量 / 返回」指令，盒子轮询执行\n\n"
+                + "当前状态：未实现。这一版先把播放链路修稳，遥控后面再加。";
+    }
+
+    private void fillInfoPage(int tab) {
+        if (infoPageText == null) return;
+        infoPageText.setText(infoText(tab));
+    }
+
     private void openSettings() {
+        if (tabViews.size() > currentTab) showTab(Math.max(0, currentTab));
         if (gestureLayer != null) gestureLayer.setVisibility(View.GONE);
         dialogRoot.setVisibility(View.VISIBLE);
         dialogRoot.setAlpha(0f);
