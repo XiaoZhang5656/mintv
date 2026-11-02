@@ -207,14 +207,26 @@ public class OsdView extends View {
             drawOsd(c, h);
         }
 
+        // 一次性提示：居中偏上，带半透明圆角底。
+        //
+        // 以前它和「状态文字」「右下角网速」全挤在屏幕右下角同一片区域，
+        // 同时出现时三层字叠在一起，谁都看不清（实测：切换线路 5/5 +
+        // 源失效 + 4 KB/s 直接糊成一团）。挪到上方后三者互不干扰。
         if (toastText != null) {
-            p.setColor(Theme.TEXT);
-            p.setTextSize(Theme.sp(19));
-            p.setTextAlign(Paint.Align.RIGHT);
-            p.setShadowLayer(Theme.px(4), 0, 0, 0xDD000000);
-            c.drawText(toastText, w - Theme.px(40), h - Theme.px(90), p);
-            p.setShadowLayer(0, 0, 0, 0);
+            p.setTextSize(Theme.sp(20));
             p.setTextAlign(Paint.Align.LEFT);
+            float tw = p.measureText(toastText);
+            float padX = Theme.px(22), padY = Theme.px(14);
+            float bx = (w - tw) / 2f - padX;
+            float by = h * 0.16f - p.getTextSize() - padY;
+            float bw = tw + padX * 2, bh = p.getTextSize() + padY * 2;
+            fill.setColor(0xB3000000);
+            r.set(bx, by, bx + bw, by + bh);
+            c.drawRoundRect(r, Theme.px(8), Theme.px(8), fill);
+            p.setColor(Theme.TEXT);
+            p.setShadowLayer(Theme.px(3), 0, 0, 0xCC000000);
+            c.drawText(toastText, bx + padX, by + padY + p.getTextSize() * 0.85f, p);
+            p.setShadowLayer(0, 0, 0, 0);
         }
 
         if (statusText != null) {
@@ -222,7 +234,8 @@ public class OsdView extends View {
             p.setTextSize(Theme.sp(18));
             p.setTextAlign(Paint.Align.RIGHT);
             p.setShadowLayer(Theme.px(3), 0, 0, 0xCC000000);
-            c.drawText(statusText, w - Theme.px(36), h - Theme.px(48), p);
+            // 往上让出一行给右下角的网速标签，两者不再重叠
+            c.drawText(statusText, w - Theme.px(40), h - Theme.px(96), p);
             p.setShadowLayer(0, 0, 0, 0);
             p.setTextAlign(Paint.Align.LEFT);
         }
