@@ -209,6 +209,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
 
         focus.attach(this);
         loadHeaders();
+        loadLinePrefs();
         applyOutputMode();
         recoverFromEngineCrash();
         focus.setNavCount(categories.size());
@@ -233,6 +234,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                 ui.removeCallbacks(playbackWatchdog);
                 osd.setStatus(null);
                 clearEngineAttempt();       // 出帧了，内核稳定
+                rememberLine();             // 记住这个频道能播的线路
             }
 
             @Override public void onVideoUnavailable(String reason) {
@@ -282,7 +284,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                 if (selections[ROW_OUTPUT] != OUTPUT_SURFACE) return;  // 当前用 TextureView
                 playerManager.setSurfaceView(surfaceView);
                 player.setSurface(h.getSurface());
-                playChannel(playingChannel);
+                playChannelInternal(playingChannel, true);
             }
             @Override public void surfaceChanged(SurfaceHolder h, int f, int w, int ht) {
                 // 尺寸变化后解码器的输出面会失效，必须重新绑一次。
@@ -324,7 +326,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             @Override public void onSurfaceTextureAvailable(android.graphics.SurfaceTexture st, int w, int h) {
                 if (selections[ROW_OUTPUT] != OUTPUT_TEXTURE) return;
                 playerManager.setTextureView(textureView);
-                playChannel(playingChannel);
+                playChannelInternal(playingChannel, true);
             }
             @Override public void onSurfaceTextureSizeChanged(android.graphics.SurfaceTexture st, int w, int h) {
                 if (selections[ROW_OUTPUT] != OUTPUT_TEXTURE) return;
@@ -727,6 +729,8 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         new Thread(new Runnable() {
             @Override public void run() {
                 String body = null;
+                String lastEtag = null;
+                long lastModified = 0L;
                 java.net.HttpURLConnection conn = null;
                 try {
                     conn = (java.net.HttpURLConnection) new java.net.URL(url).openConnection();
@@ -734,6 +738,21 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                     conn.setReadTimeout(15000);
                     conn.setRequestProperty("User-Agent", "TVUI/1.0");
                     conn.setInstanceFollowRedirects(true);
+
+                    // 条件请求：源没变就让服务端回 304，不必每次启动重下 200KB。
+                    // 两个校验字段都带上，GitHub Pages 走 ETag，nginx 多数走 Last-Modified。
+                    String etag = SourceStore.etag(MainActivity.this);
+                    long lastMod = SourceStore.lastModified(MainActivity.this);
+                    if (etag != null && !etag.isEmpty()) {
+                        conn.setRequestProperty("If-None-Match", etag);
+                    }
+                    if (lastMod > 0) conn.setIfModifiedSince(lastMod);
+
+                    int code = conn.getResponseCode();
+                    if (code == 304) {
+                        SourceStore.touch(MainActivity.this);
+                        return;                 // 缓存就是最新的，界面不用动
+                    }
                     java.io.InputStream in = conn.getInputStream();
                     java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
                     byte[] buf = new byte[16384];
@@ -741,6 +760,8 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                     while ((n = in.read(buf)) > 0) bos.write(buf, 0, n);
                     in.close();
                     body = bos.toString("UTF-8");
+                    lastEtag = conn.getHeaderField("ETag");
+                    lastModified = conn.getLastModified();
                 } catch (Exception ignored) {
                 } finally {
                     if (conn != null) conn.disconnect();
@@ -752,7 +773,8 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                     });
                     return;
                 }
-                SourceStore.saveBody(MainActivity.this, result);
+                SourceStore.saveBody(MainActivity.this, result,
+                        lastEtag, lastModified);
                 ui.post(new Runnable() {
                     @Override public void run() {
                         applyPlaylist(result);
@@ -991,7 +1013,13 @@ public class MainActivity extends Activity implements FocusEngine.Host {
 
     // ================= 播放 =================
 
-    private void playChannel(int index) {
+    private void playChannel(int index) { playChannelInternal(index, false); }
+
+    /**
+     * @param keepLine true 表示「还是同一个频道的重开」（切线路、自愈、回前台），
+     *                 不动 currentLine；false 表示切到某个频道，用该频道记住的线路。
+     */
+    private void playChannelInternal(int index, boolean keepLine) {
         if (index < 0 || index >= channels.size()) return;
         playingChannel = index;
         PlaylistParser.Channel ch = channels.get(index);
@@ -1014,8 +1042,16 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         refreshSourceRow();
         refreshPlayInfo();
         if (ch.sources.isEmpty()) return;
+
+        if (!keepLine) {
+            Integer pref = linePref.get(lineKey(ch));
+            currentLine = (pref != null && pref >= 0 && pref < ch.sources.size()) ? pref : 0;
+        }
+        // 越界兜底必须放在取元素之前。
+        // 原来写的是 ch.sources.get(currentLine) 再判断越界 —— 顺序反了，
+        // 只要记住的线路号大于当前线路数就直接 IndexOutOfBounds 闪退。
+        if (currentLine < 0 || currentLine >= ch.sources.size()) currentLine = 0;
         PlaylistParser.Source src = ch.sources.get(currentLine);
-        if (currentLine >= ch.sources.size()) { src = ch.sources.get(0); currentLine = 0; }
         currentPlayUrl = PlaylistParser.cleanUrl(src.url);
         armWatchdog();
         playUrl(PlaylistParser.cleanUrl(src.url), src.headers, PlaybackBackend.Mode.LIVE);
@@ -1030,7 +1066,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                 if (ch != null && ch.sources.size() > 1) {
                     currentLine = (currentLine + 1) % ch.sources.size();
                     osd.toast("该线路无响应，切换线路 " + (currentLine + 1) + "/" + ch.sources.size());
-                    playChannel(playingChannel);
+                    playChannelInternal(playingChannel, true);
                 } else {
                     osd.toast("该源无响应");
                 }
@@ -1116,7 +1152,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             noVideoStage = 3;
             currentLine = (currentLine + 1) % ch.sources.size();
             osd.toast("该线路无画面，切换线路 " + (currentLine + 1) + "/" + ch.sources.size());
-            playChannel(playingChannel);
+            playChannelInternal(playingChannel, true);
             return;
         }
         // ④ 没得换，明说，不再黑着播
@@ -1183,6 +1219,41 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                 CrashActivity.launch(MainActivity.this, "内核崩溃已回退", msg);
             }
         });
+    }
+
+    // ---- 每个频道上次能播的线路 ----
+    private static final String KEY_LINE_PREFS = "line_prefs";
+    private final java.util.Map<String, Integer> linePref = new java.util.HashMap<>();
+
+    private static String lineKey(PlaylistParser.Channel ch) {
+        return ch.number + "|" + ch.name;
+    }
+
+    private void loadLinePrefs() {
+        linePref.clear();
+        String raw = getSharedPreferences(PREF, MODE_PRIVATE).getString(KEY_LINE_PREFS, "");
+        if (raw == null || raw.isEmpty()) return;
+        for (String part : raw.split(";")) {
+            int eq = part.lastIndexOf('=');
+            if (eq <= 0) continue;
+            try {
+                linePref.put(part.substring(0, eq), Integer.parseInt(part.substring(eq + 1)));
+            } catch (NumberFormatException ignored) { }
+        }
+    }
+
+    /** 首帧出来之后调用：这条线路是能播的，记下来。 */
+    private void rememberLine() {
+        if (playingChannel < 0 || playingChannel >= channels.size()) return;
+        PlaylistParser.Channel ch = channels.get(playingChannel);
+        linePref.put(lineKey(ch), currentLine);
+        StringBuilder sb = new StringBuilder();
+        for (java.util.Map.Entry<String, Integer> e : linePref.entrySet()) {
+            if (sb.length() > 0) sb.append(';');
+            sb.append(e.getKey()).append('=').append(e.getValue());
+        }
+        getSharedPreferences(PREF, MODE_PRIVATE).edit()
+                .putString(KEY_LINE_PREFS, sb.toString()).apply();
     }
 
     private void loadHeaders() {
@@ -1284,7 +1355,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         currentLine = ((currentLine + delta) % n + n) % n;
         resetNoVideoStage();          // 手动换线不算自愈，把降级进度清掉
         osd.toast("切换线路 " + (currentLine + 1) + "/" + n);
-        playChannel(playingChannel);
+        playChannelInternal(playingChannel, true);
     }
 
     /** 切换内核并立刻重开当前源。 */
@@ -1409,7 +1480,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             currentLine = (currentLine + 1) % ch.sources.size();
             osd.toast("播放卡住 " + (limit / 1000) + " 秒，切换线路 "
                     + (currentLine + 1) + "/" + ch.sources.size());
-            playChannel(playingChannel);
+            playChannelInternal(playingChannel, true);
         } else {
             osd.toast("播放卡住，该频道只有一条线路");
             watchdogFired = true;               // 别反复刷提示
@@ -2031,7 +2102,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             fillEpg(channelIndex);
         } else {
             // 同一个频道：重开直播地址，走 LIVE 模式
-            playChannel(playingChannel);
+            playChannelInternal(playingChannel, true);
         }
         osd.toast("已回到直播");
     }
