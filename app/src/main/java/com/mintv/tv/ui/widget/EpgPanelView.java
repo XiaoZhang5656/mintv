@@ -49,6 +49,7 @@ public class EpgPanelView extends android.view.View {
 
     private final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint fill = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint stroke = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final RectF r = new RectF();
 
     private String header = "";
@@ -67,6 +68,7 @@ public class EpgPanelView extends android.view.View {
         setFocusable(false);
         p.setTypeface(Typeface.DEFAULT);
         fill.setStyle(Paint.Style.FILL);
+        stroke.setStyle(Paint.Style.STROKE);
     }
 
     /** 内容总高度，供 ScrollView 正确测量。 */
@@ -157,6 +159,11 @@ public class EpgPanelView extends android.view.View {
             if (y > getHeight()) break;
             Item it = items[i];
 
+            // 光标白框：不管这行能不能回看都要画。
+            // 以前只有"可回看 + 焦点"才画底色，方向键移到未播/直播行时
+            // 屏幕没有任何变化，用户会以为按键没反应。
+            boolean cursor = (i == focusIndex);
+
             // 当前/焦点行底色。回放中的那一行优先级最高，画成黄色，
             // 让用户一眼看到"现在放的是哪一条"，而不是只能靠猜。
             if (i == replayIndex) {
@@ -224,6 +231,15 @@ public class EpgPanelView extends android.view.View {
                 c.drawText(mark, getWidth() - padH, baseline, p);
                 p.setTextAlign(Paint.Align.LEFT);
             }
+            // 光标描边
+            if (cursor) {
+                stroke.setColor(0xFFFFFFFF);
+                stroke.setStrokeWidth(Theme.px(2));
+                r.set(padH - Theme.px(8), y + Theme.px(1),
+                        getWidth() - padH + Theme.px(8), y + itemH - Theme.px(1));
+                c.drawRoundRect(r, Theme.px(4), Theme.px(4), stroke);
+            }
+
             y += itemH;
         }
     }
