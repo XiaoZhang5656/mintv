@@ -909,14 +909,23 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         int total = channels.size();
         int itemH = rowH();
 
-        // 内容总高：让 ScrollView 的滚动条和惯性按真实列表长度走
-        ViewGroup.LayoutParams clp = chanColumn.getLayoutParams();
+        // 撑高用一个隐形 spacer，**不要**去改 chanColumn 自己的 LayoutParams。
+        // 行池里每个 View 都是 topMargin 绝对定位，容器的 wrap_content 高度
+        // 只由这个 spacer 决定；这样 ScrollView 一定量到正确的内容高度，
+        // 也避免容器被重新包装后 setLayoutParams 不生效（之前就是这里让列表滚不动）。
         int contentH = total * itemH + Theme.px(20);
-        if (clp == null) {
-            clp = new ScrollView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, contentH);
+        // 容器高度交回 wrap_content 决定（由下面的 spacer 撑），
+        // 防止上一次分类留下的固定高度残留。
+        ViewGroup.LayoutParams clp = chanColumn.getLayoutParams();
+        if (clp != null && clp.height != ViewGroup.LayoutParams.WRAP_CONTENT) {
+            clp.height = ViewGroup.LayoutParams.WRAP_CONTENT;
+            chanColumn.setLayoutParams(clp);
         }
-        clp.height = contentH;
-        chanColumn.setLayoutParams(clp);
+        View spacer = new View(this);
+        chanColumn.addView(spacer, new FrameLayout.LayoutParams(1, contentH));
+        android.util.Log.i("MinTV", "chan list content=" + contentH
+                + " rows=" + total + " itemH=" + itemH
+                + " viewport=" + (chanScroll == null ? -1 : chanScroll.getHeight()));
 
         int viewH = chanScroll != null && chanScroll.getHeight() > 0
                 ? chanScroll.getHeight() : getWindow().getDecorView().getHeight();
