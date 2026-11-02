@@ -52,11 +52,22 @@ public final class VlcBackend implements PlaybackBackend {
         }
     };
 
+    /**
+     * 本机能否真的用 VLC。
+     *
+     * <p>只做 Class.forName 是假的可用性判断 —— 类在 dex 里，
+     * native 库加载失败要到第一次 new LibVLC() 才炸，而且炸的是
+     * UnsatisfiedLinkError，用户看到的就是"切 VLC 就闪退"。
+     * 这里直接试着把 native 库载进来，失败就明确不可用，让上层退回 Exo。
+     */
     public static boolean isAvailable() {
         try {
             Class.forName("org.videolan.libvlc.LibVLC");
+            System.loadLibrary("vlc");
+            System.loadLibrary("vlcjni");
             return true;
         } catch (Throwable t) {
+            android.util.Log.w("VlcBackend", "VLC 不可用: " + t);
             return false;
         }
     }
