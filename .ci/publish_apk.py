@@ -52,13 +52,25 @@ def read_version_code(apk_path):
     return m.group(1) if m else '?'
 
 
-def main():
-    apk = sorted(glob.glob('app/build/outputs/apk/debug/*.apk'))[0]
-    data = open(apk, 'rb').read()
-    vc = read_version_code(apk)
-    print('apk', apk, len(data), 'bytes versionCode=', vc)
+def target_name(apk_path):
+    """把一个打包产物映射成仓库里的文件名。
 
-    cur = call(API, ok404=True)  # 不存在时返回 None，PUT 即为新建
+    开启 ABI 分包后会同时产出 app-arm64-v8a-debug.apk 和
+    app-armeabi-v7a-debug.apk，不能都叫 tvui-java-debug.apk 互相覆盖。
+    """
+    base = os.path.basename(apk_path)
+    for abi in ('arm64-v8a', 'armeabi-v7a', 'x86_64', 'x86'):
+        if abi in base:
+            return 'mintv-%s.apk' % abi
+    return 'tvui-java-debug.apk'
+
+
+def publish(apk_path, repo_path):
+    data = open(apk_path, 'rb').read()
+    vc = read_version_code(apk_path)
+    api = 'https://api.github.com/repos/%s/contents/%s' % (REPO, repo_path)
+    print('publish', apk_path, '->', repo_path, len(data), 'bytes versionCode=', vc)
+    cur = call(api, ok404=True)
     body = {
         'message': 'ci: publish debug apk [skip ci]',
         'content': base64.b64encode(data).decode(),
@@ -66,8 +78,16 @@ def main():
     }
     if cur and 'sha' in cur:
         body['sha'] = cur['sha']
-    res = call(API, 'PUT', body)
-    print('published commit', (res.get('commit') or {}).get('sha', '')[:10])
+    res = call(api, 'PUT', body)
+    print('  commit', (res.get('commit') or {}).get('sha', '')[:10])
+
+
+def main():
+    apks = sorted(glob.glob('app/build/outputs/apk/debug/*.apk'))
+    if not apks:
+        raise SystemExit('no apk found')
+    for a in apks:
+        publish(a, target_name(a))
 
 
 if __name__ == '__main__':

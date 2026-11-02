@@ -805,6 +805,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             chanViews.add(v);
         }
         focus.setChannelCount(channels.size());
+        resetChannelFocusCache();
         refreshChannelSubs();
         // 台标改成按可见范围惰性加载，绝不在绑定阶段全量入队
         attachScrollLoader();
@@ -850,6 +851,19 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         // 多预取一屏，滚动时不会出现「露出来还没图」的空档
         int last = Math.min(chanViews.size() - 1, (scrollY + viewH) / itemH + 12);
         requestLogos(first, last + 1);
+    }
+
+    /** 当前可见的频道行区间 [from, to)。滚动位置拿不到时返回全量。 */
+    private int[] visibleChannelRange() {
+        if (chanViews.isEmpty()) return new int[]{0, 0};
+        ScrollView sv = findScrollParent(chanViews.get(0));
+        if (sv == null || sv.getHeight() <= 0) return new int[]{0, chanViews.size()};
+        int itemH = Theme.px(Theme.CHAN_ITEM_H + Theme.CHAN_ITEM_GAP);
+        int listTop = Theme.px(26) + Theme.px(50);
+        int scrollY = sv.getScrollY();
+        int first = Math.max(0, (scrollY + listTop) / itemH - 2);
+        int last = Math.min(chanViews.size(), (scrollY + sv.getHeight()) / itemH + 3);
+        return new int[]{first, last};
     }
 
     private void requestLogos(int from, int to) {
@@ -906,13 +920,33 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         }
     }
 
+    /** 上一次画了焦点框的下标，用来只重绘变化的两行。 */
+    private int lastFocusedChan = -1;
+
+    /**
+     * 更新频道焦点。
+     *
+     * <p>以前是「遍历全部 839 行，逐个 setFocused」——每个 setFocused 内部
+     * 都会 invalidate()，于是按一次方向键触发 839 次重绘。
+     * 低端盒子上这就是按键延迟的直接来源。
+     * 实际上只会有一行失去焦点、一行获得焦点，重绘 2 行就够。
+     */
     private void updateChannelFocus(int index) {
-        for (int i = 0; i < chanViews.size(); i++) {
-            ChannelView v = chanViews.get(i);
-            v.setFocused(i == index, true);
+        if (lastFocusedChan >= 0 && lastFocusedChan < chanViews.size()
+                && lastFocusedChan != index) {
+            chanViews.get(lastFocusedChan).setFocused(false, true);
         }
+        if (index >= 0 && index < chanViews.size()) {
+            chanViews.get(index).setFocused(true, true);
+        } else if (lastFocusedChan < 0) {
+            // 首次调用（列表刚绑好）没有"上一行"，不做额外处理
+        }
+        lastFocusedChan = index;
         scrollChannelIntoView(index);
     }
+
+    /** 列表重建后焦点状态全部失效，重置记录。 */
+    private void resetChannelFocusCache() { lastFocusedChan = -1; }
 
     /** 焦点保持可见：只在越界时动，用 translationY，不重排、不 smoothScroll。 */
     private void scrollChannelIntoView(int index) {
@@ -1249,9 +1283,44 @@ public class MainActivity extends Activity implements FocusEngine.Host {
      * 唯一的播放入口。所有内核、所有模式都从这里走，
      * 请求头也只在这里合并一次，避免某条路径忘了带头。
      */
+    /**
+     * 这些协议只能靠 VLC。
+     *
+     * <p>实测依据：
+     * <ul>
+     *   <li>{@code udp://} / {@code rtp://}：Media3 只有
+     *       {@code androidx.media3.datasource.UdpDataSource} 这一个裸 UDP 数据源，
+     *       而且它没被 DefaultDataSource 收录，rtp:// 更没有对应实现；</li>
+     *   <li>{@code rtsp://}：Exo 要额外引 media3-exoplayer-rtsp，而 libVLC 里
+     *       自带 live555（strings 能搜到 RTSPClient::sendDescribeCommand 等符号）；</li>
+     *   <li>{@code mms://}：Exo 完全不支持，libVLC 有 mmsu/mmsh。</li>
+     * </ul>
+     * 所以这几种协议直接把内核切成 VLC，不去赌 Exo 能不能凑合。
+     */
+    private static final String[] VLC_ONLY_SCHEMES = {
+            "udp://", "rtp://", "rtsp://", "rtsps://", "mms://", "mmst://", "mmsu://", "srt://"
+    };
+
+    private static boolean needsVlc(String url) {
+        String u = url.toLowerCase(java.util.Locale.US);
+        for (String s : VLC_ONLY_SCHEMES) {
+            if (u.startsWith(s)) return true;
+        }
+        return false;
+    }
+
     private void playUrl(String url, java.util.Map<String, String> headers, PlaybackBackend.Mode mode) {
         if (url == null || url.isEmpty()) return;
         if (playerManager == null) return;
+
+        // 组播/单播电视源（udp/rtp/rtsp）自动走 VLC，播放完切台也不会跳回去，
+        // 避免每条都重建引擎。
+        if (needsVlc(url) && playerManager.engine() != PlaybackEngine.VLC) {
+            osd.toast("组播/RTSP 源，自动切换到 VLC 内核");
+            playerManager.setEngine(PlaybackEngine.VLC, false);
+            playerManager.setTextureView(textureView);
+            playerManager.setCallback(playerCallback);
+        }
         java.util.Map<String, String> merged = HttpHeaderProfile.merge(globalHeaders, headers);
         if (!merged.isEmpty()
                 && playerManager.engine() == PlaybackEngine.VLC) {
@@ -1431,7 +1500,13 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     private void refreshChannelSubs() {
         if (epg == null) return;
         long now = System.currentTimeMillis();
-        for (int i = 0; i < chanViews.size() && i < channels.size(); i++) {
+        // 只刷可见区间。以前是遍历全部 839 行，每行 invalidate 一次，
+        // 而且每行还要调一次 hasReplay(i)；EPG 每 30 秒刷一轮，
+        // 等于每半分钟让整个列表重绘一遍，滚动正忙时明显卡。
+        int[] range = visibleChannelRange();
+        int from = Math.max(0, range[0]);
+        int to = Math.min(Math.min(chanViews.size(), channels.size()), range[1]);
+        for (int i = from; i < to; i++) {
             ChannelView v = chanViews.get(i);
             String id = epgIdOf.get(i);
             if (id == null) { v.setSub(""); continue; }

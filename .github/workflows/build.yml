@@ -59,10 +59,11 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           mkdir -p public/apk
-          cp app/build/outputs/apk/debug/*.apk public/apk/tvui-java-debug.apk
+          # ABI 分包后会产出多个 apk，全部拷进去，由 publish 脚本按 ABI 分别命名上传
+          cp app/build/outputs/apk/debug/*.apk public/apk/
           ls -la public/apk
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -f public/apk/tvui-java-debug.apk
+          git add -f public/apk
           git diff --cached --quiet || git commit -m "ci: publish debug apk [skip ci]"
           git push || python3 .ci/publish_apk.py

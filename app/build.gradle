@@ -11,12 +11,26 @@ android {
         // TV 盒子覆盖最广的下限，Android 5.0
         minSdk 21
         targetSdk 34
-        versionCode 42
-        versionName "1.5.3"
+        versionCode 43
+        versionName "1.6.0"
 
         // 只打两个 ARM 变体：盒子没有 x86 真机。
         // 不过滤的话 libvlc 的 x86/x86_64 两个 so 会白塞进来 +47MB。
         ndk { abiFilters 'arm64-v8a', 'armeabi-v7a' }
+    }
+
+    // 按 ABI 拆包。
+    //
+    // 一个包塞两套 so 时 82.9MB，其中 78.7MB 是 .so（94.9%），
+    // 而任何一台设备只用得上其中一套。拆开后每个包小了将近一半，
+    // 下载和安装都轻松很多。不要 universalApk（那等于没拆）。
+    splits {
+        abi {
+            enable true
+            reset()
+            include 'arm64-v8a', 'armeabi-v7a'
+            universalApk false
+        }
     }
 
     buildTypes {
