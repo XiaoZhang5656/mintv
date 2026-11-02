@@ -2364,6 +2364,9 @@ public class MainActivity extends Activity implements FocusEngine.Host {
 
     /** ③ 纯播放：整套面板淡出，只留视频。任意方向键/点击恢复。 */
     private void enterFullPlayer() {
+        // 还没起播（源没加载出来 / 播放失败）时不允许把面板收掉，
+        // 否则用户会看到一个全黑屏、只有一个点不动的点击层。
+        if (!playing && currentPlayUrl == null) return;
         if (epgPanelOpen) closeEpgPanel();
         setPanelVisible(false);
     }
@@ -3021,12 +3024,26 @@ public class MainActivity extends Activity implements FocusEngine.Host {
      */
     private void onVideoTapped() {
         boolean left = tapX < Theme.px(Theme.NAV_W + Theme.CHAN_W + Theme.RAIL_W);
-        if (osd != null && osd.isVisible()) {
-            osd.hideNow();
-            if (left) showPanel();     // 点左边 → 收 OSD 并打开频道列表
+
+        // 面板已经收起：点一下先弹信息条；信息条此时可能根本没有内容
+        // （还没起播 / 源没加载出来，osd.name 为 null），
+        // reshow() 会返回 false —— 以前这条路径什么都不做，
+        // 于是"面板收起了、点屏幕没反应、只剩设置能开"，也就是用户遇到的死状态。
+        // 兜底：reshow 没东西可弹，就把面板展开。
+        if (!panelVisible) {
+            if (osd != null && osd.reshow()) return;
+            showPanel();
             return;
         }
-        if (osd != null) osd.reshow();
+
+        if (osd != null && osd.isVisible()) {
+            osd.hideNow();
+            if (left) showPanel();
+            return;
+        }
+        if (osd != null && osd.reshow()) return;
+        // 面板可见、OSD 也没内容：点左边直接把焦点交给频道列
+        if (left) showPanel();
     }
 
     /**
@@ -3440,7 +3457,37 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     @Override
     protected void onPause() {
         super.onPause();
+        // 只停播，不销毁 —— 回来时接着播当前台，不用重新拉流
         if (player != null) player.stop();
+    }
+
+    /**
+     * 从后台回来要**重新起播**。
+     *
+     * <p>之前只有 onPause 里的 stop()，没有对应的恢复：
+     * 按 HOME 出去再回来，画面就是全黑、也没声音，
+     * 如果面板恰好是收起状态，看起来就是"黑屏且点不动"。
+     * 这里把输出面重新绑一次，再重开当前频道。
+     */
+    @Override
+    protected void onResume() {
+        super.onResume();
+        if (playerManager == null) return;
+        // 重新绑定画面输出（Surface/TextureView 在后台可能已经失效）
+        if (selections[ROW_OUTPUT] == OUTPUT_TEXTURE) {
+            playerManager.setTextureView(textureView);
+        } else {
+            playerManager.setTextureView(null);
+            if (surfaceView != null && surfaceView.getHolder().getSurface() != null) {
+                playerManager.setSurface(surfaceView.getHolder().getSurface());
+            }
+        }
+        playerManager.setCallback(playerCallback);
+        // 只有"已经播过一次"才自动恢复，冷启动交给 surfaceCreated
+        if (currentPlayUrl != null && playingChannel >= 0 && playingChannel < channels.size()) {
+            playChannelInternal(playingChannel, true);
+        }
+        updateOsdInset();
     }
 
     @Override
