@@ -32,7 +32,16 @@ import java.util.concurrent.atomic.AtomicInteger;
  */
 public final class LogoLoader {
 
-    private static final int TARGET_PX = 96;
+    /**
+     * 台标解码目标高度。
+     *
+     * <p>必须是**跟着分辨率缩放**的：行内台标按 {@code Theme.px(52)} 绘制，
+     * 4K 盒子（scale≈2.0）要画 104px 高，如果这里固定解 96px，
+     * 就会被放大显示 —— 糊。1080p 时 px(96)=96，和原来一致。
+     */
+    private static int targetPx() {
+        return Math.max(96, com.mintv.tv.ui.Theme.px(96));
+    }
     private static final int MAX_QUEUE = 64;
 
     /**
@@ -159,7 +168,7 @@ public final class LogoLoader {
                 if (w <= 0 || h <= 0) return null;
 
                 int sample = 1;
-                while (Math.max(w, h) / (sample * 2) >= TARGET_PX) sample *= 2;
+                while (Math.max(w, h) / (sample * 2) >= targetPx()) sample *= 2;
 
                 BitmapFactory.Options opts = new BitmapFactory.Options();
                 opts.inSampleSize = sample;
@@ -167,9 +176,10 @@ public final class LogoLoader {
                 Bitmap raw = BitmapFactory.decodeByteArray(data, 0, data.length, opts);
                 if (raw == null) return null;
 
-                float scale = TARGET_PX / (float) raw.getHeight();
-                int tw = Math.max(1, Math.min((int) (raw.getWidth() * scale), TARGET_PX * 2));
-                Bitmap out = Bitmap.createScaledBitmap(raw, tw, TARGET_PX, true);
+                int target = targetPx();
+                float scale = target / (float) raw.getHeight();
+                int tw = Math.max(1, Math.min((int) (raw.getWidth() * scale), target * 2));
+                Bitmap out = Bitmap.createScaledBitmap(raw, tw, target, true);
                 if (out != raw) raw.recycle();
                 return out;
             }
