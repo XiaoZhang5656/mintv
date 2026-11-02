@@ -488,6 +488,12 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                     DemoData.Category cat = categories.get(i);
                     NavItemView v = new NavItemView(MainActivity.this);
                     v.bind(cat.name, cat.count, cat.glyph);
+                    // 重建列表时必须重新挂点击监听，否则网络源加载完后分类全部失效
+                    final int catIndex = i;
+                    v.setClickable(true);
+                    v.setOnClickListener(new View.OnClickListener() {
+                        @Override public void onClick(View view) { onCategoryClicked(catIndex); }
+                    });
                     LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(
                             ViewGroup.LayoutParams.MATCH_PARENT, Theme.px(Theme.NAV_ITEM_H));
                     p.bottomMargin = Theme.px(2);
