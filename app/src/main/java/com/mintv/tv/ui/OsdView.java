@@ -291,22 +291,29 @@ public class OsdView extends View {
         // 白色大号数字、半透明圆角底、右对齐，一眼看清已经按了几位，
         // 又不会挡住画面主体和下方 OSD 卡片。位置跟时钟错开（时钟在 topMargin 18），
         // 所以这里从上方 130px 开始往下排。
+        // 大号台号 / 数字输入：**屏幕正中**（视频区居中，让开左侧面板）。
+        // 机顶盒习惯就是这么显示的 —— 换台/按数字时一眼看到台号，
+        // 放在右上角反而要去找。垂直放 40%，上方离时钟远、下方不压 OSD 卡片。
         String bigNumber = (numberInput != null && !numberInput.isEmpty())
                 ? numberInput : channelPulse;
         if (bigNumber != null && !bigNumber.isEmpty()) {
-            p.setTextSize(Theme.sp(46));
-            p.setTextAlign(Paint.Align.RIGHT);
+            float avail = w - leftInset;
+            float cx = leftInset + avail / 2f;
+            float cy = h * 0.40f;
+
+            p.setTextSize(Theme.sp(76));
+            p.setTextAlign(Paint.Align.CENTER);
             p.setFakeBoldText(true);
             float tw = p.measureText(bigNumber);
-            float right = w - Theme.px(36);
-            float baseline = Theme.px(130) + Theme.px(46) * 0.78f;
+
             fill.setColor(0xB3000000);
-            r.set(right - tw - Theme.px(28), Theme.px(130) - Theme.px(10),
-                    right + Theme.px(20), Theme.px(130) + Theme.px(62));
-            c.drawRoundRect(r, Theme.px(10), Theme.px(10), fill);
+            r.set(cx - tw / 2f - Theme.px(56), cy - Theme.px(78),
+                    cx + tw / 2f + Theme.px(56), cy + Theme.px(70));
+            c.drawRoundRect(r, Theme.px(14), Theme.px(14), fill);
+
             p.setColor(0xFFFFFFFF);
-            p.setShadowLayer(Theme.px(4), 0, 0, 0xAA000000);
-            c.drawText(bigNumber, right, baseline, p);
+            p.setShadowLayer(Theme.px(8), 0, 0, 0xAA000000);
+            c.drawText(bigNumber, cx, cy + Theme.px(28), p);
             p.setShadowLayer(0, 0, 0, 0);
             p.setFakeBoldText(false);
             p.setTextAlign(Paint.Align.LEFT);
