@@ -244,6 +244,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             @Override public void onTimeline(long pos, long dur, long buf) {
                 curPosition = pos;
                 curDuration = dur;
+                checkStall(pos);
                 speedMeter.sample();
                 if (selections[ROW_SPEED] == 0) refreshOsdTags();   // 0 = 显示
                 if (!seeking && seekOverlay != null) seekOverlay.hide();
@@ -1000,6 +1001,8 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         lastACodec = null;
         lastBitrate = null;
         speedMeter.reset();
+        stallLastPos = -1;
+        stallSince = 0;
         lineTotal = ch.sources.size();
         replayStartMs = -1;
         osd.showChannel(no, ch.name, ch.group);
@@ -1043,12 +1046,12 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     private static final int ROW_SPEED          = 6;
     private static final int ROW_AUTOPLAY       = 7;
     private static final int ROW_DECODER        = 8;
-    private static final int ROW_TIMEOUT_SWITCH = 9;
-    private static final int ROW_TIMEOUT_SECONDS = 10;
-    private static final int ROW_HEADERS        = 11;
-    private static final int ROW_ENGINE         = 12;
-    private static final int ROW_CLOCK          = 13;
-    private static final int ROW_OUTPUT         = 14;
+    /** 超时换源：0=关闭，1=5s，2=8s，3=12s，4=20s。开关和秒数合成一项了。 */
+    private static final int ROW_TIMEOUT        = 9;
+    private static final int ROW_HEADERS        = 10;
+    private static final int ROW_ENGINE         = 11;
+    private static final int ROW_CLOCK          = 12;
+    private static final int ROW_OUTPUT         = 13;
 
     /**
      * 「没画面」自愈的进度。0 = 还没处理，1 = 已切软解，2 = 已换过线路。
@@ -1346,19 +1349,70 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     /** 用户主动换台 / 换分类：自愈进度清零。 */
     private void resetNoVideoStage() { noVideoStage = 0; }
 
-    private boolean autoSwitchSource() { return selections[ROW_TIMEOUT_SWITCH] == 0; }
+    private boolean autoSwitchSource() { return selections[ROW_TIMEOUT] != 0; }
 
+    /** 超时阈值。0 = 用户关了超时换源。 */
     private long switchTimeoutMs() {
-        switch (selections[ROW_TIMEOUT_SECONDS]) {
-            case 0: return 5000;
-            case 2: return 12000;
-            case 3: return 20000;
-            default: return 8000;
+        switch (selections[ROW_TIMEOUT]) {
+            case 1: return 5000;
+            case 2: return 8000;
+            case 3: return 12000;
+            case 4: return 20000;
+            default: return 0;
         }
     }
 
     private boolean playing = false;
     private boolean watchdogFired = false;
+
+    // ---- 播放中卡顿检测 ----
+    /** 上一次看到的播放位置，以及它最后一次变化的时间。 */
+    private long stallLastPos = -1;
+    private long stallSince = 0;
+
+    /**
+     * 播放中卡顿检测。
+     *
+     * <p>原来的看门狗只管「起播 N 秒内没出首帧」，一旦出帧就把自己撤了，
+     * 之后播到一半卡住（缓冲不再增长、画面冻住）没有任何机制会处理 ——
+     * 电视上这种情况比"起播失败"更常见，尤其是码率高于实际带宽时。
+     *
+     * <p>判据用的是**播放位置是否前进**，不是网速阈值。理由：
+     * 直播间没有可信的「应有码率」可比，网速抖一下不代表卡住；
+     * 而"位置 8 秒不动"是用户真正感受到的症状，且和内核无关
+     * （Exo / VLC 都会让 positionMs 停住）。
+     *
+     * <p>位置不动的原因可能是网络断流、也可能是服务端切片 404，
+     * 这两种都该换源，所以不细分。
+     */
+    private void checkStall(long pos) {
+        if (!autoSwitchSource() || watchdogFired || !playing) return;
+        long limit = switchTimeoutMs();
+        if (limit <= 0) return;                 // 关闭
+        long now = SystemClock.uptimeMillis();
+
+        if (pos != stallLastPos) {
+            stallLastPos = pos;
+            stallSince = now;
+            return;
+        }
+        if (stallSince == 0) { stallSince = now; return; }
+        if (now - stallSince < limit) return;
+
+        // 卡住了：换下一条线路
+        stallSince = now;
+        PlaylistParser.Channel ch = (playingChannel >= 0 && playingChannel < channels.size())
+                ? channels.get(playingChannel) : null;
+        if (ch != null && ch.sources.size() > 1) {
+            currentLine = (currentLine + 1) % ch.sources.size();
+            osd.toast("播放卡住 " + (limit / 1000) + " 秒，切换线路 "
+                    + (currentLine + 1) + "/" + ch.sources.size());
+            playChannel(playingChannel);
+        } else {
+            osd.toast("播放卡住，该频道只有一条线路");
+            watchdogFired = true;               // 别反复刷提示
+        }
+    }
 
     /** 起播后调用：8 秒没出画面就自愈。 */
     private void armWatchdog() {
@@ -2197,7 +2251,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     /** 设置项写入后调用：只处理需要立刻生效的项。 */
     private void onSettingCommitted(int row, int value) {
         selections[row] = value;
-        if (row == ROW_TIMEOUT_SWITCH || row == ROW_TIMEOUT_SECONDS) {
+        if (row == ROW_TIMEOUT) {
             armWatchdog();     // 立即按新策略重新计时
         } else if (row == ROW_DECODER) {
             // 软硬解：只对 Exo 有意义。改了就重建播放器（渲染器在 build 时固定）。
