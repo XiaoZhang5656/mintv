@@ -98,6 +98,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     private int currentLine = 0;
     private int lineTotal = 1;
     private String lastResolution, lastFps;
+    private final com.mintv.tv.ui.player.SpeedMeter speedMeter = new com.mintv.tv.ui.player.SpeedMeter();
 
     // ---- EPG ----
     private final java.util.Map<Integer, String> epgIdOf = new java.util.HashMap<>();  // 频道序号 → EPG channelId
@@ -203,6 +204,8 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             @Override public void onTimeline(long pos, long dur, long buf) {
                 curPosition = pos;
                 curDuration = dur;
+                speedMeter.sample();
+                if (selections[ROW_SPEED] == 0) refreshOsdTags();   // 0 = 显示
                 if (!seeking && seekOverlay != null) seekOverlay.hide();
             }
 
@@ -754,11 +757,13 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         while (no.length() < 4) no = "0" + no;
         lastResolution = null;
         lastFps = null;
+        speedMeter.reset();
         lineTotal = ch.sources.size();
         osd.showChannel(no, ch.name, ch.group);
         osd.setClock(new java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.CHINA)
                 .format(new java.util.Date()));
         refreshOsdTags();
+        refreshSourceRow();
         refreshPlayInfo();
         if (ch.sources.isEmpty()) return;
         PlaylistParser.Source src = ch.sources.get(currentLine);
@@ -785,12 +790,21 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         }
     };
     /** 设置行下标（与 DemoData.ROW_TITLES 顺序一致） */
-    private static final int ROW_RATIO          = 0;
-    private static final int ROW_DECODER        = 7;
-    private static final int ROW_TIMEOUT_SWITCH = 8;
-    private static final int ROW_TIMEOUT_SECONDS = 9;
-    private static final int ROW_HEADERS        = 10;
-    private static final int ROW_ENGINE         = 11;
+    // 顺序必须与 DemoData.ROW_TITLES 完全一致
+    private static final int ROW_SOURCE         = 0;   // 切源
+    private static final int ROW_RATIO          = 1;
+    private static final int ROW_EPG_POS        = 2;
+    private static final int ROW_REVERSE        = 3;
+    private static final int ROW_OSD_STYLE      = 4;
+    private static final int ROW_LEFTKEY        = 5;
+    private static final int ROW_SPEED          = 6;
+    private static final int ROW_AUTOPLAY       = 7;
+    private static final int ROW_DECODER        = 8;
+    private static final int ROW_TIMEOUT_SWITCH = 9;
+    private static final int ROW_TIMEOUT_SECONDS = 10;
+    private static final int ROW_HEADERS        = 11;
+    private static final int ROW_ENGINE         = 12;
+    private static final int ROW_CLOCK          = 13;
 
     /**
      * 「没画面」自愈的进度。0 = 还没处理，1 = 已切软解，2 = 已换过线路。
@@ -947,6 +961,29 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                 .show();
     }
 
+    /**
+     * 手动切线路。
+     *
+     * <p>同一频道在源里常有多条线路（几十上百条的 m3u 尤其明显），
+     * 自动换源只在起播失败时才动，用户想主动换一条试试得有个入口。
+     * 这里做的是真正的循环切换：最后一条的"下一条"回到第一条。
+     */
+    private void switchSource(int delta) {
+        if (playingChannel < 0 || playingChannel >= channels.size()) return;
+        PlaylistParser.Channel ch = channels.get(playingChannel);
+        int n = ch.sources.size();
+        if (n <= 1) {
+            osd.toast("该频道只有一条线路");
+            if (rowViews.size() > ROW_SOURCE) rowViews.get(ROW_SOURCE).setSelected(0);
+            return;
+        }
+        currentLine = ((currentLine + delta) % n + n) % n;
+        resetNoVideoStage();          // 手动换线不算自愈，把降级进度清掉
+        osd.toast("切换线路 " + (currentLine + 1) + "/" + n);
+        playChannel(playingChannel);
+        if (rowViews.size() > ROW_SOURCE) rowViews.get(ROW_SOURCE).setSelected(0);
+    }
+
     /** 切换内核并立刻重开当前源。 */
     private void rebuildEngine(PlaybackEngine e, boolean pinned) {
         if (playerManager == null) return;
@@ -1043,9 +1080,26 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         errorPanel.show("播放诊断", sb.toString());
     }
 
+    /**
+     * 「切源」那一行的文字跟着当前线路变：◀ / 源 2/4 / ▶。
+     * 不然用户点了以后看不出自己在第几条线上。
+     */
+    private void refreshSourceRow() {
+        if (rowViews.size() <= ROW_SOURCE) return;
+        PlaylistParser.Channel ch = (playingChannel >= 0 && playingChannel < channels.size())
+                ? channels.get(playingChannel) : null;
+        int total = ch == null ? 1 : Math.max(1, ch.sources.size());
+        String[] labels = {"◀", "源 " + (currentLine + 1) + "/" + total, "▶"};
+        SettingRowView row = rowViews.get(ROW_SOURCE);
+        row.bind(DemoData.ROW_TITLES[ROW_SOURCE][0], DemoData.ROW_TITLES[ROW_SOURCE][1],
+                labels, 0);
+    }
+
     private void refreshOsdTags() {
         String src = lineTotal > 1 ? ("源 " + (currentLine + 1) + "/" + lineTotal) : "源 1/1";
-        osd.setTags(src, null, lastResolution, null, null, null, lastFps);
+        // 网速显示设置：0 = 显示，1 = 隐藏
+        String speed = selections[ROW_SPEED] == 0 ? speedMeter.text() : null;
+        osd.setTags(src, null, lastResolution, null, null, null, lastFps, speed);
     }
 
     // ================= EPG =================
@@ -1372,6 +1426,19 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         chanContainer.animate().alpha(to).setDuration(Theme.T_PANEL).start();
         railView.animate().alpha(to).setDuration(Theme.T_PANEL).start();
         scrim.animate().alpha(visible ? 1f : 0f).setDuration(Theme.T_PANEL).start();
+        // 时钟以前完全不参与面板显隐，所以纯播放态右上角一直挂着日期时间。
+        // 现在按设置项决定：时钟显示=显示 时随面板一起淡出，=常显 时始终可见。
+        if (clock != null) {
+            boolean keepClock = selections[ROW_CLOCK] == 1;
+            if (keepClock) {
+                clock.setVisibility(View.VISIBLE);
+                clock.animate().alpha(1f).setDuration(Theme.T_PANEL).start();
+            } else {
+                clock.animate().alpha(to).setDuration(Theme.T_PANEL).start();
+                if (!visible) clock.setVisibility(View.GONE);
+                else clock.setVisibility(View.VISIBLE);
+            }
+        }
 
         if (!visible) {
             // 淡出结束后彻底移除，才能保证点不到
@@ -1769,6 +1836,23 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             playChannel(playingChannel);
         } else if (row == ROW_HEADERS) {
             openHeaderEditor();
+        } else if (row == ROW_SPEED) {
+            refreshOsdTags();
+        } else if (row == ROW_SOURCE) {
+            switchSource(value == 0 ? -1 : +1);
+        } else if (row == ROW_CLOCK) {
+            // 立刻生效：面板当前可见就直接显示；不可见时按新设置决定
+            if (clock != null) {
+                if (value == 1) {
+                    clock.setVisibility(View.VISIBLE);
+                    clock.animate().alpha(1f).setDuration(120).start();
+                } else if (!panelVisible) {
+                    clock.animate().alpha(0f).setDuration(120)
+                            .withEndAction(new Runnable() {
+                                @Override public void run() { clock.setVisibility(View.GONE); }
+                            }).start();
+                }
+            }
         } else if (row == ROW_RATIO) {
             applyAspectRatio(value);
         }

@@ -117,10 +117,20 @@ public final class IjkBackend implements PlaybackBackend {
 
         boolean live = (m == Mode.LIVE);
         // ---- format ----
+        //
+        // 血泪教训：**绝对不能设 "fflags"**。
+        // IJK 0.8.8 把 OPT_CATEGORY_FORMAT 的字符串选项直接塞进 AVDictionary，
+        // 但 fflags 在 FFmpeg 里是 AVFormatContext.flags 的位图，不是字符串键。
+        // 传进去会让 ffmpeg 走 av_application_on_http_event 那条内部路径，
+        // 而 IJK 没给这条路径注册回调函数指针 —— 一解引用就是
+        // SIGSEGV at pc=0xb4（fault addr 0x00000000000000b4），
+        // 崩在 ff_read 线程里，Java 层连异常都抓不到。
+        // 实测 backtrace：libijkffmpeg.so (offset 0x4f0000)
+        //                 av_application_on_http_event+24
+        // 低延迟改用 packet-buffering=0 + probe 调小，不碰 fflags。
         p.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "timeout", 8_000_000L);
         p.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "probesize", live ? 512 * 1024L : 2 * 1024 * 1024L);
         p.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "analyzeduration", live ? 800_000L : 2_000_000L);
-        p.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "fflags", "nobuffer");
         p.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "reconnect", 1L);
         p.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "dns_cache_clear", 1L);
         // FFmpeg 的 http 协议只有两个入口：user_agent 和 headers（多行字符串）。

@@ -53,6 +53,7 @@ public final class DemoData {
     public static final String[] TABS = {"账户登录", "播放设置", "手机助手"};
 
     public static final String[][] ROW_TITLES = {
+            {"切源", "同一频道多条线路时手动切换，左=上一条 右=下一条"},
             {"画面比例", ""},
             {"EPG显示", ""},
             {"上下换台反转", "当前：下键上一个，上键下一个"},
@@ -65,9 +66,11 @@ public final class DemoData {
             {"换源等待", "判定超时的秒数"},
             {"请求头", "该源需要特定 UA/Referer 时才填，全局生效"},
             {"播放内核", "Exo 日常 / IJK 软解兜底 / VLC 最后一张牌"},
+            {"时钟显示", "面板收起看片时是否保留右上角日期时间"},
     };
 
     public static final String[][] ROW_OPTIONS = {
+            {"◀ 上一条", "下一条 ▶"},
             {"自动适应", "16:9", "4:3", "原始", "铺满"},
             {"居左", "居中"},
             {"已开启 (ON)", "关闭"},
@@ -80,9 +83,10 @@ public final class DemoData {
             {"5 秒", "8 秒", "12 秒", "20 秒"},
             {"未设置", "编辑…"},
             {"ExoPlayer", "IJK", "VLC"},
+            {"随面板隐藏", "始终显示"},
     };
 
-    public static final int[] ROW_DEFAULT = {0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0};
+    public static final int[] ROW_DEFAULT = {0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0};
 
     // ---------- 无源时的示范 M3U ----------
 

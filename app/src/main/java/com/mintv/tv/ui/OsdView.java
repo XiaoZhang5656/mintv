@@ -41,8 +41,8 @@ public class OsdView extends View {
     private float progress = -1f; // 0~1，<0 不画进度条
 
     // ---- 技术信息小标签 ----
-    private final String[] tags = new String[7];   // 源 / 回看 / 分辨率 / 视频编码 / 音频编码 / 声道 / 帧率
-    private final boolean[] tagOn = new boolean[7];
+    private final String[] tags = new String[8];   // 源 / 回看 / 分辨率 / 视频编码 / 音频编码 / 声道 / 帧率 / 网速
+    private final boolean[] tagOn = new boolean[8];
 
     private String clockText;
     private String statusText;
@@ -91,7 +91,14 @@ public class OsdView extends View {
     /** 技术标签。null 或空串表示该项不可用，直接不画。 */
     public void setTags(String source, String replay, String resolution,
                         String vCodec, String aCodec, String channels, String fps) {
-        String[] v = {source, replay, resolution, vCodec, aCodec, channels, fps};
+        setTags(source, replay, resolution, vCodec, aCodec, channels, fps, null);
+    }
+
+    /** 带网速的版本。speed 形如 "1.2 MB/s"，null 表示不显示。 */
+    public void setTags(String source, String replay, String resolution,
+                        String vCodec, String aCodec, String channels, String fps,
+                        String speed) {
+        String[] v = {source, replay, resolution, vCodec, aCodec, channels, fps, speed};
         for (int i = 0; i < tags.length; i++) {
             boolean on = v[i] != null && !v[i].isEmpty();
             tagOn[i] = on;
