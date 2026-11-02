@@ -1900,46 +1900,11 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         updateChannelFocus(index);
     }
 
-    /** 设置弹窗里的触摸：点选项选中、点卡片外面关闭。 */
-    private boolean handleSettingsTouch(android.view.MotionEvent ev) {
-        if (ev.getActionMasked() != android.view.MotionEvent.ACTION_UP) {
-            return true;   // 按下 / 移动一律吃掉，交给 UP 处理
-        }
-        float x = ev.getX(), y = ev.getY();
-        int screenW = getWindow().getDecorView().getWidth();
-        int cardW = Theme.px(Theme.DLG_W);
-        int cardLeft = (screenW - cardW) / 2;
-        int cardTop = Theme.px(Theme.DLG_TOP);
-
-        // 点弹窗外面 → 关闭
-        if (x < cardLeft || x > cardLeft + cardW) {
-            closeSettings();
-            return true;
-        }
-
-        int rowTop = cardTop + Theme.px(76 + 18);
-        int rowH = Theme.px(82 + 12);
-        int idx = (int) ((y - rowTop) / rowH);
-        if (idx >= 0 && idx < rowViews.size()) {
-            int innerY = (int) ((y - rowTop) - idx * rowH);
-            if (innerY >= 0 && innerY <= Theme.px(82)) {
-                int localX = (int) (x - cardLeft - Theme.px(24));
-                int opt = rowViews.get(idx).segment().indexAt(localX);
-                while (focus.rowIndex() < idx) focus.onKey(KeyEvent.KEYCODE_DPAD_DOWN);
-                while (focus.rowIndex() > idx) focus.onKey(KeyEvent.KEYCODE_DPAD_UP);
-                applyRowFocus(idx);
-                if (opt >= 0) {
-                    // 触屏点选项也必须走 onSettingCommitted，
-                    // 否则「解码方式 / 画面比例」这些项点了不生效。
-                    onSettingCommitted(idx, opt);
-                    rowViews.get(idx).setSelected(opt);
-                    rowViews.get(idx).setRowFocused(false);
-                    rowViews.get(idx).setOptionFocused(opt);
-                }
-            }
-        }
-        return true;
-    }
+    // 旧的 handleSettingsTouch 已删除。
+    // 它靠坐标算「点到了哪一行哪一个选项」，而且挂在 dialogRoot 的
+    // OnTouchListener 上、无条件 return true —— 等于把所有触摸事件
+    // 在到达子 View 之前全吃掉，Tab / ✕ / 选项全部点不动。
+    // 现在每个控件自己挂监听，坐标计算这套整个不需要了。
 
     // ================= 长按快进 =================
 
