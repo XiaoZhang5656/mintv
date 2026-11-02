@@ -291,35 +291,36 @@ public class OsdView extends View {
         // 白色大号数字、半透明圆角底、右对齐，一眼看清已经按了几位，
         // 又不会挡住画面主体和下方 OSD 卡片。位置跟时钟错开（时钟在 topMargin 18），
         // 所以这里从上方 130px 开始往下排。
-        // 台号 / 数字输入：右边缘和**日期时间的右边缘对齐**（都留 36px），
-        // 顶边紧贴时钟下方。
+        // 台号 / 数字输入：在**日期时间那块的正下方、水平居中**。
         //
-        // 之前是"文字右对齐、底框再往外扩 padX"，结果黑底比时钟突出 24px，
-        // 看着就是"太靠右下、没对齐"。
+        // 时钟控件的布局是 width=360、rightMargin=36、topMargin=18，
+        // 所以它的水平中心固定在 w - 36 - 180。台号框跟着这个中心走，
+        // 视觉上就是"挂在日期下面"，而不是贴在屏幕右边缘。
         String bigNumber = (numberInput != null && !numberInput.isEmpty())
                 ? numberInput : channelPulse;
         if (bigNumber != null && !bigNumber.isEmpty()) {
             p.setTextSize(Theme.sp(46));
-            p.setTextAlign(Paint.Align.RIGHT);
+            p.setTextAlign(Paint.Align.LEFT);
             p.setFakeBoldText(true);
             float tw = p.measureText(bigNumber);
 
-            float boxRight = w - Theme.px(36);      // 和时钟同一个右边距
+            float clockCenterX = w - Theme.px(36) - Theme.px(180);
             float padX = Theme.px(22);
+            float boxW = Math.max(Theme.px(120), tw + padX * 2);
             float boxH = Theme.px(64);
-            float top = Theme.px(118);              // 时钟(18 + ~90)之后
+            float top = Theme.px(118);
+            float left = clockCenterX - boxW / 2f;
 
             fill.setColor(0xB3000000);
-            r.set(boxRight - tw - padX * 2, top, boxRight, top + boxH);
+            r.set(left, top, left + boxW, top + boxH);
             c.drawRoundRect(r, Theme.px(10), Theme.px(10), fill);
 
             p.setColor(0xFFFFFFFF);
             p.setShadowLayer(Theme.px(6), 0, 0, 0xAA000000);
             float baseline = top + boxH / 2f - (p.descent() + p.ascent()) / 2f;
-            c.drawText(bigNumber, boxRight - padX, baseline, p);
+            c.drawText(bigNumber, clockCenterX - tw / 2f, baseline, p);
             p.setShadowLayer(0, 0, 0, 0);
             p.setFakeBoldText(false);
-            p.setTextAlign(Paint.Align.LEFT);
         }
 
         // 音量条：右下角、压在网速标签上方。
