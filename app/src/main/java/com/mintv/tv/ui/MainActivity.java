@@ -139,11 +139,15 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     private final List<TextView> tabViews = new ArrayList<>();
     private ScrollView rowScrollView;
     private LinearLayout infoPage;
+    private TextView updateBtn;
     private TextView infoPageText;
     /** 当前设置页的 Tab：0 账户登录 / 1 播放设置 / 2 手机助手 */
     private int currentTab = 1;
     /** 焦点是否在顶部 Tab 条上。第一行按「上」进入，左右切页，下回列表。 */
     private boolean tabFocus = false;
+    /** Tab 下标：0 账户登录 / 1 播放设置 / 2 关于 / 3 手机助手 */
+    private static final int TAB_SETTINGS = 1;
+    private static final int TAB_ABOUT    = 2;
     private final int[] selections = DemoData.ROW_DEFAULT.clone();
 
     /**
@@ -3066,6 +3070,25 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         infoPageText.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, Theme.sp(19));
         infoPageText.setLineSpacing(Theme.px(6), 1f);
         infoPage.addView(infoPageText);
+
+        // 只有「关于」页才显示的检测更新按钮
+        updateBtn = new TextView(this);
+        updateBtn.setText("检测更新");
+        updateBtn.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, Theme.sp(19));
+        updateBtn.setGravity(Gravity.CENTER);
+        updateBtn.setPadding(Theme.px(28), Theme.px(14), Theme.px(28), Theme.px(14));
+        updateBtn.setBackgroundColor(Theme.DLG_OPT_BG);
+        updateBtn.setTextColor(Theme.TEXT);
+        updateBtn.setFocusable(true);
+        updateBtn.setClickable(true);
+        updateBtn.setVisibility(View.GONE);
+        updateBtn.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { checkUpdate(); }
+        });
+        LinearLayout.LayoutParams ubLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        ubLp.topMargin = Theme.px(24);
+        infoPage.addView(updateBtn, ubLp);
         card.addView(infoPage, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, rowsLp.height));
 
@@ -3098,9 +3121,13 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             t.setTextColor(i == index ? Theme.TEXT : 0xFFD6D6D8);
             t.setBackgroundColor(i == index ? 0x0FFFFFFF : Color.TRANSPARENT);
         }
-        rowScrollView.setVisibility(index == 1 ? View.VISIBLE : View.GONE);
-        if (index != 1) {
+        boolean isSettings = (index == TAB_SETTINGS);
+        rowScrollView.setVisibility(isSettings ? View.VISIBLE : View.GONE);
+        if (!isSettings) {
             fillInfoPage(index);
+            if (updateBtn != null) {
+                updateBtn.setVisibility(index == TAB_ABOUT ? View.VISIBLE : View.GONE);
+            }
             infoPage.setVisibility(View.VISIBLE);
         } else {
             infoPage.setVisibility(View.GONE);
@@ -3108,6 +3135,14 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     }
 
     /** 从 PackageManager 读版本号，不依赖 BuildConfig（javac 直编时没有它）。 */
+    private int versionCode() {
+        try {
+            return getPackageManager().getPackageInfo(getPackageName(), 0).versionCode;
+        } catch (Throwable t) {
+            return 0;
+        }
+    }
+
     private String versionName() {
         try {
             return getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
@@ -3130,21 +3165,157 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         return String.format(java.util.Locale.US, "%d:%02d", s / 60, s % 60);
     }
 
+    /**
+     * 检测更新。
+     *
+     * <p>版本信息的来源是自己仓库里的 {@code public/version.json}，
+     * CI 每次构建会重写它，所以永远和最新 APK 一致。
+     *
+     * <p>两个域名依次尝试：raw.githubusercontent 在国内经常被墙，
+     * jsDelivr 作为镜像通常能通。两个都不通就直接说"检查失败"，
+     * 不假装成功、也不弹一堆技术细节给用户。
+     */
+    private void checkUpdate() {
+        osd.toast("正在检查更新…");
+        final String[] urls = {
+                "https://raw.githubusercontent.com/XiaoZhang5656/mintv/main/public/version.json",
+                "https://cdn.jsdelivr.net/gh/XiaoZhang5656/mintv@main/public/version.json",
+        };
+        new Thread(new Runnable() {
+            @Override public void run() {
+                String body = null;
+                String usedBase = null;
+                for (String u : urls) {
+                    body = httpGet(u);
+                    if (body != null && body.contains("versionCode")) {
+                        usedBase = u.substring(0, u.lastIndexOf('/') + 1);
+                        break;
+                    }
+                    body = null;
+                }
+                final String json = body;
+                final String base = usedBase;
+                ui.post(new Runnable() {
+                    @Override public void run() { onUpdateChecked(json, base); }
+                });
+            }
+        }, "check-update").start();
+    }
+
+    private void onUpdateChecked(String json, String baseUrl) {
+        if (json == null) {
+            osd.toast("检查更新失败：网络不可达");
+            return;
+        }
+        int remote = parseIntField(json, "versionCode", -1);
+        String remoteName = parseStrField(json, "versionName");
+        if (remote <= 0) { osd.toast("检查更新失败：版本信息解析异常"); return; }
+
+        int local = versionCode();
+        if (remote <= local) {
+            osd.toast("已是最新版本（" + versionName() + "）");
+            return;
+        }
+        final String apkUrl = baseUrl + "apk/app-arm64-v8a-debug.apk";
+        new android.app.AlertDialog.Builder(this)
+                .setTitle("发现新版本 " + (remoteName == null ? remote : remoteName))
+                .setMessage("当前版本：" + versionName() + "（" + local + "）\n"
+                        + "最新版本：" + (remoteName == null ? "" : remoteName)
+                        + "（" + remote + "）\n\n"
+                        + "下载地址：\n" + apkUrl)
+                .setPositiveButton("复制地址", new android.content.DialogInterface.OnClickListener() {
+                    @Override public void onClick(android.content.DialogInterface d, int w) {
+                        android.content.ClipboardManager cm = (android.content.ClipboardManager)
+                                getSystemService(CLIPBOARD_SERVICE);
+                        cm.setPrimaryClip(android.content.ClipData.newPlainText("mintv", apkUrl));
+                        osd.toast("地址已复制");
+                    }
+                })
+                .setNegativeButton("知道了", null)
+                .show();
+    }
+
+    private String httpGet(String url) {
+        java.net.HttpURLConnection conn = null;
+        try {
+            conn = (java.net.HttpURLConnection) new java.net.URL(url).openConnection();
+            conn.setConnectTimeout(6000);
+            conn.setReadTimeout(8000);
+            conn.setRequestProperty("User-Agent", "MinTV/" + versionName());
+            conn.setInstanceFollowRedirects(true);
+            if (conn.getResponseCode() != 200) return null;
+            java.io.InputStream in = conn.getInputStream();
+            java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+            byte[] buf = new byte[4096];
+            int n;
+            while ((n = in.read(buf)) > 0) bos.write(buf, 0, n);
+            in.close();
+            return bos.toString("UTF-8");
+        } catch (Throwable t) {
+            return null;
+        } finally {
+            if (conn != null) conn.disconnect();
+        }
+    }
+
+    /** 极简 JSON 取值：只认 "key": 123 这种，够读 version.json 用。 */
+    private static int parseIntField(String json, String key, int def) {
+        try {
+            int i = json.indexOf("\"" + key + "\"");
+            if (i < 0) return def;
+            int c = json.indexOf(':', i);
+            int end = c + 1;
+            while (end < json.length() && " \t\r\n".indexOf(json.charAt(end)) >= 0) end++;
+            int start = end;
+            while (end < json.length() && (Character.isDigit(json.charAt(end)) || json.charAt(end) == '-')) end++;
+            return Integer.parseInt(json.substring(start, end));
+        } catch (Throwable t) {
+            return def;
+        }
+    }
+
+    private static String parseStrField(String json, String key) {
+        try {
+            int i = json.indexOf("\"" + key + "\"");
+            if (i < 0) return null;
+            int c = json.indexOf(':', i);
+            int q1 = json.indexOf('"', c);
+            int q2 = json.indexOf('"', q1 + 1);
+            return json.substring(q1 + 1, q2);
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
     private String infoText(int tab) {
         if (tab == 0) {
             return "账户登录\n\n"
                     + "本版本是纯本地播放器：不注册、不上传、不联网校验账号。\n"
-                    + "直播源地址存在本机 SharedPreferences 里，没有服务器，\n"
-                    + "所以这一页暂时没有需要登录的东西。\n\n"
+                    + "直播源地址存在本机，没有服务器，所以这里暂时没有要登录的东西。\n\n"
                     + "将来接后端时会在这里放扫码登录 + 设备绑定。";
+        }
+        if (tab == TAB_ABOUT) {
+            String ver = versionName();
+            int vc = versionCode();
+            String model = android.os.Build.MODEL == null ? "未知" : android.os.Build.MODEL;
+            String brand = android.os.Build.BRAND == null ? "" : android.os.Build.BRAND;
+            return "MinTV  一个纯 Java 的电视直播播放器\n\n"
+                    + "版本      " + ver + "（" + vc + "）\n"
+                    + "设备      " + brand + " " + model + "\n"
+                    + "系统      Android " + android.os.Build.VERSION.RELEASE
+                    + "（API " + android.os.Build.VERSION.SDK_INT + "）\n"
+                    + "播放内核  libVLC 3.5.1 + ExoPlayer 1.3.1\n"
+                    + "界面      全部自绘，零第三方 UI 控件\n\n"
+                    + "本应用不收集任何数据，不做联网统计。\n"
+                    + "直播源由你自行配置，播放内容与本应用无关。";
         }
         return "手机助手\n\n"
                 + "同一 Wi-Fi 下用手机浏览器遥控这台盒子。\n\n"
                 + "需要做的：\n"
-                + "  1. 盒子上开一个 HTTP 服务（监听 0.0.0.0，端口 8080）\n"
-                + "  2. 手机上访问  http://<盒子IP>:8080\n"
+                + "  1. 盒子上开一个 HTTP 服务（监听 0.0.0.0）\n"
+                + "  2. 手机上访问  http://<盒子IP>:端口\n"
                 + "  3. 页面里发「换台 / 音量 / 返回」指令，盒子轮询执行\n\n"
-                + "当前状态：未实现。这一版先把播放链路修稳，遥控后面再加。";
+                + "当前状态：未实现。";
     }
 
     private void fillInfoPage(int tab) {

@@ -50,7 +50,7 @@ public final class DemoData {
         return 5;
     }
 
-    public static final String[] TABS = {"账户登录", "播放设置", "手机助手"};
+    public static final String[] TABS = {"账户登录", "播放设置", "关于", "手机助手"};
 
     public static final String[][] ROW_TITLES = {
             {"切源", "同一频道多条线路时手动切换，左=上一条 右=下一条"},
