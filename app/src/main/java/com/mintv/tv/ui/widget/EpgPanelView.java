@@ -105,6 +105,17 @@ public class EpgPanelView extends android.view.View {
         return -1;
     }
 
+    /** 正在回放的那一条（黄色高亮）。-1 = 没有。 */
+    private int replayIndex = -1;
+
+    public void setReplayIndex(int i) {
+        if (replayIndex == i) return;
+        replayIndex = i;
+        invalidate();
+    }
+
+    public int replayIndex() { return replayIndex; }
+
     public void setFocus(int i) {
         focusIndex = i;
         invalidate();
@@ -140,8 +151,16 @@ public class EpgPanelView extends android.view.View {
             if (y > getHeight()) break;
             Item it = items[i];
 
-            // 当前/焦点行底色
-            if (it.live) {
+            // 当前/焦点行底色。回放中的那一行优先级最高，画成黄色，
+            // 让用户一眼看到"现在放的是哪一条"，而不是只能靠猜。
+            if (i == replayIndex) {
+                fill.setColor(0x40FFC53D);
+                r.set(padH - Theme.px(8), y, getWidth() - padH + Theme.px(8), y + itemH);
+                c.drawRoundRect(r, Theme.px(4), Theme.px(4), fill);
+                fill.setColor(0xFFFFC53D);
+                r.set(padH - Theme.px(8), y, padH - Theme.px(6), y + itemH);
+                c.drawRect(r, fill);       // 左侧黄条
+            } else if (it.live) {
                 fill.setColor(0x332F7BFF);
                 r.set(padH - Theme.px(8), y, getWidth() - padH + Theme.px(8), y + itemH);
                 c.drawRoundRect(r, Theme.px(4), Theme.px(4), fill);
@@ -154,12 +173,14 @@ public class EpgPanelView extends android.view.View {
             float baseline = y + itemH / 2f + Theme.px(7);
 
             // 时间
-            p.setColor(it.live ? Theme.FOCUS_BLUE : 0xFF9A9A9E);
+            p.setColor(i == replayIndex ? 0xFFFFC53D
+                    : (it.live ? Theme.FOCUS_BLUE : 0xFF9A9A9E));
             p.setTextSize(Theme.sp(20));
             c.drawText(it.time, padH, baseline, p);
 
             // 标题
-            p.setColor(it.live ? Theme.TEXT : 0xFFE2E2E6);
+            p.setColor(i == replayIndex ? 0xFFFFE3A3
+                    : (it.live ? Theme.TEXT : 0xFFE2E2E6));
             p.setTextSize(Theme.sp(21));
             float tx = padH + timeW;
             float maxW = getWidth() - tx - padH - Theme.px(76);
@@ -167,7 +188,8 @@ public class EpgPanelView extends android.view.View {
 
             // 右侧标记：直播中 / 回看（绿=可点，灰=源不支持）
             String mark;
-            if (it.live) mark = "直播中";
+            if (i == replayIndex) mark = "回放中";
+            else if (it.live) mark = "直播中";
             else if (it.replay) mark = "回看";
             else if (it.ended) mark = "回看";     // 源不支持时也给按钮，灰掉
             else mark = null;                      // 还没播的节目不显示

@@ -67,14 +67,15 @@ public final class CatchupProbe {
             if (cached != null) return cached >= 0;
         }
 
-        // 直播的分片指纹，用来做「时移地址是不是真的给了别的片段」的对照。
-        // 拿不到就退化成只看内容有效性（liveSeg == null）。
-        String liveSeg = segmentOf(fetchSample(baseUrl));
+        // 这里只判断「这个模板能不能拿到有效内容」，不再比对分片是否和直播不同。
+        // 原因：很多源对未知参数一律返回 200 + 正常直播列表，比对分片会把
+        // 它们全判成不支持；但用户真正要的是「按这个时间点去请求，能不能播」，
+        // 能不能播出结果由播放器自己报错，比事先猜准得多。
 
         // 1) 源里声明了 catchup-source，先按它拼
         if (declaredSource != null && !declaredSource.isEmpty()) {
             String url = baseUrl + fill(declaredSource, startMs, endMs);
-            if (fetchDiffers(liveSeg, url)) {
+            if (fetchOk(url)) {
                 synchronized (hostResult) {
                     hostResult.put(host, 0);
                     hostTemplate.put(host, declaredSource);
@@ -84,7 +85,7 @@ public final class CatchupProbe {
             }
             // 拼法可能是整段 URL（vod 模式），直接试
             String full = fill(declaredSource, startMs, endMs);
-            if (full.startsWith("http") && fetchDiffers(liveSeg, full)) {
+            if (full.startsWith("http") && fetchOk(full)) {
                 synchronized (hostResult) {
                     hostResult.put(host, 0);
                     hostTemplate.put(host, declaredSource);
@@ -97,7 +98,7 @@ public final class CatchupProbe {
         // 2) 没有声明或声明无效 → 用通用模板挨个试
         for (int i = 0; i < TEMPLATES.length; i++) {
             String url = baseUrl + fill(TEMPLATES[i], startMs, endMs);
-            if (fetchDiffers(liveSeg, url)) {
+            if (fetchOk(url)) {
                 synchronized (hostResult) {
                     hostResult.put(host, i);
                     hostTemplate.put(host, TEMPLATES[i]);

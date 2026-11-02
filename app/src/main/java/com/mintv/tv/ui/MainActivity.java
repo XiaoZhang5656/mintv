@@ -949,6 +949,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         lastBitrate = null;
         speedMeter.reset();
         lineTotal = ch.sources.size();
+        replayStartMs = -1;
         osd.showChannel(no, ch.name, ch.group);
         osd.setClock(new java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.CHINA)
                 .format(new java.util.Date()));
@@ -1563,6 +1564,14 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             }
             epgPanel.setData(ch.name + (canReplay ? " · 一周回看" : " · 节目单"),
                     items.toArray(new EpgPanelView.Item[0]));
+            // setData 会重置内部状态，高亮必须在它之后重新打
+            int replayIdx = -1;
+            if (replayStartMs > 0) {
+                for (int i = 0; i < epgWindow.size(); i++) {
+                    if (epgWindow.get(i).startMs == replayStartMs) { replayIdx = i; break; }
+                }
+            }
+            epgPanel.setReplayIndex(replayIdx);
         }
         // 高度撑满视口
         int vh = getWindow().getDecorView().getHeight();
@@ -1722,6 +1731,8 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     private boolean epgPanelOpen = false;
     /** 当前节目单窗口里每一条对应的原始节目，下标与 EpgPanelView 的行一一对应。 */
     private final java.util.ArrayList<EpgParser.Program> epgWindow = new java.util.ArrayList<>();
+    /** 正在回放的节目开始时间；-1 表示当前是直播。用来在节目单里打黄色高亮。 */
+    private long replayStartMs = -1;
 
     /** 节目单里第 idx 条：已播完且源支持回看 → 播时移地址。 */
     private void playReplay(int channelIndex, int idx) {
@@ -1783,8 +1794,11 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         osd.showChannel(no, ch.name + " · 回看 " + EpgParser.hm(prog.startMs), ch.group);
         osd.setProgram(null, null, -1f);
         refreshOsdTags();
+        // 记下这条，节目单里用黄色标出来，用户能看到"现在放的是哪一条"
+        replayStartMs = prog.startMs;
+        epgPanel.setReplayIndex(idx);
         playUrl(url, null, PlaybackBackend.Mode.TIMESHIFT);
-        closeEpgPanel();
+        // 不再自动收起节目单：收起就看不到回放高亮了。想全屏看片自己按返回。
     }
 
     /** 取节目单窗口里的第 idx 条（idx 是界面行号，不是全量列表下标）。 */
