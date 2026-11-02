@@ -8,11 +8,14 @@ android {
 
     defaultConfig {
         applicationId "com.mintv.tvui"
-        // TV 盒子覆盖最广的下限，Android 5.0
-        minSdk 21
+        // Android 4.4。下限由依赖决定，不是随便写的：
+        //   media3-common / media3-exoplayer 的 AAR 声明 minSdk=19
+        //   libvlc-all 3.x                   声明 minSdk=17
+        // 两个一起用，卡在 19。要到 4.2.2(17) 就必须砍掉 media3。
+        minSdk 19
         targetSdk 34
-        versionCode 49
-        versionName "1.7.2"
+        versionCode 50
+        versionName "1.8.0"
 
         // 注意：这里不能再写 ndk { abiFilters ... }。
         // AGP 会直接报 "Conflicting configuration : 'arm64-v8a,armeabi-v7a'
@@ -81,9 +84,10 @@ dependencies {
 
     // VLC：最后的兜底，格式覆盖最广。
     //
-    // 必须是 3.7.x：3.5.1 的 .so 是 4KB 页对齐（readelf 里 LOAD p_align=0x1000），
-    // 在 16KB 页设备上会被系统拒绝加载，并弹「以下库未进行 16 KB 对齐」的兼容性提示。
-    // 3.7.7 实测三个 so 的 p_align 都是 0x4000，问题从根上没了。
-    // 4.0 还是 EAP，不碰。
-    implementation 'org.videolan.android:libvlc-all:3.7.7'
+    // 关于 16KB 对齐：3.5.1 的 so 是 4KB 对齐（p_align=0x1000），
+    // Android 15 会弹「未进行 16KB 对齐」的兼容性提示。
+    // 3.7.7 修好了（p_align=0x4000），但它要求 compileSdk 36，
+    // 现在的 AGP 8.5.2 只到 34，要连 Gradle 一起升 —— 那是独立的构建链改动，
+    // 不跟"降到 4.4"混在一起做，两件事分两次验证。
+    implementation 'org.videolan.android:libvlc-all:3.5.1'
 }

@@ -1,7 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- 唯一主题：没有 ActionBar，背景纯黑，避免启动白闪 -->
-    <style name="Theme.MinTv" parent="@android:style/Theme.Material.NoActionBar">
+    <!-- 唯一主题：没有 ActionBar，背景纯黑，避免启动白闪。
+         父主题用 DeviceDefault（API 14）而不是 Material（API 21）：
+         4.4 的机器上渲染成 Holo，5.0+ 自动渲染成 Material ——
+         每个系统都是它原生该有的样子。界面本身 99% 是自绘的，
+         换父主题对主界面没有视觉影响。 -->
+    <style name="Theme.MinTv" parent="@android:style/Theme.DeviceDefault.NoActionBar">
         <item name="android:windowBackground">@android:color/black</item>
         <item name="android:windowFullscreen">true</item>
         <item name="android:windowContentTransitions">false</item>
