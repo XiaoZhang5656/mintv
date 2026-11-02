@@ -45,6 +45,37 @@ public class OsdView extends View {
     private final boolean[] tagOn = new boolean[9];
 
     private String clockText;
+
+    // ---- 音量 OSD ----
+    private int volumePercent = -1;      // <0 表示不显示
+    private boolean volumeMuted = false;
+    private long volumeUntil;
+    private final Runnable volumeFade = new Runnable() {
+        @Override public void run() { volumePercent = -1; invalidate(); }
+    };
+
+    // ---- 数字键输入提示 ----
+    private String numberInput;
+    private final Runnable numberFade = new Runnable() {
+        @Override public void run() { numberInput = null; invalidate(); }
+    };
+
+    /** 遥控器数字键输入时，屏幕中央显示已经按了哪几位。 */
+    public void showNumberInput(String digits) {
+        numberInput = digits;
+        removeCallbacks(numberFade);
+        postDelayed(numberFade, 1400);
+        invalidate();
+    }
+
+    /** 显示音量条，2 秒后自动消失。 */
+    public void showVolume(int percent, boolean muted) {
+        volumePercent = Math.max(0, Math.min(100, percent));
+        volumeMuted = muted;
+        removeCallbacks(volumeFade);
+        postDelayed(volumeFade, 2000);
+        invalidate();
+    }
     private String statusText;
 
     /** 进度条在 View 坐标系里的矩形，拖动命中测试用。 */
@@ -239,6 +270,58 @@ public class OsdView extends View {
             p.setShadowLayer(Theme.px(3), 0, 0, 0xCC000000);
             c.drawText(toastText, bx + padX, by + padY + p.getTextSize() * 0.85f, p);
             p.setShadowLayer(0, 0, 0, 0);
+        }
+
+        // 数字键输入提示。
+        //
+        // 位置是算过的，不是随手放：
+        //   · 水平方向在**视频区**居中（用 leftInset 让开左侧三栏），
+        //     所以打开频道列表时也不会压在列表上；
+        //   · 垂直放在 30% 高度 —— 上面是时钟（顶部 18+margins），
+        //     下面 OSD 卡片从约 78% 开始，两边都不碰；
+        //   · 和 toast(16%) 、音量条(底部 120px) 也错开，三个同时出现也不会糊在一起。
+        if (numberInput != null && !numberInput.isEmpty()) {
+            float avail = w - leftInset;
+            float cx = leftInset + avail / 2f;
+            p.setTextSize(Theme.sp(64));
+            p.setTextAlign(Paint.Align.CENTER);
+            p.setFakeBoldText(true);
+            float tw = p.measureText(numberInput);
+            float cy = h * 0.30f;
+            fill.setColor(0xCC000000);
+            r.set(cx - tw / 2f - Theme.px(36), cy - Theme.px(56),
+                    cx + tw / 2f + Theme.px(36), cy + Theme.px(56));
+            c.drawRoundRect(r, Theme.px(12), Theme.px(12), fill);
+            p.setColor(0xFFFFFFFF);
+            p.setShadowLayer(Theme.px(6), 0, 0, 0xAA000000);
+            c.drawText(numberInput, cx, cy + Theme.px(22), p);
+            p.setShadowLayer(0, 0, 0, 0);
+            p.setFakeBoldText(false);
+            p.setTextAlign(Paint.Align.LEFT);
+        }
+
+        // 音量条：底部居中，压在一切之上（这是临时反馈，允许盖住其它东西）
+        if (volumePercent >= 0) {
+            float bw = Theme.px(420), bh = Theme.px(10);
+            float bx = (w - bw) / 2f;
+            float by = h - Theme.px(120);
+            float alpha = 1f;
+            fill.setColor(0xCC000000);
+            r.set(bx - Theme.px(70), by - Theme.px(46),
+                    bx + bw + Theme.px(24), by + bh + Theme.px(22));
+            c.drawRoundRect(r, Theme.px(10), Theme.px(10), fill);
+
+            p.setColor(Theme.TEXT);
+            p.setTextSize(Theme.sp(17));
+            p.setTextAlign(Paint.Align.LEFT);
+            c.drawText(volumeMuted ? "静音" : "音量", bx - Theme.px(56), by + Theme.px(4), p);
+
+            fill.setColor(0x33FFFFFF);
+            r.set(bx, by, bx + bw, by + bh);
+            c.drawRoundRect(r, bh / 2f, bh / 2f, fill);
+            fill.setColor(volumeMuted ? 0xFF6B6B6B : Theme.FOCUS_BLUE);
+            r.set(bx, by, bx + bw * (volumePercent / 100f), by + bh);
+            c.drawRoundRect(r, bh / 2f, bh / 2f, fill);
         }
 
         if (statusText != null) {

@@ -105,6 +105,18 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     private int currentLine = 0;
     private int lineTotal = 1;
     private String lastResolution, lastFps, lastVCodec, lastACodec, lastBitrate;
+    // ---- 数字键换台 ----
+    private final StringBuilder numBuf = new StringBuilder();
+    private final Runnable numCommit = new Runnable() {
+        @Override public void run() { commitChannelNumber(); }
+    };
+
+    // ---- 上一频道 ----
+    private int lastChannelNum = -1;
+
+    // ---- 搜索 ----
+    private String searchQuery = "";
+
     private final com.mintv.tv.ui.player.SpeedMeter speedMeter = new com.mintv.tv.ui.player.SpeedMeter();
 
     // ---- EPG ----
@@ -1166,6 +1178,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
 
     /** 上一次画了焦点框的下标，用来只重绘变化的两行。 */
     private int lastFocusedChan = -1;
+    private int lastSubsFocus = -1;
 
     /**
      * 更新频道焦点。
@@ -1179,6 +1192,10 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         // 行池里只有一屏多的 View，焦点一定是「某个被绑定的行」，
         // 所以先把目标行滚进可见区、必要时重绑，再套焦点样式。
         lastFocusedChan = index;
+        if (lastSubsFocus != index) {
+            lastSubsFocus = index;
+            refreshChannelSubs();   // 徽标跟着焦点走
+        }
         scrollChannelIntoView(index);
         applyFocusToPool();
     }
@@ -1235,6 +1252,9 @@ public class MainActivity extends Activity implements FocusEngine.Host {
      */
     private void playChannelInternal(int index, boolean keepLine) {
         if (index < 0 || index >= channels.size()) return;
+        if (index != playingChannel && playingChannel >= 0 && playingChannel < channels.size()) {
+            lastChannelNum = channels.get(playingChannel).number;
+        }
         playingChannel = index;
         PlaylistParser.Channel ch = channels.get(index);
         saveLastChannel(ch);
@@ -2119,7 +2139,9 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             EpgParser.Program live = EpgParser.live(epg.of(id), now);
             if (live == null) { v.setSub(""); continue; }
             v.setSub("正在播放 · " + EpgParser.hm(live.startMs) + " " + live.title);
-            v.setBadge(hasReplay(idx) ? "可回看" : null);
+            // 「可回看」只在焦点行显示：八百多行每行都挂一个灰绿胶囊，
+            // 信息噪音太大，反而看不清台名。
+            v.setBadge((hasReplay(idx) && idx == focus.chanIndex()) ? "可回看" : null);
             v.invalidate();
         }
     }
@@ -3133,6 +3155,25 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             return handleSettingsKey(keyCode, event);
         }
 
+        // ---- 音量：接管系统音量键，给出 App 内反馈 ----
+        if (keyCode == KeyEvent.KEYCODE_VOLUME_UP || keyCode == KeyEvent.KEYCODE_VOLUME_DOWN
+                || keyCode == KeyEvent.KEYCODE_VOLUME_MUTE) {
+            handleVolumeKey(keyCode);
+            return true;
+        }
+
+        // ---- 数字键换台 ----
+        if (keyCode >= KeyEvent.KEYCODE_0 && keyCode <= KeyEvent.KEYCODE_9) {
+            appendChannelDigit(keyCode - KeyEvent.KEYCODE_0);
+            return true;
+        }
+
+        // ---- 上一频道 ----
+        if (keyCode == KeyEvent.KEYCODE_LAST_CHANNEL || keyCode == KeyEvent.KEYCODE_MEDIA_PREVIOUS) {
+            jumpToLastChannel();
+            return true;
+        }
+
         if (keyCode == KeyEvent.KEYCODE_MENU) {
             openSettings();
             return true;
@@ -3307,6 +3348,88 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         chanPanel.animate().alpha(to).setDuration(Theme.T_PANEL).start();
         railView.animate().alpha(to).setDuration(Theme.T_PANEL).start();
         scrim.animate().alpha(to * 0.25f + 0.75f).setDuration(Theme.T_PANEL).start();
+    }
+
+    // ================= 数字键换台 =================
+
+    /** 数字键累计输入，1.2 秒不按就跳台。 */
+    private void appendChannelDigit(int digit) {
+        if (numBuf.length() >= 4) numBuf.setLength(0);
+        numBuf.append((char) ('0' + digit));
+        osd.showNumberInput(numBuf.toString());
+        ui.removeCallbacks(numCommit);
+        ui.postDelayed(numCommit, 1200);
+    }
+
+    private void commitChannelNumber() {
+        String s = numBuf.toString();
+        numBuf.setLength(0);
+        if (s.isEmpty()) return;
+        int num;
+        try { num = Integer.parseInt(s); } catch (NumberFormatException e) { return; }
+        if (num <= 0) return;
+
+        int idx = indexOfNumber(channels, num);
+        if (idx < 0) {
+            int allIdx = indexOfCategory("\u5168\u90e8");
+            if (allIdx >= 0 && !"\u5168\u90e8".equals(currentCategoryName())) {
+                focus.setNavIndexSilently(allIdx);
+                switchCategory(allIdx);
+                updateNavFocus(allIdx);
+            }
+            idx = indexOfNumber(channels, num);
+        }
+        if (idx < 0) { osd.toast("\u6ca1\u6709 " + num + " \u8fd9\u4e2a\u53f0\u53f7"); return; }
+        onChannelClicked(idx);
+        focus.setChanIndexSilently(idx);
+        updateChannelFocus(idx);
+    }
+
+    private static int indexOfNumber(List<PlaylistParser.Channel> list, int num) {
+        if (list == null) return -1;
+        for (int i = 0; i < list.size(); i++) {
+            if (list.get(i).number == num) return i;
+        }
+        return -1;
+    }
+
+    // ================= \u4e0a\u4e00\u9891\u9053 =================
+
+    private void jumpToLastChannel() {
+        if (lastChannelNum <= 0) { osd.toast("\u8fd8\u6ca1\u6709\u4e0a\u4e00\u4e2a\u53f0"); return; }
+        int idx = indexOfNumber(channels, lastChannelNum);
+        if (idx < 0) {
+            int allIdx = indexOfCategory("\u5168\u90e8");
+            if (allIdx >= 0 && !"\u5168\u90e8".equals(currentCategoryName())) {
+                focus.setNavIndexSilently(allIdx);
+                switchCategory(allIdx);
+                updateNavFocus(allIdx);
+            }
+            idx = indexOfNumber(channels, lastChannelNum);
+        }
+        if (idx < 0) { osd.toast("\u4e0a\u4e00\u4e2a\u53f0\u5df2\u7ecf\u4e0d\u5728\u5217\u8868\u91cc\u4e86"); return; }
+        onChannelClicked(idx);
+        focus.setChanIndexSilently(idx);
+        updateChannelFocus(idx);
+    }
+
+    /** \u63a5\u7ba1\u97f3\u91cf\u952e\uff1a\u8c03 STREAM_MUSIC \u5e76\u663e\u793a\u97f3\u91cf\u6761\u3002 */
+    private void handleVolumeKey(int keyCode) {
+        android.media.AudioManager am =
+                (android.media.AudioManager) getSystemService(AUDIO_SERVICE);
+        if (am == null) return;
+        int max = am.getStreamMaxVolume(android.media.AudioManager.STREAM_MUSIC);
+        int cur = am.getStreamVolume(android.media.AudioManager.STREAM_MUSIC);
+        if (keyCode == KeyEvent.KEYCODE_VOLUME_MUTE) {
+            am.setStreamVolume(android.media.AudioManager.STREAM_MUSIC,
+                    cur == 0 ? Math.max(1, max / 3) : 0, 0);
+        } else {
+            int dir = keyCode == KeyEvent.KEYCODE_VOLUME_UP ? 1 : -1;
+            am.adjustStreamVolume(android.media.AudioManager.STREAM_MUSIC, dir, 0);
+        }
+        cur = am.getStreamVolume(android.media.AudioManager.STREAM_MUSIC);
+        int pct = max <= 0 ? 0 : Math.round(cur * 100f / max);
+        osd.showVolume(pct, cur == 0);
     }
 
     private static boolean isDpad(int keyCode) {
