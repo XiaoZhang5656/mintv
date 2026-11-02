@@ -3025,25 +3025,37 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     private void onVideoTapped() {
         boolean left = tapX < Theme.px(Theme.NAV_W + Theme.CHAN_W + Theme.RAIL_W);
 
-        // 面板已经收起：点一下先弹信息条；信息条此时可能根本没有内容
-        // （还没起播 / 源没加载出来，osd.name 为 null），
-        // reshow() 会返回 false —— 以前这条路径什么都不做，
-        // 于是"面板收起了、点屏幕没反应、只剩设置能开"，也就是用户遇到的死状态。
-        // 兜底：reshow 没东西可弹，就把面板展开。
         if (!panelVisible) {
+            // 纯播放态（面板收起）。左右分工，互不干扰：
+            //   点左边 → 收掉信息条 + 展开分类/频道列表
+            //   点右边 → 只切换信息条（显示/隐藏）
+            //
+            // 以前是"先问 reshow()，能弹就 return"，于是信息条显示着的时候
+            // 点左边永远进不到 showPanel()，用户就只能看着 OSD 干瞪眼。
+            if (left) {
+                if (osd != null) osd.hideNow();
+                showPanel();
+                return;
+            }
+            if (osd != null && osd.isVisible()) {
+                osd.hideNow();
+                return;
+            }
             if (osd != null && osd.reshow()) return;
             showPanel();
             return;
         }
 
+        // 面板可见：点 OSD 区域收起它，点别处收起整块面板
         if (osd != null && osd.isVisible()) {
             osd.hideNow();
-            if (left) showPanel();
             return;
         }
-        if (osd != null && osd.reshow()) return;
-        // 面板可见、OSD 也没内容：点左边直接把焦点交给频道列
-        if (left) showPanel();
+        if (osd != null && osd.reshow()) {
+            // 面板可见时点画面：先把信息条叫出来，再点才收面板
+            return;
+        }
+        enterFullPlayer();
     }
 
     /**
