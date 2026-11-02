@@ -44,6 +44,16 @@ public interface PlaybackBackend {
         void onVideoFormat(String resolution, String videoCodec, String audioCodec,
                            String channels, String fps);
 
+        /** 带码率的版本。码率多数源拿不到，默认实现回落老的 5 参版本。 */
+        default void onVideoFormat(String resolution, String videoCodec, String audioCodec,
+                                   String channels, String fps, String bitrate) {
+            onVideoFormat(resolution, videoCodec, audioCodec, channels, fps);
+            onBitrate(bitrate);
+        }
+
+        /** 码率单独一条，OSD 一行放不下时可以只更新这一格。 */
+        default void onBitrate(String bitrate) { }
+
         /** 时长 / 位置变化（毫秒）。live 模式下 durationMs 为 -1。 */
         void onTimeline(long positionMs, long durationMs, long bufferedMs);
     }

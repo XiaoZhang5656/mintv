@@ -41,11 +41,30 @@ public class OsdView extends View {
     private float progress = -1f; // 0~1，<0 不画进度条
 
     // ---- 技术信息小标签 ----
-    private final String[] tags = new String[8];   // 源 / 回看 / 分辨率 / 视频编码 / 音频编码 / 声道 / 帧率 / 网速
-    private final boolean[] tagOn = new boolean[8];
+    private final String[] tags = new String[9];   // 源/回看/分辨率/视频编码/音频编码/声道/帧率/码率/网速
+    private final boolean[] tagOn = new boolean[9];
 
     private String clockText;
     private String statusText;
+
+    /** 进度条在 View 坐标系里的矩形，拖动命中测试用。 */
+    private final android.graphics.RectF barRect = new android.graphics.RectF();
+    private boolean barShown = false;
+    private boolean dragging = false;
+
+    /** 进度条拖动回调。由 Activity 实现（它才知道播放器能不能 seek）。 */
+    public interface SeekListener {
+        boolean canSeek();
+        long durationMs();
+        void onPreview(long positionMs);
+        void onCommit(long positionMs);
+        /** 不可 seek（直播流）。用来提示用户为什么拖不动。 */
+        void onSeekBlocked();
+    }
+
+    private SeekListener seekListener;
+
+    public void setSeekListener(SeekListener l) { this.seekListener = l; }
 
     private long osdUntil;
     private float osdAlpha;
@@ -91,14 +110,14 @@ public class OsdView extends View {
     /** 技术标签。null 或空串表示该项不可用，直接不画。 */
     public void setTags(String source, String replay, String resolution,
                         String vCodec, String aCodec, String channels, String fps) {
-        setTags(source, replay, resolution, vCodec, aCodec, channels, fps, null);
+        setTags(source, replay, resolution, vCodec, aCodec, channels, fps, null, null);
     }
 
-    /** 带网速的版本。speed 形如 "1.2 MB/s"，null 表示不显示。 */
+    /** 带码率和网速的版本。null 表示该项不显示。 */
     public void setTags(String source, String replay, String resolution,
                         String vCodec, String aCodec, String channels, String fps,
-                        String speed) {
-        String[] v = {source, replay, resolution, vCodec, aCodec, channels, fps, speed};
+                        String bitrate, String speed) {
+        String[] v = {source, replay, resolution, vCodec, aCodec, channels, fps, bitrate, speed};
         for (int i = 0; i < tags.length; i++) {
             boolean on = v[i] != null && !v[i].isEmpty();
             tagOn[i] = on;
@@ -188,6 +207,70 @@ public class OsdView extends View {
         }
     }
 
+    /**
+     * 进度条拖动。
+     *
+     * <p>只有回看 / 时移能拖 —— 直播是没有可跳转时间轴的，seek 只能回到直播点，
+     * 那就不是「拖动」了。所以先问 canSeek()，不能就当场说清楚，别让用户拖半天没反应。
+     *
+     * <p>返回 false 时事件会落到下面的 videoTap（点视频区收起面板），
+     * 所以只有真正点在进度条上才消费。
+     */
+    @Override
+    public boolean onTouchEvent(android.view.MotionEvent ev) {
+        if (!barShown || seekListener == null) return false;
+        float x = ev.getX(), y = ev.getY();
+        boolean hit = barRect.contains(x, y);
+
+        switch (ev.getActionMasked()) {
+            case android.view.MotionEvent.ACTION_DOWN:
+                if (!hit) return false;
+                if (!seekListener.canSeek()) {
+                    seekListener.onSeekBlocked();
+                    return true;                 // 吃掉，别再触发收起面板
+                }
+                dragging = true;
+                holdOsd();                       // 拖动期间不许淡出
+                seekListener.onPreview(pctToMs(x));
+                return true;
+
+            case android.view.MotionEvent.ACTION_MOVE:
+                if (!dragging) return false;
+                seekListener.onPreview(pctToMs(x));
+                return true;
+
+            case android.view.MotionEvent.ACTION_UP:
+            case android.view.MotionEvent.ACTION_CANCEL:
+                if (!dragging) return false;
+                dragging = false;
+                if (ev.getActionMasked() == android.view.MotionEvent.ACTION_UP) {
+                    seekListener.onCommit(pctToMs(x));
+                }
+                kick();                          // 拖完恢复 4 秒自动隐藏
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    private long pctToMs(float x) {
+        float left = barRect.left, right = barRect.right;
+        if (right <= left) return 0;
+        float p = (x - left) / (right - left);
+        if (p < 0f) p = 0f;
+        if (p > 1f) p = 1f;
+        long dur = seekListener.durationMs();
+        if (dur <= 0) return 0;
+        return (long) (p * dur);
+    }
+
+    /** 拖动期间保持可见。 */
+    private void holdOsd() {
+        removeCallbacks(fadeTask);
+        osdAlpha = 1f;
+        invalidate();
+    }
+
     private void drawOsd(Canvas c, float h) {
         float padH = Theme.px(22);
         float cardW = Theme.px(1080);
@@ -271,10 +354,13 @@ public class OsdView extends View {
         }
 
         // ---- 第 3 行：进度条 ----
+        barShown = false;
         if (progress >= 0f) {
             float fullW = cardW - padH * 2;
             float barW = fullW - Theme.px(60);
             float barTop = y;
+            barRect.set(rowX, barTop - Theme.px(14), rowX + barW, barTop + barH + Theme.px(14));
+            barShown = true;
             fill.setColor(0x33FFFFFF);
             r.set(rowX, barTop, rowX + barW, barTop + barH);
             c.drawRoundRect(r, barH / 2f, barH / 2f, fill);

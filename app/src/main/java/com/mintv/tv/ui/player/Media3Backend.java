@@ -215,15 +215,12 @@ public final class Media3Backend implements PlaybackBackend {
                 if (cb != null) main.post(new Runnable() {
                     @Override public void run() { cb.onVideoFormat(res, null, null, null, fps); }
                 });
+                reportFormats();
             }
 
             @Override public void onTracksChanged(Tracks tracks) {
                 checkVideoTracks(tracks);
-                final String fps = formatFps();
-                if (fps == null) return;
-                if (cb != null) main.post(new Runnable() {
-                    @Override public void run() { cb.onVideoFormat(null, null, null, null, fps); }
-                });
+                reportFormats();
             }
         });
 
@@ -445,6 +442,69 @@ public final class Media3Backend implements PlaybackBackend {
         if (player == null) return -1;
         long d = player.getDuration();
         return (d == C.TIME_UNSET || d <= 0) ? -1 : d;
+    }
+
+    /** MIME → 人看的编码名。取不到就返回 null，不在 OSD 上编。 */
+    private static String codecName(String mime) {
+        if (mime == null) return null;
+        switch (mime) {
+            case "video/avc": return "H.264";
+            case "video/hevc": return "H.265";
+            case "video/av01": return "AV1";
+            case "video/x-vnd.on2.vp9": return "VP9";
+            case "video/x-vnd.on2.vp8": return "VP8";
+            case "video/mp4v-es": return "MPEG-4";
+            case "video/avs2": return "AVS2";
+            case "video/avs3": return "AVS3";
+            case "audio/mp4a-latm": return "AAC";
+            case "audio/mpeg": return "MP3";
+            case "audio/ac3": return "AC3";
+            case "audio/eac3": return "EAC3";
+            case "audio/opus": return "Opus";
+            case "audio/vnd.dts": return "DTS";
+            default: return mime.startsWith("video/") || mime.startsWith("audio/")
+                    ? mime.substring(6).toUpperCase(java.util.Locale.US) : null;
+        }
+    }
+
+    /**
+     * 一把抓出 OSD 需要的技术信息：分辨率 / 帧率 / 视频编码 / 音频编码 / 码率。
+     * 每项都可能拿不到，拿不到就传 null，OSD 会自动不画那一格 —— 不编数据。
+     */
+    private void reportFormats() {
+        if (player == null || cb == null) return;
+        String res = null, fps = null, vcodec = null, acodec = null, bitrate = null;
+        try {
+            Tracks tracks = player.getCurrentTracks();
+            for (Tracks.Group g : tracks.getGroups()) {
+                for (int i = 0; i < g.length; i++) {
+                    if (!g.isTrackSupported(i)) continue;
+                    androidx.media3.common.Format f = g.getTrackFormat(i);
+                    if (f == null) continue;
+                    if (g.getType() == C.TRACK_TYPE_VIDEO) {
+                        if (vcodec == null) vcodec = codecName(f.sampleMimeType);
+                        if (fps == null && f.frameRate > 0) fps = Math.round(f.frameRate) + "fps";
+                        if (f.width > 0 && f.height > 0 && res == null) res = f.width + "x" + f.height;
+                        if (bitrate == null && f.bitrate > 0) bitrate = mbps(f.bitrate);
+                    } else if (g.getType() == C.TRACK_TYPE_AUDIO) {
+                        if (acodec == null) acodec = codecName(f.sampleMimeType);
+                    }
+                }
+            }
+        } catch (Throwable ignored) {
+            return;
+        }
+        final String fr = res, ff = fps, fv = vcodec, fa = acodec, fb = bitrate;
+        main.post(new Runnable() {
+            @Override public void run() {
+                if (cb != null) cb.onVideoFormat(fr, fv, fa, null, ff, fb);
+            }
+        });
+    }
+
+    private static String mbps(long bps) {
+        if (bps >= 1000_000) return String.format(java.util.Locale.US, "%.1fMbps", bps / 1000_000f);
+        return String.format(java.util.Locale.US, "%dKbps", bps / 1000);
     }
 
     /** 从当前视频轨的 Format 里取帧率。取不到返回 null。 */

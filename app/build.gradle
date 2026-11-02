@@ -11,8 +11,8 @@ android {
         // TV 盒子覆盖最广的下限，Android 5.0
         minSdk 21
         targetSdk 34
-        versionCode 38
-        versionName "1.4.1"
+        versionCode 39
+        versionName "1.5.0"
 
         // 只打两个 ARM 变体：盒子没有 x86 真机。
         // 不过滤的话 libvlc 的 x86/x86_64 两个 so 会白塞进来 +47MB。

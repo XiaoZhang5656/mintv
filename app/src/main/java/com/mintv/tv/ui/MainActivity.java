@@ -104,7 +104,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     private int playingChannel = 0;
     private int currentLine = 0;
     private int lineTotal = 1;
-    private String lastResolution, lastFps;
+    private String lastResolution, lastFps, lastVCodec, lastACodec, lastBitrate;
     private final com.mintv.tv.ui.player.SpeedMeter speedMeter = new com.mintv.tv.ui.player.SpeedMeter();
 
     // ---- EPG ----
@@ -258,7 +258,13 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             @Override public void onVideoFormat(String res, String vc, String ac, String ch, String fps) {
                 if (res != null) lastResolution = res;
                 if (fps != null) lastFps = fps;
+                if (vc != null) lastVCodec = vc;
+                if (ac != null) lastACodec = ac;
                 refreshOsdTags();
+            }
+
+            @Override public void onBitrate(String bitrate) {
+                if (bitrate != null) lastBitrate = bitrate;
             }
         };
         playerManager.setCallback(playerCallback);
@@ -572,6 +578,31 @@ public class MainActivity extends Activity implements FocusEngine.Host {
 
         // --- OSD ---
         osd = new OsdView(this);
+        // 进度条拖动：能不能 seek 由播放内核说了算（直播 = false）
+        osd.setSeekListener(new OsdView.SeekListener() {
+            @Override public boolean canSeek() {
+                return player != null && player.canSeek() && curDuration > 0;
+            }
+            @Override public long durationMs() { return curDuration; }
+            @Override public void onPreview(long ms) {
+                if (seekOverlay != null) {
+                    seekOverlay.update(ms, ms, curDuration);
+                    seekOverlay.show();
+                }
+            }
+            @Override public void onCommit(long ms) {
+                if (player != null && player.canSeek()) {
+                    player.seekTo(ms);
+                    osd.toast("已跳转到 " + fmtMs(ms));
+                }
+                seekHandler.postDelayed(new Runnable() {
+                    @Override public void run() { if (seekOverlay != null) seekOverlay.hide(); }
+                }, 500);
+            }
+            @Override public void onSeekBlocked() {
+                osd.toast("直播流没有可跳转时间轴，回看才能拖");
+            }
+        });
         root.addView(osd, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
     }
@@ -873,6 +904,9 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         while (no.length() < 4) no = "0" + no;
         lastResolution = null;
         lastFps = null;
+        lastVCodec = null;
+        lastACodec = null;
+        lastBitrate = null;
         speedMeter.reset();
         lineTotal = ch.sources.size();
         osd.showChannel(no, ch.name, ch.group);
@@ -1272,7 +1306,8 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         String src = lineTotal > 1 ? ("源 " + (currentLine + 1) + "/" + lineTotal) : "源 1/1";
         // 网速显示设置：0 = 显示，1 = 隐藏
         String speed = selections[ROW_SPEED] == 0 ? speedMeter.text() : null;
-        osd.setTags(src, null, lastResolution, null, null, null, lastFps, speed);
+        osd.setTags(src, null, lastResolution, lastVCodec, lastACodec, null,
+                lastFps, lastBitrate, speed);
     }
 
     // ================= EPG =================
@@ -1912,6 +1947,12 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         } catch (Throwable t) {
             return "1.1.0";
         }
+    }
+
+    private static String fmtMs(long ms) {
+        if (ms < 0) ms = 0;
+        long s = ms / 1000;
+        return String.format(java.util.Locale.US, "%d:%02d", s / 60, s % 60);
     }
 
     private String infoText(int tab) {
