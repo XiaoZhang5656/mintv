@@ -122,16 +122,18 @@ public class NavItemView extends BaseCardView {
         float top = cy - ph / 2f;
 
         boolean foc = focusProgress > 0.5f;
-        // 底
+        // 底：选中的分类用绿色，表示"当前就在这里"；
+        // 焦点（遥控器停在这一行但还没选中）用蓝色；
+        // 其它保持原来的暗金色。三个状态一眼能分开。
         bgPaint.setStyle(Paint.Style.FILL);
-        bgPaint.setColor(foc ? Theme.FOCUS_BLUE : Theme.GOLD);
+        bgPaint.setColor(active ? Theme.SEL_GREEN : (foc ? Theme.FOCUS_BLUE : Theme.GOLD));
         rect.set(left, top, right, top + ph);
         path.reset();
         path.addRoundRect(rect, ph / 2f, ph / 2f, android.graphics.Path.Direction.CW);
         c.drawPath(path, bgPaint);
 
         // 字
-        textPaint.setColor(foc ? Theme.TEXT : Theme.BG);
+        textPaint.setColor((foc || active) ? Theme.TEXT : Theme.BG);
         textPaint.setFakeBoldText(true);
         textPaint.setTextSize(pillTextSize);
         float bty = cy - (textPaint.descent() + textPaint.ascent()) / 2f;

@@ -846,8 +846,15 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         return Theme.px(Theme.CHAN_ITEM_H + Theme.CHAN_ITEM_GAP);
     }
 
+    /**
+     * 频道行在 ScrollView 内容里的起始偏移。
+     *
+     * <p>必须是 0：「节目 » 信息」那个表头是 chanScroll 的**兄弟**，
+     * 不在滚动内容里。之前把表头高度也算进来，等于给每一行多加 76px，
+     * 结果第一个频道被顶到很下面，看着像列表没对齐。
+     */
     private int listTopPx() {
-        return Theme.px(26) + Theme.px(50);
+        return 0;
     }
 
     private void bindChannels() {

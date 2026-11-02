@@ -19,6 +19,8 @@ public final class Theme {
     public static final int TEXT_DIM     = 0xFF77777A;
     public static final int FOCUS_BLUE   = 0xFF2F7BFF;
     public static final int GOLD         = 0xFF8B8B6A;
+    /** 选中的分类计数胶囊底色。绿色＝已选，蓝色＝焦点，暗金＝普通。 */
+    public static final int SEL_GREEN    = 0xFF3FA85A;
 
     // 面板
     public static final int PANEL_NAV    = 0x0AFFFFFF;   // 左导航前景层
