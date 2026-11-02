@@ -165,6 +165,20 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         }
     };
 
+    /** 面板占了左边多少，OSD 卡片就要让开多少。 */
+    private void updateOsdInset() {
+        if (osd == null) return;
+        int inset;
+        if (!panelVisible) {
+            inset = 0;
+        } else if (epgPanelOpen) {
+            inset = Theme.px(Theme.CHAN_W + 8 + Theme.EPG_W);
+        } else {
+            inset = Theme.px(Theme.NAV_W + 1 + Theme.CHAN_W + 1 + Theme.RAIL_W);
+        }
+        osd.setLeftInset(inset);
+    }
+
     private void updateSpeedLabel() {
         if (speedLabel == null) return;
         boolean want = selections[ROW_SPEED] == 0;
@@ -1370,6 +1384,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     private static final String KEY_LINE_PREFS = "line_prefs";
     private static final String KEY_FAVS = "favorites";
     private static final String KEY_LAST_CHAN = "last_chan";
+    private static final String KEY_LAST_CAT = "last_cat";
     private static final String FAV_CATEGORY = "我的收藏";
 
     /** 收藏的频道，key = 台号|台名。用 LinkedHashSet 保住收藏顺序。 */
@@ -1484,14 +1499,38 @@ public class MainActivity extends Activity implements FocusEngine.Host {
      */
     private void saveLastChannel(PlaylistParser.Channel ch) {
         if (ch == null) return;
+        // 频道和它所在的分类要一起记。只记频道的话，重启后列表停在「全部」、
+        // 焦点还在第一个台上，用户看到的和正在播的根本对不上。
         getSharedPreferences(PREF, MODE_PRIVATE).edit()
-                .putString(KEY_LAST_CHAN, favKey(ch)).apply();
+                .putString(KEY_LAST_CHAN, favKey(ch))
+                .putString(KEY_LAST_CAT, currentCategoryName())
+                .apply();
+    }
+
+    private int indexOfCategory(String name) {
+        if (categories == null || name == null) return -1;
+        for (int i = 0; i < categories.size(); i++) {
+            if (name.equals(categories.get(i).name)) return i;
+        }
+        return -1;
     }
 
     /** 启动时恢复上次的频道。找不到就保持默认（第一个台）。 */
     private void restoreLastChannel() {
-        String key = getSharedPreferences(PREF, MODE_PRIVATE).getString(KEY_LAST_CHAN, null);
+        android.content.SharedPreferences p = getSharedPreferences(PREF, MODE_PRIVATE);
+        String key = p.getString(KEY_LAST_CHAN, null);
         if (key == null || key.isEmpty()) return;
+
+        // ① 先回到上次所在的分类，列表内容才对得上
+        String cat = p.getString(KEY_LAST_CAT, null);
+        int ci = indexOfCategory(cat);
+        if (ci >= 0 && !cat.equals(currentCategoryName())) {
+            focus.setNavIndexSilently(ci);
+            switchCategory(ci);
+            updateNavFocus(ci);
+        }
+
+        // ② 再在该分类里定位上次那个台
         int idx = -1;
         for (int i = 0; i < channels.size(); i++) {
             if (favKey(channels.get(i)).equals(key)) { idx = i; break; }
@@ -1500,7 +1539,6 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         playingChannel = idx;
         focus.setChannelCount(channels.size());
         focus.resetChannelFocus();
-        // 焦点也跟着落到那个台上，用户一进来就看到自己在看哪一台
         while (focus.chanIndex() < idx) focus.onKey(KeyEvent.KEYCODE_DPAD_DOWN);
         updateChannelFocus(idx);
     }
@@ -2122,6 +2160,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                 .translationX(-Theme.px(Theme.NAV_W))
                 .setDuration(Theme.T_PANEL).start();
         layoutVideoTap();
+        updateOsdInset();
     }
 
     /** 收起抽屉：分类栏滑回，频道列归位，节目单淡出。 */
@@ -2148,6 +2187,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                 .translationX(0f)
                 .setDuration(Theme.T_PANEL).start();
         layoutVideoTap();
+        updateOsdInset();
     }
 
     /** ③ 纯播放：整套面板淡出，只留视频。任意方向键/点击恢复。 */
@@ -2219,6 +2259,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         if (videoTap != null) {
             videoTap.setVisibility(visible ? View.VISIBLE : View.GONE);
         }
+        updateOsdInset();
     }
 
     /** 面板不可见时把子 View 全部设为不可点击，双保险。 */

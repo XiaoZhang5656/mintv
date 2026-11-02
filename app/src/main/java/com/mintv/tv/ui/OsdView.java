@@ -50,6 +50,8 @@ public class OsdView extends View {
     /** 进度条在 View 坐标系里的矩形，拖动命中测试用。 */
     private final android.graphics.RectF barRect = new android.graphics.RectF();
     private boolean barShown = false;
+    /** 左侧被面板挡住时，卡片要往右让，否则会盖在频道列表上。 */
+    private float leftInset = 0f;
     private boolean dragging = false;
 
     /** 进度条拖动回调。由 Activity 实现（它才知道播放器能不能 seek）。 */
@@ -65,6 +67,16 @@ public class OsdView extends View {
     private SeekListener seekListener;
 
     public void setSeekListener(SeekListener l) { this.seekListener = l; }
+
+    /**
+     * 设置左侧占位宽度（面板可见时等于三栏总宽）。
+     * 卡片在剩余区域里居中，不会压到频道列表上。
+     */
+    public void setLeftInset(float px) {
+        if (Math.abs(leftInset - px) < 1f) return;
+        leftInset = px;
+        invalidate();
+    }
 
     private long osdUntil;
     private float osdAlpha;
@@ -323,7 +335,9 @@ public class OsdView extends View {
                 + (nextText != null ? lineSub + gap : 0)
                 + chipH + padH;
         float cardH = contentH;
-        float left = (getWidth() - cardW) / 2f;   // 底部居中
+        // 底部居中，但要让开左侧面板：剩下的那块区域里居中。
+        float avail = getWidth() - leftInset;
+        float left = leftInset + Math.max(0f, (avail - cardW) / 2f);
         float bottom = h - Theme.px(56);
         float top = bottom - cardH;
 
