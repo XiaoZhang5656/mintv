@@ -32,6 +32,14 @@ public interface PlaybackBackend {
         void onError(String msg);
         void onFirstFrame();
 
+        /**
+         * 音频在放、画面出不来：视频编码本机不支持，或者这个流根本没有视频轨。
+         *
+         * <p>这是「有声音没画面」的明确信号。以前这类情况内核什么都不报，
+         * UI 就只能对着黑屏播到底，所以接口必须单开一个回调把它挑明。
+         */
+        default void onVideoUnavailable(String reason) { }
+
         /** 解码器输出的视频格式，拿不到就各传 null。 */
         void onVideoFormat(String resolution, String videoCodec, String audioCodec,
                            String channels, String fps);

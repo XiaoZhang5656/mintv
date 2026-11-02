@@ -60,6 +60,8 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     private View navPanel, chanPanel, railView, scrim, navDivider;
     private View chanContainer;   // 频道列的外层，抽屉展开时整体左移
     private ScrollView chanScroll;
+    private View videoTap;        // 铺满全屏的「点视频区」层
+    private float tapX, tapY;
 
     // ---- 长按快进 ----
     private SeekOverlayView seekOverlay;
@@ -154,11 +156,10 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         player = new Media3Backend();
         player.setCallback(new PlaybackBackend.Callback() {
             @Override public void onState(PlaybackBackend.State s) {
-                if (s == PlaybackBackend.State.READY) {
-                    playing = true;
-                    watchdogFired = true;
-                    ui.removeCallbacks(playbackWatchdog);
-                }
+                // 注意：READY 只代表解封装 + 解码器就绪，<b>不代表出画面</b>。
+                // 以前在这里就把 playing 置 true、把看门狗撤掉，
+                // 结果「有声音没画面」时看门狗永远不会触发，黑屏能一路播到底。
+                // 现在只认 onFirstFrame。
                 osd.setStatus(OsdView.stateText(s));   // READY 返回 null，会自动清空
             }
             @Override public void onFirstFrame() {
@@ -166,6 +167,14 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                 watchdogFired = true;
                 ui.removeCallbacks(playbackWatchdog);
                 osd.setStatus(null);
+            }
+
+            @Override public void onVideoUnavailable(String reason) {
+                // 音频在放、画面出不来。这是「有声音没画面」的实锤信号：
+                // 先提示，再按设置决定是否换源，绝不静默黑屏。
+                dumpPlaybackState("NO_VIDEO", reason);
+                osd.toast(reason);
+                onNoVideo(reason);
             }
 
             @Override public void onTimeline(long pos, long dur, long buf) {
@@ -193,9 +202,20 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                 player.setSurface(h.getSurface());
                 playChannel(playingChannel);
             }
-            @Override public void surfaceChanged(SurfaceHolder h, int f, int w, int ht) { }
+            @Override public void surfaceChanged(SurfaceHolder h, int f, int w, int ht) {
+                // 尺寸变化后解码器的输出面会失效，必须重新绑一次。
+                // 以前这里是空的，切分辨率 / 从后台回来就黑屏只有声音。
+                if (h.getSurface() != null && h.getSurface().isValid()) {
+                    player.setSurface(h.getSurface());
+                }
+            }
             @Override public void surfaceDestroyed(SurfaceHolder h) { player.setSurface(null); }
         });
+
+        // 「解码方式」设置项：0 = 硬件，1 = 软件
+        if (player instanceof Media3Backend) {
+            ((Media3Backend) player).setPreferSoftwareDecoder(selections[ROW_DECODER] == 1);
+        }
 
         ui.post(clockTick);
         loadEpgAsync();
@@ -226,6 +246,28 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         int scrimW = Theme.px(Theme.SCRIM_W);
         int top = 0;
 
+        // --- 视频区点击层（最底层，铺满全屏）---
+        // 所有面板都比它后加，所以点击先给面板，面板不消费才落到这里。
+        // 作用只有一个：点视频区 → 收起左侧三栏；面板已收起时反过来交给
+        // gestureLayer 处理，两态各管一边，不会互相抢。
+        videoTap = new View(this);
+        videoTap.setBackgroundColor(0x00000000);
+        videoTap.setClickable(true);
+        videoTap.setOnTouchListener(new View.OnTouchListener() {
+            @Override public boolean onTouch(View v, android.view.MotionEvent e) {
+                if (e.getActionMasked() == android.view.MotionEvent.ACTION_DOWN) {
+                    tapX = e.getX();
+                    tapY = e.getY();
+                }
+                return false;      // 不消费，交给 OnClickListener
+            }
+        });
+        videoTap.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { onVideoAreaTapped(tapX, tapY); }
+        });
+        root.addView(videoTap, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
         // --- 遮罩 ---
         scrim = new ScrimView(this);
         root.addView(scrim, new FrameLayout.LayoutParams(scrimW, ViewGroup.LayoutParams.MATCH_PARENT));
@@ -239,6 +281,9 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         nav.addView(buildNavHeader(), new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, Theme.px(76)));
 
+        // 吞掉列表空白处的点击：不然 user 想滚动时点一下空白，
+        // 事件会穿透到底层的 videoTap，面板莫名其妙就收起了。
+        nav.setClickable(true);
         navPanel = nav;
 
         ScrollView navScroll = new ScrollView(this);
@@ -298,6 +343,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                 ViewGroup.LayoutParams.WRAP_CONTENT));
         chan.addView(chanScroll, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+        chan.setClickable(true);   // 同上，吞掉频道列空白点击
         chanPanel = chan;
 
         FrameLayout.LayoutParams chanLp = new FrameLayout.LayoutParams(
@@ -345,21 +391,25 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         epgScroll.setVisibility(View.GONE);
         root.addView(epgScroll, epgLp);
 
-        // --- 长按唤出设置的手势层（只在中央区域生效，不吃列表触摸）---
+        // --- 纯播放态的手势层：只在左侧面板收起时可见，铺满全屏 ---
+        // 单击 = 唤回左侧面板，长按 = 打开设置。
+        // 为什么必须铺满：面板收起后全屏没有任何可点控件，点击事件会一路落到
+        // Activity.dispatchTouchEvent 里没人消费，用户「点了没反应」就是这么来的。
         gestureLayer = new View(this);
         gestureLayer.setBackgroundColor(0x00000000);
+        gestureLayer.setClickable(true);
+        gestureLayer.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { showPanel(); }
+        });
         gestureLayer.setOnLongClickListener(new View.OnLongClickListener() {
             @Override public boolean onLongClick(View v) {
-                openSettings();     // 长按播放区中央唤出设置
+                openSettings();
                 return true;
             }
         });
         gestureLayer.setVisibility(View.GONE);   // 只在面板收起时启用
-        FrameLayout.LayoutParams gLp = new FrameLayout.LayoutParams(
-                Theme.px(760), FrameLayout.LayoutParams.MATCH_PARENT);
-        gLp.leftMargin = Theme.px(Theme.NAV_W + Theme.CHAN_W + Theme.RAIL_W);
-        gLp.gravity = Gravity.CENTER_VERTICAL;
-        root.addView(gestureLayer, gLp);
+        root.addView(gestureLayer, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
         // --- 长按快进预览 ---
         seekOverlay = new SeekOverlayView(this);
@@ -610,6 +660,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
 
     /** 点频道：切台 + 选中框 + 刷新节目单。 */
     private void onChannelClicked(int index) {
+        resetNoVideoStage();
         playChannel(index);
         focusOnChannel(index);
         fillEpg(index);
@@ -704,8 +755,62 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         }
     };
     /** 设置行下标（与 DemoData.ROW_TITLES 顺序一致） */
+    private static final int ROW_RATIO          = 0;
+    private static final int ROW_DECODER        = 7;
     private static final int ROW_TIMEOUT_SWITCH = 8;
     private static final int ROW_TIMEOUT_SECONDS = 9;
+
+    /**
+     * 「没画面」自愈的进度。0 = 还没处理，1 = 已切软解，2 = 已换过线路。
+     *
+     * <p>只在用户主动换台 / 换分类时清零。绝对不能放在 playChannel /
+     * armWatchdog 里清零 —— 那是自愈自己调进去的，会被无限踢源。
+     */
+    private int noVideoStage = 0;
+
+    /**
+     * 有声音没画面时的自愈。
+     *
+     * <p>处理顺序（每一步都会失败就往下走）：
+     * <ol>
+     *   <li>硬件解码下先就地切成软解重开一次 —— 低端盒子硬解「出帧失败」占绝大多数；</li>
+     *   <li>软解也没画面 → 换下一个线路；</li>
+     *   <li>只有一条线路 → 明确提示，不再黑着播。</li>
+     * </ol>
+     */
+    private void onNoVideo(String reason) {
+        // 已经有明确结论了，别再让「无响应」看门狗插一脚去踢源
+        watchdogFired = true;
+        ui.removeCallbacks(playbackWatchdog);
+        if (noVideoStage == 0
+                && player instanceof Media3Backend
+                && !((Media3Backend) player).preferSoftwareDecoder()) {
+            // ① 硬解 → 软解。低端盒子「硬解初始化成功但不出帧」占绝大多数
+            noVideoStage = 1;
+            selections[ROW_DECODER] = 1;
+            if (rowViews.size() > ROW_DECODER) rowViews.get(ROW_DECODER).setSelected(1);
+            ((Media3Backend) player).setPreferSoftwareDecoder(true);
+            osd.toast("无画面，切换软解重试");
+            playChannel(playingChannel);
+            return;
+        }
+        PlaylistParser.Channel ch = (playingChannel >= 0 && playingChannel < channels.size())
+                ? channels.get(playingChannel) : null;
+        if (noVideoStage <= 1 && ch != null && ch.sources.size() > 1 && autoSwitchSource()) {
+            // ② 软解也不行 → 换线路
+            noVideoStage = 2;
+            currentLine = (currentLine + 1) % ch.sources.size();
+            osd.toast("该线路无画面，切换线路 " + (currentLine + 1) + "/" + ch.sources.size());
+            playChannel(playingChannel);
+            return;
+        }
+        // ③ 没得换，明说，不再黑着播
+        noVideoStage = 3;
+        osd.setStatus("无画面：" + reason);
+    }
+
+    /** 用户主动换台 / 换分类：自愈进度清零。 */
+    private void resetNoVideoStage() { noVideoStage = 0; }
 
     private boolean autoSwitchSource() { return selections[ROW_TIMEOUT_SWITCH] == 0; }
 
@@ -1214,6 +1319,13 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         dialogRoot.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) { }   // 吞掉点击
         });
+        // 触屏/鼠标：以前 handleSettingsTouch 写好了却从没被调用，
+        // 结果设置弹窗里点选项完全没反应，只能靠遥控器。
+        dialogRoot.setOnTouchListener(new View.OnTouchListener() {
+            @Override public boolean onTouch(View v, android.view.MotionEvent e) {
+                return handleSettingsTouch(e);
+            }
+        });
 
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
@@ -1356,7 +1468,57 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         selections[row] = value;
         if (row == ROW_TIMEOUT_SWITCH || row == ROW_TIMEOUT_SECONDS) {
             armWatchdog();     // 立即按新策略重新计时
+        } else if (row == ROW_DECODER) {
+            // 「解码方式」以前只是个选项，改了完全没人读，等于摆设。
+            if (player instanceof Media3Backend) {
+                ((Media3Backend) player).setPreferSoftwareDecoder(value == 1);
+            }
+            playChannel(playingChannel);
+        } else if (row == ROW_RATIO) {
+            applyAspectRatio(value);
         }
+    }
+
+    /**
+     * 画面比例。直接改 SurfaceView 的 LayoutParams 尺寸，
+     * 靠 VideoFrameReleaseControl 的居中缩放把画面塞进去 —— 不碰解码器。
+     * 对 4:3 老频道的用户来说，这是「画面被拉扁」的唯一解法。
+     */
+    private void applyAspectRatio(int mode) {
+        if (surfaceView == null || surfaceView.getLayoutParams() == null) return;
+        FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) surfaceView.getLayoutParams();
+        if (mode == 0) {                       // 自动适应：铺满全屏
+            lp.width = ViewGroup.LayoutParams.MATCH_PARENT;
+            lp.height = ViewGroup.LayoutParams.MATCH_PARENT;
+        } else {
+            float ratio;
+            switch (mode) {
+                case 1: ratio = 16f / 9f; break;
+                case 2: ratio = 4f / 3f; break;
+                default: ratio = 0f; break;
+            }
+            if (mode == 3 || ratio <= 0f) {     // 原始：保持全屏，交给内核原始尺寸
+                lp.width = ViewGroup.LayoutParams.MATCH_PARENT;
+                lp.height = ViewGroup.LayoutParams.MATCH_PARENT;
+            } else {
+                int sw = getResources().getDisplayMetrics().widthPixels;
+                int sh = getResources().getDisplayMetrics().heightPixels;
+                int w = sw, h = (int) (sw / ratio);
+                if (h > sh) { h = sh; w = (int) (sh * ratio); }
+                lp.width = w;
+                lp.height = h;
+            }
+        }
+        lp.gravity = Gravity.CENTER;
+        surfaceView.setLayoutParams(lp);
+        ui.postDelayed(new Runnable() {
+            @Override public void run() {
+                SurfaceHolder h = surfaceView.getHolder();
+                if (h.getSurface() != null && h.getSurface().isValid()) {
+                    player.setSurface(h.getSurface());   // 尺寸变了必须重绑
+                }
+            }
+        }, 60);
     }
 
     @Override
@@ -1383,82 +1545,23 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         // 每个自绘 View 加点击回调后，才会消费 DOWN/UP 并能正常参与滚动判定
     }
 
-    /** 按屏幕坐标判断点到了哪一栏哪一项。 */
-    private boolean hitTest(float x, float y) {
-        int navW = Theme.px(Theme.NAV_W);
-        int chanW = chanWidth();
-
-        // ===== 抽屉态 =====
-        // [频道列 476][节目单 422][视频]
-        // 规则：
-        //   · 点节目单里的条目 → 回看
-        //   · 点左侧频道列      → 换台
-        //   · 点节目单右侧（视频区）→ 整个抽屉收起，回到「分类+频道」常态
-        if (epgPanelOpen) {
-            int epgLeft = chanW + Theme.px(8);
-            int epgRight = epgLeft + Theme.px(Theme.EPG_W);
-
-            if (x < chanW) {
-                hitChannelColumn(x, y, 0);
-                return true;
-            }
-            if (x < epgRight) {
-                int idx = epgPanel.itemAt(y);
-                if (idx >= 0) playReplay(playingChannel, idx);
-                return true;
-            }
-            // 点在节目单右边（视频区）→ 收起抽屉，唤回分类栏
-            closeEpgPanel();
-            return true;
-        }
-
-        // --- 左侧分类列 ---
-        if (x < navW) {
-            int listTop = Theme.px(34 + 76);              // 顶部内边距 + 标题高度
-            int rowH = Theme.px(Theme.NAV_ITEM_H + 2);
-            ScrollView navScroll = findScrollParent(navViews.isEmpty() ? navPanel : navViews.get(0));
-            int scrollY = navScroll == null ? 0 : navScroll.getScrollY();
-            int idx = (int) ((y + scrollY - listTop) / rowH);
-            if (idx >= 0 && idx < navViews.size()) {
-                switchCategory(idx);
-                // 分类点完把焦点交给频道列，否则看不到选中框
-                focus.setZone(FocusEngine.Zone.CHAN);
-                focus.setNavIndexSilently(idx);
-                updateNavFocus(idx);
-                updateChannelFocus(0);
-            }
-            return true;
-        }
-
-        // --- 中间频道列 ---
-        if (x < navW + chanW) {
-            hitChannelColumn(x, y, navW);
-            return true;
-        }
-
-        // --- 竖轨：点它展开抽屉 ---
-        if (x <= navW + chanW + Theme.px(Theme.RAIL_W)) {
-            showEpgPanel(playingChannel >= 0 ? playingChannel : focus.chanIndex());
-            return true;
-        }
-        return false;
-    }
-
-    /** 频道列命中。offsetX = 频道列左边界在屏幕上的 x。 */
-    private void hitChannelColumn(float x, float y, int offsetX) {
-        ScrollView sv = findScrollParent(chanViews.isEmpty() ? chanColumn : chanViews.get(0));
-        int scrollY = sv == null ? 0 : sv.getScrollY();
-        int itemH = Theme.px(Theme.CHAN_ITEM_H + Theme.CHAN_ITEM_GAP);
-        int listTop = Theme.px(26 + 50);
-        int idx = (int) ((y + scrollY - listTop) / itemH);
-        if (idx >= 0 && idx < channels.size()) {
-            playChannel(idx);
-            focusOnChannel(idx);
-            fillEpg(idx);
-        }
+    /**
+     * 视频区（三栏右侧那块黑）被点击。
+     *
+     * <p>三态各管一边：
+     * <ul>
+     *   <li>抽屉态 → 收起抽屉，回到「分类 + 频道」；</li>
+     *   <li>常态   → 收起整套面板，进纯播放；</li>
+     *   <li>纯播放 → 这层已经被 gestureLayer 盖住，走不到这里。</li>
+     * </ul>
+     */
+    private void onVideoAreaTapped(float x, float y) {
+        if (epgPanelOpen) { closeEpgPanel(); return; }
+        if (panelVisible) { enterFullPlayer(); }
     }
 
     private void moveChannel(int step) {
+        resetNoVideoStage();
         int n = focus.chanIndex() + step;
         if (n < 0) n = 0;
         if (n > channels.size() - 1) n = channels.size() - 1;
@@ -1508,7 +1611,9 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                 while (focus.rowIndex() > idx) focus.onKey(KeyEvent.KEYCODE_DPAD_UP);
                 applyRowFocus(idx);
                 if (opt >= 0) {
-                    selections[idx] = opt;
+                    // 触屏点选项也必须走 onSettingCommitted，
+                    // 否则「解码方式 / 画面比例」这些项点了不生效。
+                    onSettingCommitted(idx, opt);
                     rowViews.get(idx).setSelected(opt);
                     rowViews.get(idx).setRowFocused(false);
                     rowViews.get(idx).setOptionFocused(opt);
@@ -1598,11 +1703,19 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         }
 
         if (!panelVisible) {
-            // 面板收起时，任意方向键先唤出面板
-            if (isDpad(keyCode)) {
+            // 面板收起时：上下键唤出面板；左右键留给下面的快进/快退。
+            // 原来这里写的是「任意方向键先唤出面板」，把左右键也吃了，
+            // 导致后面那段长按快进永远不会执行。
+            if (keyCode == KeyEvent.KEYCODE_DPAD_UP || keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
                 showPanel();
                 return true;
             }
+        }
+
+        // 抽屉态：左键 / 返回 → 收起抽屉，回到「分类 + 频道」
+        if (epgPanelOpen && keyCode == KeyEvent.KEYCODE_DPAD_LEFT) {
+            closeEpgPanel();
+            return true;
         }
 
         if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT && focus.zone() == FocusEngine.Zone.CHAN) {
@@ -1698,6 +1811,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     }
 
     private void switchCategory(int index) {
+        resetNoVideoStage();
         for (int i = 0; i < navViews.size(); i++) {
             navViews.get(i).setActive(i == index);
         }
