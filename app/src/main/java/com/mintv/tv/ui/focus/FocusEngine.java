@@ -81,6 +81,11 @@ public final class FocusEngine {
     public int navIndex() { return navIndex; }
 
     /** 只改索引，不回调（分类切换时用，避免多余的焦点刷新）。 */
+    /** 静默设置频道焦点下标，不触发 host 回调、不做算术。 */
+    public void setChanIndexSilently(int i) {
+        if (i >= 0 && i < chanCount) chanIndex = i;
+    }
+
     public void setNavIndexSilently(int i) {
         if (i >= 0 && i < navCount) navIndex = i;
     }

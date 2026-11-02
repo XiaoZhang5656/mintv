@@ -1570,6 +1570,8 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         playingChannel = idx;
         focus.setChannelCount(channels.size());
         focus.resetChannelFocus();
+        // 焦点下标也要跟着落到目标台，否则列表定位对了、蓝框还在第一行。
+        focus.setChanIndexSilently(idx);
 
         final int target = idx;
         if (chanScroll != null) {
