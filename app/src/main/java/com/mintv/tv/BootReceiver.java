@@ -29,8 +29,8 @@ public class BootReceiver extends BroadcastReceiver {
 
     /** 与 MainActivity 里的 PREF 保持一致。 */
     private static final String PREF = "mintv";
-    /** 开机自动播放开关：true 才拉起。 */
-    private static final String KEY_AUTOPLAY = "boot_autoplay";
+    /** 开机自启开关：true 才拉起。 */
+    private static final String KEY_AUTOSTART = "boot_autostart";
 
     @Override
     public void onReceive(Context context, Intent intent) {
@@ -44,7 +44,8 @@ public class BootReceiver extends BroadcastReceiver {
 
         SharedPreferences sp = context.getApplicationContext()
                 .getSharedPreferences(PREF, Context.MODE_PRIVATE);
-        if (!sp.getBoolean(KEY_AUTOPLAY, false)) return;
+        // 兼容老 key（旧版本写的是 boot_autoplay）
+        if (!sp.getBoolean(KEY_AUTOSTART, sp.getBoolean("boot_autoplay", false))) return;
 
         try {
             Intent i = new Intent();
