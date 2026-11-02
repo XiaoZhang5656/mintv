@@ -725,10 +725,10 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     private void applyPlaylist(String body) {
         playlist = PlaylistParser.parse(body);
         categories = DemoData.toCategories(playlist);
-        // 「我的收藏」固定在第二位（「全部」之后），其余分类顺延
+        // 「我的收藏」放在最顶上（第 0 项），用户打开就能直接进收藏，
+        // 不用先划过「全部」。其余分类整体顺延一位。
         if (!categories.isEmpty() && !FAV_CATEGORY.equals(categories.get(0).name)) {
-            categories.add(categories.size() > 0 ? 1 : 0,
-                    new DemoData.Category(FAV_CATEGORY, favorites.size(), 0));
+            categories.add(0, new DemoData.Category(FAV_CATEGORY, favorites.size(), 0));
         }
         channels = playlist.all;
     }
