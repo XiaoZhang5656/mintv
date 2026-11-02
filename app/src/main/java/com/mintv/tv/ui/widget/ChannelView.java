@@ -53,13 +53,20 @@ public class ChannelView extends BaseCardView {
 
     /** 台号来自解析器的自增序号，四位补零（0076 那种）。 */
     public void setNumber(int n) {
+        if (number == n) return;          // 没变就不重绘，滚动时少一半 invalidate
         number = n;
         String s = String.valueOf(n);
         while (s.length() < 4) s = "0" + s;
         numberText = s;
+        invalidate();
     }
 
-    public void setName(String n) { name = n == null ? "" : n; }
+    public void setName(String n) {
+        String v = n == null ? "" : n;
+        if (v.equals(name)) return;
+        name = v;
+        invalidate();
+    }
 
     public void setFavorite(boolean f) {
         if (favorite != f) {
@@ -69,9 +76,20 @@ public class ChannelView extends BaseCardView {
     }
 
     /** 节目信息。源里没有 EPG 时传空串，副行就不画。 */
-    public void setSub(String s) { sub = s == null ? "" : s; }
+    public void setSub(String s) {
+        String v = s == null ? "" : s;
+        if (v.equals(sub)) return;
+        sub = v;
+        invalidate();
+    }
 
-    public void setBadge(String b) { badge = b; }
+    public void setBadge(String b) {
+        String v = b == null ? "" : b;
+        String old = badge == null ? "" : badge;
+        if (v.equals(old)) return;
+        badge = b;
+        invalidate();
+    }
 
     /** null = 源里没有台标，图标位不占宽度。 */
     public void setLogo(Bitmap b) {

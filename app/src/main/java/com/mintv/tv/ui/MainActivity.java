@@ -1006,6 +1006,9 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                 p.topMargin = top;
                 v.setLayoutParams(p);
             }
+            // 已经绑在这个台上就别重绑。滚动一行时只有一格是真的换了内容，
+            // 全量重绑会让 11 个 View 一起 invalidate、台标一起闪，看起来一抖一抖。
+            if (!force && chanBind.get(k) == idx) continue;
             chanBind.set(k, idx);
             v.setTag(idx);
             bindRow(v, idx);
@@ -1019,10 +1022,11 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         PlaylistParser.Channel ch = channels.get(idx);
         v.setNumber(ch.number);
         v.setName(ch.name);
-        v.setSub("");
-        v.setBadge(null);
-        v.setLogo(null);
         v.setFavorite(isFavorite(ch));
+        // 台标：先从内存缓存直接给，别先 setLogo(null) 再等异步回来 ——
+        // 那样每次重绑都会闪一下空图标，滚动时特别明显。
+        Bitmap cached = (ch.logo == null || ch.logo.isEmpty()) ? null : logos.peek(ch.logo);
+        v.setLogo(cached);
     }
 
     /** 频道下标 → 池里正在显示它的 View；不在池里返回 null。 */
