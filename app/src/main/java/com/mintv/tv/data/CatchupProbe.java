@@ -67,10 +67,14 @@ public final class CatchupProbe {
             if (cached != null) return cached >= 0;
         }
 
+        // 直播的分片指纹，用来做「时移地址是不是真的给了别的片段」的对照。
+        // 拿不到就退化成只看内容有效性（liveSeg == null）。
+        String liveSeg = segmentOf(fetchSample(baseUrl));
+
         // 1) 源里声明了 catchup-source，先按它拼
         if (declaredSource != null && !declaredSource.isEmpty()) {
             String url = baseUrl + fill(declaredSource, startMs, endMs);
-            if (fetchOk(url)) {
+            if (fetchDiffers(liveSeg, url)) {
                 synchronized (hostResult) {
                     hostResult.put(host, 0);
                     hostTemplate.put(host, declaredSource);
@@ -80,7 +84,7 @@ public final class CatchupProbe {
             }
             // 拼法可能是整段 URL（vod 模式），直接试
             String full = fill(declaredSource, startMs, endMs);
-            if (full.startsWith("http") && fetchOk(full)) {
+            if (full.startsWith("http") && fetchDiffers(liveSeg, full)) {
                 synchronized (hostResult) {
                     hostResult.put(host, 0);
                     hostTemplate.put(host, declaredSource);
@@ -93,7 +97,7 @@ public final class CatchupProbe {
         // 2) 没有声明或声明无效 → 用通用模板挨个试
         for (int i = 0; i < TEMPLATES.length; i++) {
             String url = baseUrl + fill(TEMPLATES[i], startMs, endMs);
-            if (fetchOk(url)) {
+            if (fetchDiffers(liveSeg, url)) {
                 synchronized (hostResult) {
                     hostResult.put(host, i);
                     hostTemplate.put(host, TEMPLATES[i]);
@@ -117,7 +121,9 @@ public final class CatchupProbe {
         }
         // 内存没有就读磁盘——探测结果跨进程重启保留，避免每次开应用重新试
         if (sp != null) {
-            int v = sp.getInt(host, -2);
+            // key 带版本：以前只判 HTTP 200 的做法把一堆「不支持时移」的源
+            // 记成了支持，那些结论必须整体作废，否则永远显示假「回看」。
+            int v = sp.getInt("v2#" + host, -2);
             if (v != -2) {
                 synchronized (hostResult) { hostResult.put(host, v); }
                 return v >= 0;
@@ -146,6 +152,69 @@ public final class CatchupProbe {
     }
 
     // ---------------- 内部 ----------------
+
+    /**
+     * 抓一段响应正文当指纹。
+     *
+     * <p>为什么不能只看状态码：实测 `?playseek=...` 在很多国内 CDN 上
+     * 返回 200 + 一份**正常的直播列表**（服务端直接忽略未知参数）。
+     * 只看 200 就会把「不支持时移」误判成「支持」，于是 EPG 上所有老节目
+     * 都挂上「回看」标记，点进去放的还是直播 —— 用户看到的就是
+     * 「点了回看没播对应的节目」。
+     */
+    private static String fetchSample(String url) {
+        HttpURLConnection conn = null;
+        try {
+            conn = (HttpURLConnection) new URL(url).openConnection();
+            conn.setConnectTimeout(4000);
+            conn.setReadTimeout(6000);
+            conn.setRequestMethod("GET");
+            conn.setRequestProperty("User-Agent", "Mozilla/5.0 MinTV/1.0");
+            conn.setRequestProperty("Range", "bytes=0-1535");
+            conn.setInstanceFollowRedirects(true);
+            int code = conn.getResponseCode();
+            if (code != 200 && code != 206) return null;
+            InputStream in = conn.getInputStream();
+            byte[] buf = new byte[1536];
+            int n = in.read(buf);
+            in.close();
+            if (n <= 0) return null;
+            return new String(buf, 0, n, "UTF-8").trim();
+        } catch (Exception e) {
+            return null;
+        } finally {
+            if (conn != null) conn.disconnect();
+        }
+    }
+
+    /** 从 m3u8 文本里抽「分片指纹」：第一个不是 # 开头的行。 */
+    private static String segmentOf(String body) {
+        if (body == null) return null;
+        for (String line : body.split("\r?\n")) {
+            String t = line.trim();
+            if (t.isEmpty() || t.startsWith("#")) continue;
+            return t;
+        }
+        return null;
+    }
+
+    /**
+     * 时移地址是否真的返回了**不同**的切片。
+     *
+     * <p>判据是分片路径不同。同一个直播窗口的两个请求，切片名必然相同
+     * （就算 MEDIA-SEQUENCE 恰好没动）；真时移则一定指到别的时间段。
+     */
+    private static boolean fetchDiffers(String liveSeg, String url) {
+        String body = fetchSample(url);
+        if (body == null) return false;
+        if (!body.contains("#EXTM3U") && !body.contains("#EXTINF")
+                && !(body.length() > 0 && body.charAt(0) == 0x47)) {
+            return false;
+        }
+        String seg = segmentOf(body);
+        if (seg == null) return false;
+        return liveSeg == null || !seg.equals(liveSeg);
+    }
 
     /** 只读前 2KB 就断开：足够判断服务端有没有真的吐 m3u8/ts。 */
     private static boolean fetchOk(String url) {

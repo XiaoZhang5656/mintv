@@ -546,6 +546,41 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         epgScroll.setVisibility(View.GONE);
         root.addView(epgScroll, epgLp);
 
+        // EPG 条目的点击。
+        //
+        // 用 GestureDetector 挂在 ScrollView 上、并且不消费触摸：
+        // 如果直接给 EpgPanelView 写 onTouchEvent 并在 DOWN 返回 true，
+        // 节目单就再也滚不动了（ScrollView 拿不到事件）。
+        // OnTouchListener 返回 false 时事件继续往下走，滚动照常，
+        // 而 onSingleTapUp 只会在"确实是点一下"的时候触发。
+        final android.view.GestureDetector epgGesture = new android.view.GestureDetector(
+                this, new android.view.GestureDetector.SimpleOnGestureListener() {
+            @Override public boolean onSingleTapUp(android.view.MotionEvent e) {
+                if (epgPanel == null) return false;
+                // epgPanel 在 ScrollView 里，局部坐标要加上滚动量
+                float y = e.getY() + epgScroll.getScrollY();
+                int idx = epgPanel.itemAt(y);
+                if (idx < 0) return false;
+                int ch = focus.chanIndex() >= 0 ? focus.chanIndex() : playingChannel;
+                if (ch < 0 || ch >= channels.size()) return false;
+                EpgParser.Program prog = programAt(ch, idx);
+                if (prog == null) return false;
+                boolean ended = prog.stopMs <= System.currentTimeMillis();
+                if (!ended) {
+                    osd.toast("该节目还没播完，回看不了");
+                    return true;
+                }
+                playReplay(ch, idx);
+                return true;
+            }
+        });
+        epgScroll.setOnTouchListener(new View.OnTouchListener() {
+            @Override public boolean onTouch(View v, android.view.MotionEvent e) {
+                epgGesture.onTouchEvent(e);
+                return false;      // 不消费，滚动照常
+            }
+        });
+
         // --- 纯播放态的手势层：只在左侧面板收起时可见，铺满全屏 ---
         // 单击 = 唤回左侧面板，长按 = 打开设置。
         // 为什么必须铺满：面板收起后全屏没有任何可点控件，点击事件会一路落到
@@ -554,7 +589,12 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         gestureLayer.setBackgroundColor(0x00000000);
         gestureLayer.setClickable(true);
         gestureLayer.setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View v) { showPanel(); }
+            @Override public void onClick(View v) {
+                // 纯播放态下点一下：先弹信息条（能看进度/编码），
+                // 信息条已经在显示时再点才展开左侧面板。两段式，跟主流播放器一致。
+                if (osd != null && osd.reshow()) return;
+                showPanel();
+            }
         });
         gestureLayer.setOnLongClickListener(new View.OnLongClickListener() {
             @Override public boolean onLongClick(View v) {

@@ -150,6 +150,20 @@ public class OsdView extends View {
 
     public void tick() { invalidate(); }
 
+    /**
+     * 重新显示一遍当前信息条（不换台、不重置数据）。
+     *
+     * <p>OSD 只在换台时弹一次、4 秒就淡出，之后想看进度就没入口了。
+     * 点一下画面能把它叫回来，是这个交互唯一合理的做法。
+     *
+     * @return 有没有可显示的内容；false 时调用方应该去做别的（比如展开面板）
+     */
+    public boolean reshow() {
+        if (name == null) return false;
+        kick();
+        return true;
+    }
+
     /** 供日志/自检用：当前 OSD 是否可见。 */
     public boolean isVisible() { return osdAlpha > 0f && name != null; }
 
