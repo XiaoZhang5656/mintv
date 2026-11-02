@@ -1275,7 +1275,8 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         lineTotal = ch.sources.size();
         replayStartMs = -1;
         osd.showChannel(no, ch.name, ch.group);
-        osd.pulseChannelNumber(no);   // 换台时的超大台号，跟机顶盒一致
+        // 换台时的大号台号去掉前导零：显示 9 而不是 0009
+        osd.pulseChannelNumber(stripLeadingZeros(no));
         osd.setClock(new java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.CHINA)
                 .format(new java.util.Date()));
         refreshOsdTags();
@@ -2806,6 +2807,14 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         } catch (Throwable t) {
             return "1.1.0";
         }
+    }
+
+    /** 去掉台号前导零，"0009" → "9"；全零时留一个 0。 */
+    private static String stripLeadingZeros(String s) {
+        if (s == null || s.isEmpty()) return s;
+        int i = 0;
+        while (i < s.length() - 1 && s.charAt(i) == '0') i++;
+        return s.substring(i);
     }
 
     private static String fmtMs(long ms) {

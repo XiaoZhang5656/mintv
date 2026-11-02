@@ -313,7 +313,9 @@ public class OsdView extends View {
 
             p.setColor(0xFFFFFFFF);
             p.setShadowLayer(Theme.px(8), 0, 0, 0xAA000000);
-            c.drawText(bigNumber, cx, cy + Theme.px(28), p);
+            // 用字体度量把字垂直居中在黑底里，别再靠硬编码基线偏一点
+            float baseline = cy - (p.descent() + p.ascent()) / 2f;
+            c.drawText(bigNumber, cx, baseline, p);
             p.setShadowLayer(0, 0, 0, 0);
             p.setFakeBoldText(false);
             p.setTextAlign(Paint.Align.LEFT);
