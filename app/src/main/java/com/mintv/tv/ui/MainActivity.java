@@ -189,6 +189,13 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             inset = Theme.px(Theme.NAV_W + 1 + Theme.CHAN_W + 1 + Theme.RAIL_W);
         }
         osd.setLeftInset(inset);
+
+        // 台号要对齐时钟中心，这里直接量时钟的真实屏幕位置，不靠公式猜
+        if (clock != null && clock.getWidth() > 0) {
+            int[] loc = new int[2];
+            clock.getLocationOnScreen(loc);
+            osd.setNumberAnchorX(loc[0] + clock.getWidth() / 2f);
+        }
     }
 
     private void updateSpeedLabel() {
@@ -1278,6 +1285,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         osd.showChannel(no, ch.name, ch.group);
         // 换台时的大号台号去掉前导零：显示 9 而不是 0009
         osd.pulseChannelNumber(stripLeadingZeros(no));
+        updateOsdInset();   // 顺便校准台号锚点（时钟可能刚完成布局）
         osd.setClock(new java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.CHINA)
                 .format(new java.util.Date()));
         refreshOsdTags();

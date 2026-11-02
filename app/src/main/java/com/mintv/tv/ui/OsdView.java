@@ -98,6 +98,17 @@ public class OsdView extends View {
     private boolean barShown = false;
     /** 左侧被面板挡住时，卡片要往右让，否则会盖在频道列表上。 */
     private float leftInset = 0f;
+
+    /**
+     * 台号框的水平锚点（屏幕坐标）。
+     *
+     * <p>不能靠"时钟宽 360 + 右边距 36"去推算时钟中心 —— ClockView 的实际
+     * 宽度、内边距和文字对齐方式都跟这个假设不一致，算出来会偏一百多像素。
+     * 由 Activity 直接量出时钟在屏幕上的中心点传进来，才真的对得齐。
+     */
+    private float numberAnchorX = -1f;
+
+    public void setNumberAnchorX(float x) { numberAnchorX = x; }
     private boolean dragging = false;
 
     /** 进度条拖动回调。由 Activity 实现（它才知道播放器能不能 seek）。 */
@@ -304,7 +315,9 @@ public class OsdView extends View {
             p.setFakeBoldText(true);
             float tw = p.measureText(bigNumber);
 
-            float clockCenterX = w - Theme.px(36) - Theme.px(180);
+            // 优先用 Activity 量出来的时钟中心；拿不到再退回原来的估算公式
+            float clockCenterX = numberAnchorX > 0 ? numberAnchorX
+                    : (w - Theme.px(36) - Theme.px(180));
             float padX = Theme.px(22);
             float boxW = Math.max(Theme.px(120), tw + padX * 2);
             float boxH = Theme.px(64);
