@@ -72,11 +72,12 @@ public final class Media3Backend implements PlaybackBackend {
                         /* bufferForPlaybackAfterRebufferMs */ 800)
                 .build();
 
-        DefaultHttpDataSource.Factory http = new DefaultHttpDataSource.Factory()
-                .setUserAgent("TVUI/1.0")
+        // 用宽容 HTTPS 数据源：很多直播源证书自签/过期，
+        // 用系统默认校验会直接 IO_NETWORK_CONNECTION_FAILED，但内容其实是好的。
+        LenientHttpDataSource.Factory http = new LenientHttpDataSource.Factory()
+                .setUserAgent("MinTV/1.0")
                 .setConnectTimeoutMs(8000)
-                .setReadTimeoutMs(8000)
-                .setAllowCrossProtocolRedirects(true);
+                .setReadTimeoutMs(12000);
 
         player = new ExoPlayer.Builder(appCtx)
                 .setLoadControl(loadControl)
@@ -151,11 +152,12 @@ public final class Media3Backend implements PlaybackBackend {
         currentUrl = url;
         notifyState(State.BUFFERING);
 
-        DefaultHttpDataSource.Factory http = new DefaultHttpDataSource.Factory()
-                .setUserAgent("TVUI/1.0")
+        // 用宽容 HTTPS 数据源：很多直播源证书自签/过期，
+        // 用系统默认校验会直接 IO_NETWORK_CONNECTION_FAILED，但内容其实是好的。
+        LenientHttpDataSource.Factory http = new LenientHttpDataSource.Factory()
+                .setUserAgent("MinTV/1.0")
                 .setConnectTimeoutMs(8000)
-                .setReadTimeoutMs(8000)
-                .setAllowCrossProtocolRedirects(true);
+                .setReadTimeoutMs(12000);
         if (headers != null && !headers.isEmpty()) {
             for (Map.Entry<String, String> e : headers.entrySet()) {
                 // User-Agent 单独设，其余进默认请求头
@@ -194,7 +196,7 @@ public final class Media3Backend implements PlaybackBackend {
 
         MediaItem item = MediaItem.fromUri(Uri.parse(url));
         MediaSource source = new HlsMediaSource.Factory(
-                new DefaultHttpDataSource.Factory().setUserAgent("TVUI/1.0"))
+                new LenientHttpDataSource.Factory().setUserAgent("MinTV/1.0"))
                 .createMediaSource(item);
 
         p.setMediaSource(source);
