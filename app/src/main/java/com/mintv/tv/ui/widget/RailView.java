@@ -32,17 +32,25 @@ public class RailView extends android.view.View {
     @Override
     protected void onDraw(Canvas c) {
         float cx = getWidth() / 2f;
-        float cy = getHeight() / 2f;
 
         // 左侧 1px 分隔线
         p.setColor(Theme.LINE);
         c.drawRect(0, 0, Math.max(1, Theme.px(1)), getHeight(), p);
 
+        // 竖排：每个字直立、从上往下。字与字之间留一点行距，
+        // 空格不计入（竖排里空格没意义，"节目 » 信息" 去掉空格就是 5 个字形）。
+        String glyphs = "节目»信息";
+        float size = p.getTextSize();
+        float step = size + Theme.px(14);
+        float total = glyphs.length() * step;
+        float y = (getHeight() - total) / 2f + size;
+
         p.setColor(Theme.RAIL_TEXT);
-        c.save();
-        c.rotate(-90f, cx, cy);              // 逆时针 90°，文字从下往上读
-        float base = cy - (p.descent() + p.ascent()) / 2f;
-        c.drawText(text, cx, base, p);
-        c.restore();
+        p.setTextAlign(Paint.Align.CENTER);
+        for (int i = 0; i < glyphs.length(); i++) {
+            c.drawText(String.valueOf(glyphs.charAt(i)), cx, y, p);
+            y += step;
+        }
     }
+
 }
