@@ -2628,6 +2628,15 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             rowViews.get(row).setSelected(focus.optIndex());
             return true;
         }
+        // 「切源」这一行是动作，不是选项：焦点落在这一行时，
+        // 直接按 ← / → 就换线路，不用先移进选项再按 OK。
+        // 原来要走「进入选项 → 选中箭头 → 确认」三步，遥控器上很难受。
+        if (focus.rowIndex() == ROW_SOURCE
+                && (keyCode == KeyEvent.KEYCODE_DPAD_LEFT || keyCode == KeyEvent.KEYCODE_DPAD_RIGHT)) {
+            switchSource(keyCode == KeyEvent.KEYCODE_DPAD_LEFT ? -1 : +1);
+            return true;
+        }
+
         boolean handled = focus.onKey(keyCode);
         // ← → 落到具体选项时，给选项白框、撤掉行白框
         if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT || keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) {
