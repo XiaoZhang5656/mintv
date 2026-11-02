@@ -54,6 +54,21 @@ public class OsdView extends View {
         @Override public void run() { volumePercent = -1; invalidate(); }
     };
 
+    // ---- 换台时的大号台号 ----
+    private String channelPulse;
+    private final Runnable pulseFade = new Runnable() {
+        @Override public void run() { channelPulse = null; invalidate(); }
+    };
+
+    /** 换台时在右上角闪一下台号，1.6 秒淡出。跟数字键输入同一位置，风格一致。 */
+    public void pulseChannelNumber(String no) {
+        if (no == null || no.isEmpty()) return;
+        channelPulse = no;
+        removeCallbacks(pulseFade);
+        postDelayed(pulseFade, 1600);
+        invalidate();
+    }
+
     // ---- 数字键输入提示 ----
     private String numberInput;
     private final Runnable numberFade = new Runnable() {
@@ -276,11 +291,13 @@ public class OsdView extends View {
         // 白色大号数字、半透明圆角底、右对齐，一眼看清已经按了几位，
         // 又不会挡住画面主体和下方 OSD 卡片。位置跟时钟错开（时钟在 topMargin 18），
         // 所以这里从上方 130px 开始往下排。
-        if (numberInput != null && !numberInput.isEmpty()) {
+        String bigNumber = (numberInput != null && !numberInput.isEmpty())
+                ? numberInput : channelPulse;
+        if (bigNumber != null && !bigNumber.isEmpty()) {
             p.setTextSize(Theme.sp(46));
             p.setTextAlign(Paint.Align.RIGHT);
             p.setFakeBoldText(true);
-            float tw = p.measureText(numberInput);
+            float tw = p.measureText(bigNumber);
             float right = w - Theme.px(36);
             float baseline = Theme.px(130) + Theme.px(46) * 0.78f;
             fill.setColor(0xB3000000);
@@ -289,7 +306,7 @@ public class OsdView extends View {
             c.drawRoundRect(r, Theme.px(10), Theme.px(10), fill);
             p.setColor(0xFFFFFFFF);
             p.setShadowLayer(Theme.px(4), 0, 0, 0xAA000000);
-            c.drawText(numberInput, right, baseline, p);
+            c.drawText(bigNumber, right, baseline, p);
             p.setShadowLayer(0, 0, 0, 0);
             p.setFakeBoldText(false);
             p.setTextAlign(Paint.Align.LEFT);

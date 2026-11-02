@@ -478,12 +478,16 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                 osd.toast("直播流没有可跳转时间轴，回看才能拖");
             }
         });
-        root.addView(osd, new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
         // --- 遮罩 ---
         scrim = new ScrimView(this);
         root.addView(scrim, new FrameLayout.LayoutParams(scrimW, ViewGroup.LayoutParams.MATCH_PARENT));
+
+        // OSD 必须在 scrim **之上**、面板之下。
+        // 之前它加在 scrim 前面，左侧那块 94% 黑的渐变遮罩直接盖住信息条左半边，
+        // 看起来就是"信息条只显示了一半/压根没显示"。
+        root.addView(osd, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
         // --- 左导航 ---
         LinearLayout nav = new LinearLayout(this);
@@ -1271,6 +1275,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         lineTotal = ch.sources.size();
         replayStartMs = -1;
         osd.showChannel(no, ch.name, ch.group);
+        osd.pulseChannelNumber(no);   // 换台时的超大台号，跟机顶盒一致
         osd.setClock(new java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.CHINA)
                 .format(new java.util.Date()));
         refreshOsdTags();
