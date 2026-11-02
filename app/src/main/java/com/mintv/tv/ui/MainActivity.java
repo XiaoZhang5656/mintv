@@ -1943,9 +1943,32 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         sc.addView(container, new ScrollView.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
+        // 只留一个「反选」。
+        // 默认是全选，所以"全选"是废按钮；"全部隐藏"反选一次就能得到同样结果，
+        // 两个都留着只是把按钮数量堆起来。反选一次搞定两者。
+        LinearLayout bulk = new LinearLayout(this);
+        bulk.setOrientation(LinearLayout.HORIZONTAL);
+        bulk.setPadding(Theme.px(20), Theme.px(8), Theme.px(20), 0);
+
+        bulk.addView(makeBulkButton("反选", new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                for (String n : names) {
+                    if (!hiddenCats.remove(n)) hiddenCats.add(n);
+                }
+                saveHiddenCats();
+                refreshChips(chips, names);
+            }
+        }), bulkParams());
+
+        LinearLayout dialogRoot = new LinearLayout(this);
+        dialogRoot.setOrientation(LinearLayout.VERTICAL);
+        dialogRoot.addView(bulk);
+        dialogRoot.addView(sc, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+
         new android.app.AlertDialog.Builder(this)
                 .setTitle("频道分组管理（点一下切换显示/隐藏）")
-                .setView(sc)
+                .setView(dialogRoot)
                 .setPositiveButton("关闭", new android.content.DialogInterface.OnClickListener() {
                     @Override public void onClick(android.content.DialogInterface d, int w) {
                         applyGroupChanges();
@@ -1957,6 +1980,36 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                     }
                 })
                 .show();
+    }
+
+    /** 批量操作后统一刷新所有分组的显示状态。 */
+    private void refreshChips(java.util.List<TextView> chips, java.util.List<String> names) {
+        for (int i = 0; i < chips.size() && i < names.size(); i++) {
+            String n = names.get(i);
+            chips.get(i).setText(chipLabel(n));
+            styleChip(chips.get(i), !hiddenCats.contains(n));
+        }
+    }
+
+    private TextView makeBulkButton(String text, View.OnClickListener l) {
+        TextView b = new TextView(this);
+        b.setText(text);
+        b.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, Theme.sp(18));
+        b.setGravity(Gravity.CENTER);
+        b.setPadding(Theme.px(18), Theme.px(10), Theme.px(18), Theme.px(10));
+        b.setBackgroundColor(Theme.DLG_OPT_BG);
+        b.setTextColor(Theme.TEXT);
+        b.setFocusable(true);
+        b.setClickable(true);
+        b.setOnClickListener(l);
+        return b;
+    }
+
+    private LinearLayout.LayoutParams bulkParams() {
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        p.rightMargin = Theme.px(8);
+        return p;
     }
 
     private String chipLabel(String name) {
