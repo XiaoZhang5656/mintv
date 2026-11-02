@@ -1497,6 +1497,37 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     }
 
     /** 启动时把"开机自启"的选择读回来，并同步给接收器。 */
+    /**
+     * 开机自启的说明弹窗。
+     *
+     * <p>Android 10+ 明确禁止后台启动 Activity，广播里 startActivity 会被静默丢弃，
+     * 这不是 App 能绕过的限制。系统里唯一可靠的「开机进入某个应用」的办法是
+     * **把它设为默认桌面（Launcher）** —— 本项目 Manifest 里已经带了
+     * LEANBACK_LAUNCHER / LAUNCHER，可以被设为默认桌面。
+     */
+    private void showAutoStartGuide() {
+        new android.app.AlertDialog.Builder(this)
+                .setTitle("开机自启说明")
+                .setMessage("Android 4.4~9：打开后开机自动进入，无需额外设置。\n\n"
+                        + "Android 10 及以上：系统禁止应用在后台自行启动界面。"
+                        + "想让开机直接进入本应用，最可靠的办法是把它设为【默认桌面】：\n"
+                        + "系统设置 → 应用 → 默认应用 → 主屏幕应用 → 选择 MinTV\n\n"
+                        + "部分手机还需要在系统管家/权限管理里允许「自启动」「后台弹出界面」。")
+                .setPositiveButton("去设置", new android.content.DialogInterface.OnClickListener() {
+                    @Override public void onClick(android.content.DialogInterface d, int w) {
+                        try {
+                            startActivity(new android.content.Intent(android.provider.Settings.ACTION_HOME_SETTINGS));
+                        } catch (Throwable t) {
+                            try {
+                                startActivity(new android.content.Intent(android.provider.Settings.ACTION_SETTINGS));
+                            } catch (Throwable ignored) { }
+                        }
+                    }
+                })
+                .setNegativeButton("知道了", null)
+                .show();
+    }
+
     private void loadAutoPlayPref() {
         android.content.SharedPreferences p = getSharedPreferences(PREF, MODE_PRIVATE);
         // 老 key 迁移：以前叫 boot_autoplay
@@ -2955,6 +2986,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             openHeaderEditor();
         } else if (row == ROW_AUTOPLAY) {
             saveAutoStartFlag();
+            if (value == 0) showAutoStartGuide();
         } else if (row == ROW_OUTPUT) {
             applyOutputMode();
             playChannel(playingChannel);

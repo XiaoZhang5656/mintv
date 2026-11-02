@@ -291,29 +291,32 @@ public class OsdView extends View {
         // 白色大号数字、半透明圆角底、右对齐，一眼看清已经按了几位，
         // 又不会挡住画面主体和下方 OSD 卡片。位置跟时钟错开（时钟在 topMargin 18），
         // 所以这里从上方 130px 开始往下排。
-        // 台号 / 数字输入：**右上角**，并且压在日期时间下面，不覆盖时钟。
-        // 时钟在 top=18、高约 90（含两行），所以这里从 150 起排。
-        // 字号从 76 收到 52 —— 之前那版太大，一块黑底占掉小半个画面。
+        // 台号 / 数字输入：右边缘和**日期时间的右边缘对齐**（都留 36px），
+        // 顶边紧贴时钟下方。
+        //
+        // 之前是"文字右对齐、底框再往外扩 padX"，结果黑底比时钟突出 24px，
+        // 看着就是"太靠右下、没对齐"。
         String bigNumber = (numberInput != null && !numberInput.isEmpty())
                 ? numberInput : channelPulse;
         if (bigNumber != null && !bigNumber.isEmpty()) {
-            p.setTextSize(Theme.sp(52));
+            p.setTextSize(Theme.sp(46));
             p.setTextAlign(Paint.Align.RIGHT);
             p.setFakeBoldText(true);
             float tw = p.measureText(bigNumber);
-            float right = w - Theme.px(36);
-            float top = Theme.px(150);
-            float boxH = Theme.px(74);
-            float padX = Theme.px(24);
+
+            float boxRight = w - Theme.px(36);      // 和时钟同一个右边距
+            float padX = Theme.px(22);
+            float boxH = Theme.px(64);
+            float top = Theme.px(118);              // 时钟(18 + ~90)之后
 
             fill.setColor(0xB3000000);
-            r.set(right - tw - padX, top, right + padX, top + boxH);
+            r.set(boxRight - tw - padX * 2, top, boxRight, top + boxH);
             c.drawRoundRect(r, Theme.px(10), Theme.px(10), fill);
 
             p.setColor(0xFFFFFFFF);
             p.setShadowLayer(Theme.px(6), 0, 0, 0xAA000000);
             float baseline = top + boxH / 2f - (p.descent() + p.ascent()) / 2f;
-            c.drawText(bigNumber, right, baseline, p);
+            c.drawText(bigNumber, boxRight - padX, baseline, p);
             p.setShadowLayer(0, 0, 0, 0);
             p.setFakeBoldText(false);
             p.setTextAlign(Paint.Align.LEFT);
