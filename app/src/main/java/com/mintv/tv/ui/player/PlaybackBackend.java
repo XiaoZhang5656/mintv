@@ -6,7 +6,7 @@ import android.view.Surface;
 /**
  * 播放内核抽象。
  *
- * <p>换 Media3 / IJK / VLC / 系统 MediaPlayer 都只实现这个接口，UI 层一行不动。
+ * <p>换 Media3 / VLC / 系统 MediaPlayer 都只实现这个接口，UI 层一行不动。
  *
  * <p><b>关于快进</b>：接口把「能否 seek」明确暴露出来，而不是让 UI 去猜。
  * 直播流（HLS 实时）的 {@link #canSeek()} 返回 false，长按快进在 UI 层直接不启动；

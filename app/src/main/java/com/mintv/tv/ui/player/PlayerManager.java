@@ -67,7 +67,6 @@ public final class PlayerManager implements PlaybackBackend {
     /** 内核是否真的能用（so 没打进 APK 或 ABI 不匹配时返回 false）。 */
     public static boolean available(PlaybackEngine e) {
         switch (e) {
-            case IJK: return IjkBackend.isAvailable();
             case VLC: return VlcBackend.isAvailable();
             default: return true;
         }
@@ -80,7 +79,6 @@ public final class PlayerManager implements PlaybackBackend {
             impl = null;
         }
         switch (engine) {
-            case IJK: impl = new IjkBackend(); break;
             case VLC: impl = new VlcBackend(); break;
             default: impl = new Media3Backend(); break;
         }
@@ -92,9 +90,6 @@ public final class PlayerManager implements PlaybackBackend {
         if (impl == null) return;
         if (impl instanceof VlcBackend) {
             if (surfaceView != null) ((VlcBackend) impl).setSurfaceView(surfaceView);
-        } else if (impl instanceof IjkBackend) {
-            if (surfaceView != null) ((IjkBackend) impl).setDisplay(surfaceView.getHolder());
-            else if (surface != null) impl.setSurface(surface);
         } else {
             if (surface != null) impl.setSurface(surface);
         }
@@ -129,8 +124,6 @@ public final class PlayerManager implements PlaybackBackend {
         bindSurface();
         if (impl instanceof Media3Backend) {
             ((Media3Backend) impl).play(appCtx, url, headers, mode);
-        } else if (impl instanceof IjkBackend) {
-            ((IjkBackend) impl).play(appCtx, url, headers, mode);
         } else if (impl instanceof VlcBackend) {
             ((VlcBackend) impl).play(appCtx, url, headers, mode);
         } else {

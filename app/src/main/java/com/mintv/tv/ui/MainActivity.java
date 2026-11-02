@@ -256,10 +256,8 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             }
         };
         playerManager.setCallback(playerCallback);
-        // 解码方式那一项现在表示"内核"：0 Exo / 1 IJK / 2 VLC
-        // 注意：这里读的是 ROW_ENGINE（播放内核），不是 ROW_DECODER（解码方式）。
-        // 之前写成 ROW_DECODER，等于把「软解=1」当成「内核=IJK」，
-        // 用户只是切了个软解，内核就悄悄换成 IJK 然后崩掉。
+        // 读的是 ROW_ENGINE（播放内核：0 Exo / 1 VLC），不是 ROW_DECODER。
+        // 以前写成 ROW_DECODER，「软解=1」会被当成下一个内核，悄悄换引擎。
         playerManager.setEngine(engineOf(selections[ROW_ENGINE]), true);
         if (selections[ROW_ENGINE] != 0) markEngineAttempt(engineOf(selections[ROW_ENGINE]));
 
@@ -874,10 +872,10 @@ public class MainActivity extends Activity implements FocusEngine.Host {
      * 有声音没画面 / 解码失败时的自愈。
      *
      * <p>顺序是「先换内核，再换线路」，因为同一台盒子上
-     * 「Exo 解不了、IJK 能解」的源远比「这条线路坏了」常见：
+     * 「Exo 解不了、VLC 能解」的源远比「这条线路坏了」常见：
      * <ol>
      *   <li>硬解 → 软解（同内核内，Exo 才需要）；</li>
-     *   <li>内核降级 Exo → IJK → VLC；</li>
+     *   <li>内核降级 Exo → VLC；</li>
      *   <li>换线路；</li>
      *   <li>都没戏 → 明确提示，不再黑着播。</li>
      * </ol>
@@ -887,7 +885,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         watchdogFired = true;
         ui.removeCallbacks(playbackWatchdog);
 
-        // ① 硬解 → 软解（只对 Exo 有意义，IJK/VLC 本来就走 FFmpeg 软解）
+        // ① 硬解 → 软解（只对 Exo 有意义）
         if (noVideoStage == 0
                 && playerManager != null
                 && playerManager.engine() == PlaybackEngine.EXO
@@ -901,7 +899,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             playChannel(playingChannel);
             return;
         }
-        // ② 换内核：Exo → IJK → VLC
+        // ② 换内核：Exo → VLC
         if ((noVideoStage <= 1 || !softPref) && playerManager != null && !playerManager.isPinned()) {
             PlaybackEngine cur = playerManager.engine();
             PlaybackEngine next = cur.next();
@@ -938,11 +936,10 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     /**
      * 内核「试运行」标记。
      *
-     * <p>为什么要这个：IJK 0.8.8 的崩溃是 native 层的 SIGSEGV
-     * （libijkffmpeg.so / av_application_on_http_event），崩在 ff_read 线程里，
+     * <p>为什么要这个：native 库崩溃（SIGSEGV）发生在 JNI 之外，
      * Java 的 Thread.setDefaultUncaughtExceptionHandler **完全收不到**，
-     * 进程直接被信号杀掉。所以没法在崩溃当场弹框 —— 只能提前埋标记，
-     * 下次启动发现"上次声明要用 IJK，却没走到首帧"，就判定它挂了。
+     * 进程直接被信号杀掉，弹不出任何框。所以只能提前埋标记，
+     * 下次启动发现"上次声明要用某个内核，却没走到首帧"，就判定它挂了。
      *
      * <p>这是 native 崩溃唯一可行的"拦截"方式：事后识别 + 自动回退，
      * 而不是当场捕获。
