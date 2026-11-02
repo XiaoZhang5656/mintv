@@ -10,8 +10,11 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
+        // IJK 只发在 jcenter（已关闭），阿里云 public 是现存最稳的镜像。
+        // 不放这里，CI 上 tv.danmaku.ijk 一条都拉不到。
+        maven { url 'https://maven.aliyun.com/repository/public' }
     }
 }
 
-rootProject.name = "tvui-java"
+rootProject.name = "mintv"
 include ':app'

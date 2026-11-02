@@ -325,6 +325,7 @@ public final class Media3Backend implements PlaybackBackend {
             http.setDefaultRequestProperties(headers);
         }
 
+        headersSummary = summarize(headers);
         MediaItem item = MediaItem.fromUri(Uri.parse(url));
         // 用 DefaultMediaSourceFactory 按内容自动识别 HLS / Progressive，
         // 比手动判断扩展名稳（很多源的 m3u8 带 ?xxx 参数或走 302）
@@ -367,7 +368,23 @@ public final class Media3Backend implements PlaybackBackend {
 
     public String currentUrl() { return currentUrl; }
 
+    private String headersSummary = "";
+
+    @Override public String headersSummary() { return headersSummary; }
+
+    private static String summarize(java.util.Map<String, String> h) {
+        if (h == null || h.isEmpty()) return "";
+        StringBuilder sb = new StringBuilder();
+        for (java.util.Map.Entry<String, String> e : h.entrySet()) {
+            if (sb.length() > 0) sb.append(", ");
+            sb.append(e.getKey()).append('=').append(e.getValue());
+        }
+        return sb.toString();
+    }
+
     @Override public Mode mode() { return mode; }
+
+    @Override public String tag() { return PlaybackEngine.EXO.name(); }
 
     /**
      * 只有时移 / 点播才允许 seek。

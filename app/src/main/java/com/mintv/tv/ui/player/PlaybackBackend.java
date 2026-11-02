@@ -64,6 +64,15 @@ public interface PlaybackBackend {
 
     void release();
 
+    /**
+     * 内核是否支持自定义请求头。
+     * 不支持的（libVLC）UI 就不显示「请求头」这一项，而不是让用户填了没用。
+     */
+    default boolean supportsHeaders() { return true; }
+
+    /** 当前生效的自定义请求头，仅用于诊断面板显示。 */
+    default String headersSummary() { return ""; }
+
     // ================= 快进 / 跳转能力 =================
 
     /** 当前是否允许 seek。直播流必须返回 false。 */
@@ -83,4 +92,7 @@ public interface PlaybackBackend {
 
     /** 当前播放模式。 */
     Mode mode();
+
+    /** 内核标识，写日志和诊断面板用。 */
+    default String tag() { return PlaybackEngine.EXO.name(); }
 }

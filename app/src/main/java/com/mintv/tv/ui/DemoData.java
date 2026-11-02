@@ -63,6 +63,8 @@ public final class DemoData {
             {"解码方式", "低性能盒子软解会掉帧，仅在花屏时切换"},
             {"超时换源", "起播/卡顿超过设定时间自动切下一条线路"},
             {"换源等待", "判定超时的秒数"},
+            {"请求头", "该源需要特定 UA/Referer 时才填，全局生效"},
+            {"播放内核", "Exo 日常 / IJK 软解兜底 / VLC 最后一张牌"},
     };
 
     public static final String[][] ROW_OPTIONS = {
@@ -76,9 +78,11 @@ public final class DemoData {
             {"硬件", "软件"},
             {"开启", "关闭"},
             {"5 秒", "8 秒", "12 秒", "20 秒"},
+            {"未设置", "编辑…"},
+            {"ExoPlayer", "IJK", "VLC"},
     };
 
-    public static final int[] ROW_DEFAULT = {0, 0, 0, 0, 0, 0, 1, 0, 0, 1};
+    public static final int[] ROW_DEFAULT = {0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0};
 
     // ---------- 无源时的示范 M3U ----------
 

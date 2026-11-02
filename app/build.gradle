@@ -11,14 +11,19 @@ android {
         // TV 盒子覆盖最广的下限，Android 5.0
         minSdk 21
         targetSdk 34
-        versionCode 30
-        versionName "1.0.1"
+        versionCode 31
+        versionName "1.1.0"
+
+        // 只打两个 ARM 变体：盒子没有 x86 真机。
+        // 不过滤的话 libvlc 的 x86/x86_64 两个 so 会白塞进来 +47MB。
+        ndk { abiFilters 'arm64-v8a', 'armeabi-v7a' }
     }
 
     buildTypes {
         release {
             minifyEnabled true
             shrinkResources true
+            // native 库大量走 JNI 反射，混淆必然崩
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
             // 用 CI 生成的固定调试签名（口令 android/android），保证版本可覆盖升级
             signingConfig signingConfigs.debug
@@ -42,8 +47,19 @@ android {
 }
 
 dependencies {
-    // 仅播放内核用 Media3，UI 层零第三方依赖
+    // 三个播放内核并存，UI 层零第三方依赖。切换逻辑在 PlayerManager。
+    //
+    // Exo：HLS/TS 最稳、起播最快，默认
     implementation 'androidx.media3:media3-exoplayer:1.3.1'
     implementation 'androidx.media3:media3-exoplayer-hls:1.3.1'
-    implementation 'androidx.media3:media3-ui:1.3.1'
+    // media3-ui 只是控制条，本项目全自绘，不引入
+    // implementation 'androidx.media3:media3-ui:1.3.1'
+
+    // IJK：FFmpeg 软解。AVS2/AVS3、MP2 音轨、非标封装靠它
+    implementation 'tv.danmaku.ijk.media:ijkplayer-java:0.8.8'
+    implementation 'tv.danmaku.ijk.media:ijkplayer-armv7a:0.8.8'
+    implementation 'tv.danmaku.ijk.media:ijkplayer-arm64:0.8.8'
+
+    // VLC：最后的兜底，格式覆盖最广。3.5.1 是 3.x 稳定线，4.0 还是 EAP
+    implementation 'org.videolan.android:libvlc-all:3.5.1'
 }

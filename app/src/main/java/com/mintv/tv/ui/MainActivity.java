@@ -28,6 +28,9 @@ import com.mintv.tv.data.SourceStore;
 import com.mintv.tv.ui.focus.FocusEngine;
 import com.mintv.tv.ui.player.Media3Backend;
 import com.mintv.tv.ui.player.PlaybackBackend;
+import com.mintv.tv.ui.player.PlaybackEngine;
+import com.mintv.tv.ui.player.PlayerManager;
+import com.mintv.tv.ui.player.HttpHeaderProfile;
 import com.mintv.tv.ui.widget.ChannelView;
 import com.mintv.tv.ui.widget.ClockView;
 import com.mintv.tv.ui.widget.EpgPanelView;
@@ -50,6 +53,8 @@ public class MainActivity extends Activity implements FocusEngine.Host {
 
     // ---- 播放 ----
     private SurfaceView surfaceView;
+    private PlayerManager playerManager;
+    private PlaybackBackend.Callback playerCallback;
     private PlaybackBackend player;
     private OsdView osd;
 
@@ -113,6 +118,16 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     private final List<SettingRowView> rowViews = new ArrayList<>();
     private final int[] selections = DemoData.ROW_DEFAULT.clone();
 
+    /**
+     * 全局自定义请求头。
+     *
+     * <p>为什么要有「全局」这一层：很多源整份都是同一个 CDN，每条地址都写
+     * 一遍 {@code |User-Agent=...} 不现实，用户也没法从几百条里挑。
+     * 优先级从低到高：默认 UA → 全局请求头 → 单条源里的 |UA=.. / #EXTHTTP。
+     * 单条源永远盖全局，因为它是针对这个频道写的。
+     */
+    private java.util.Map<String, String> globalHeaders = new java.util.LinkedHashMap<>();
+
     private final Handler ui = new Handler(Looper.getMainLooper());
     private final Runnable clockTick = new Runnable() {
         @Override public void run() {
@@ -147,14 +162,16 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         setContentView(root);
 
         focus.attach(this);
+        loadHeaders();
         focus.setNavCount(categories.size());
         focus.setChannelCount(channels.size());
         bindChannels();
         updateNavFocus(1);
         updateChannelFocus(0);
 
-        player = new Media3Backend();
-        player.setCallback(new PlaybackBackend.Callback() {
+        playerManager = new PlayerManager(this);
+        player = playerManager;
+        playerCallback = new PlaybackBackend.Callback() {
             @Override public void onState(PlaybackBackend.State s) {
                 // 注意：READY 只代表解封装 + 解码器就绪，<b>不代表出画面</b>。
                 // 以前在这里就把 playing 置 true、把看门狗撤掉，
@@ -194,17 +211,22 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                 if (fps != null) lastFps = fps;
                 refreshOsdTags();
             }
-        });
+        };
+        playerManager.setCallback(playerCallback);
+        // 解码方式那一项现在表示"内核"：0 Exo / 1 IJK / 2 VLC
+        playerManager.setEngine(engineOf(selections[ROW_DECODER]), true);
 
         // Surface 一就绪就开播，避免先黑屏再起播
         surfaceView.getHolder().addCallback(new SurfaceHolder.Callback() {
             @Override public void surfaceCreated(SurfaceHolder h) {
+                playerManager.setSurfaceView(surfaceView);   // VLC 需要 SurfaceView 本体
                 player.setSurface(h.getSurface());
                 playChannel(playingChannel);
             }
             @Override public void surfaceChanged(SurfaceHolder h, int f, int w, int ht) {
                 // 尺寸变化后解码器的输出面会失效，必须重新绑一次。
                 // 以前这里是空的，切分辨率 / 从后台回来就黑屏只有声音。
+                playerManager.setSurfaceView(surfaceView);
                 if (h.getSurface() != null && h.getSurface().isValid()) {
                     player.setSurface(h.getSurface());
                 }
@@ -730,12 +752,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         if (currentLine >= ch.sources.size()) { src = ch.sources.get(0); currentLine = 0; }
         currentPlayUrl = PlaylistParser.cleanUrl(src.url);
         armWatchdog();
-        if (player instanceof Media3Backend) {
-            ((Media3Backend) player).play(getApplicationContext(),
-                    PlaylistParser.cleanUrl(src.url), src.headers, PlaybackBackend.Mode.LIVE);
-        } else {
-            player.play(getApplicationContext(), PlaylistParser.cleanUrl(src.url), PlaybackBackend.Mode.LIVE);
-        }
+        playUrl(PlaylistParser.cleanUrl(src.url), src.headers, PlaybackBackend.Mode.LIVE);
     }
 
     private final Runnable playbackWatchdog = new Runnable() {
@@ -759,6 +776,8 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     private static final int ROW_DECODER        = 7;
     private static final int ROW_TIMEOUT_SWITCH = 8;
     private static final int ROW_TIMEOUT_SECONDS = 9;
+    private static final int ROW_HEADERS        = 10;
+    private static final int ROW_ENGINE         = 11;
 
     /**
      * 「没画面」自愈的进度。0 = 还没处理，1 = 已切软解，2 = 已换过线路。
@@ -768,45 +787,177 @@ public class MainActivity extends Activity implements FocusEngine.Host {
      */
     private int noVideoStage = 0;
 
+    /** 是否已切到软解。Exo 的硬解在低端盒子上「初始化成功但不出帧」很常见。 */
+    private boolean softPref = false;
+
     /**
-     * 有声音没画面时的自愈。
+     * 有声音没画面 / 解码失败时的自愈。
      *
-     * <p>处理顺序（每一步都会失败就往下走）：
+     * <p>顺序是「先换内核，再换线路」，因为同一台盒子上
+     * 「Exo 解不了、IJK 能解」的源远比「这条线路坏了」常见：
      * <ol>
-     *   <li>硬件解码下先就地切成软解重开一次 —— 低端盒子硬解「出帧失败」占绝大多数；</li>
-     *   <li>软解也没画面 → 换下一个线路；</li>
-     *   <li>只有一条线路 → 明确提示，不再黑着播。</li>
+     *   <li>硬解 → 软解（同内核内，Exo 才需要）；</li>
+     *   <li>内核降级 Exo → IJK → VLC；</li>
+     *   <li>换线路；</li>
+     *   <li>都没戏 → 明确提示，不再黑着播。</li>
      * </ol>
      */
     private void onNoVideo(String reason) {
         // 已经有明确结论了，别再让「无响应」看门狗插一脚去踢源
         watchdogFired = true;
         ui.removeCallbacks(playbackWatchdog);
+
+        // ① 硬解 → 软解（只对 Exo 有意义，IJK/VLC 本来就走 FFmpeg 软解）
         if (noVideoStage == 0
-                && player instanceof Media3Backend
-                && !((Media3Backend) player).preferSoftwareDecoder()) {
-            // ① 硬解 → 软解。低端盒子「硬解初始化成功但不出帧」占绝大多数
+                && playerManager != null
+                && playerManager.engine() == PlaybackEngine.EXO
+                && !softPref) {
             noVideoStage = 1;
+            softPref = true;
             selections[ROW_DECODER] = 1;
             if (rowViews.size() > ROW_DECODER) rowViews.get(ROW_DECODER).setSelected(1);
-            ((Media3Backend) player).setPreferSoftwareDecoder(true);
+            rebuildEngine(PlaybackEngine.EXO, false);
             osd.toast("无画面，切换软解重试");
             playChannel(playingChannel);
             return;
         }
+        // ② 换内核：Exo → IJK → VLC
+        if ((noVideoStage <= 1 || !softPref) && playerManager != null && !playerManager.isPinned()) {
+            PlaybackEngine cur = playerManager.engine();
+            PlaybackEngine next = cur.next();
+            if (next != cur && PlayerManager.available(next)) {
+                noVideoStage = 2;
+                rebuildEngine(next, false);
+                osd.toast("无画面，换 " + next.label + " 内核重试");
+                playChannel(playingChannel);
+                return;
+            }
+        }
+        // ③ 换线路
         PlaylistParser.Channel ch = (playingChannel >= 0 && playingChannel < channels.size())
                 ? channels.get(playingChannel) : null;
-        if (noVideoStage <= 1 && ch != null && ch.sources.size() > 1 && autoSwitchSource()) {
-            // ② 软解也不行 → 换线路
-            noVideoStage = 2;
+        if (noVideoStage <= 2 && ch != null && ch.sources.size() > 1 && autoSwitchSource()) {
+            noVideoStage = 3;
             currentLine = (currentLine + 1) % ch.sources.size();
             osd.toast("该线路无画面，切换线路 " + (currentLine + 1) + "/" + ch.sources.size());
             playChannel(playingChannel);
             return;
         }
-        // ③ 没得换，明说，不再黑着播
-        noVideoStage = 3;
+        // ④ 没得换，明说，不再黑着播
+        noVideoStage = 4;
         osd.setStatus("无画面：" + reason);
+    }
+
+    // ================= 全局请求头 =================
+
+    private static final String PREF = "mintv";
+    private static final String KEY_HEADERS = "global_headers";
+
+    private void loadHeaders() {
+        String raw = getSharedPreferences(PREF, MODE_PRIVATE).getString(KEY_HEADERS, "");
+        globalHeaders = parseHeaderText(raw);
+        if (globalHeaders == null) globalHeaders = new java.util.LinkedHashMap<>();
+        if (rowViews.size() > ROW_HEADERS) {
+            rowViews.get(ROW_HEADERS).setSelected(globalHeaders.isEmpty() ? 0 : 1);
+        }
+    }
+
+    private void saveHeaders() {
+        StringBuilder sb = new StringBuilder();
+        for (java.util.Map.Entry<String, String> e : globalHeaders.entrySet()) {
+            if (sb.length() > 0) sb.append(';');
+            sb.append(e.getKey()).append('=').append(e.getValue());
+        }
+        getSharedPreferences(PREF, MODE_PRIVATE).edit().putString(KEY_HEADERS, sb.toString()).apply();
+        selections[ROW_HEADERS] = globalHeaders.isEmpty() ? 0 : 1;
+        if (rowViews.size() > ROW_HEADERS) {
+            rowViews.get(ROW_HEADERS).setSelected(selections[ROW_HEADERS]);
+        }
+    }
+
+    /** 一行一条，支持换行或分号分隔： {@code User-Agent=okhttp/3.12} */
+    private static java.util.Map<String, String> parseHeaderText(String raw) {
+        if (raw == null || raw.trim().isEmpty()) return null;
+        java.util.Map<String, String> out = new java.util.LinkedHashMap<>();
+        for (String line : raw.split("[;\n]")) {
+            String t = line.trim();
+            if (t.isEmpty() || t.startsWith("#")) continue;
+            int eq = t.indexOf('=');
+            if (eq <= 0) continue;
+            out.put(t.substring(0, eq).trim(), t.substring(eq + 1).trim());
+        }
+        return out.isEmpty() ? null : out;
+    }
+
+    private static String headerText(java.util.Map<String, String> h) {
+        if (h == null || h.isEmpty()) return "";
+        StringBuilder sb = new StringBuilder();
+        for (java.util.Map.Entry<String, String> e : h.entrySet()) {
+            if (sb.length() > 0) sb.append('\n');
+            sb.append(e.getKey()).append('=').append(e.getValue());
+        }
+        return sb.toString();
+    }
+
+    /**
+     * 编辑全局请求头。
+     *
+     * <p>TV 上打字不方便，所以除了弹输入框，还把「常见站点模板」做成
+     * 一行提示，用户照着抄即可。填完立即生效，不用重启。
+     */
+    private void openHeaderEditor() {
+        final android.widget.EditText input = new android.widget.EditText(this);
+        input.setText(headerText(globalHeaders));
+        input.setHint("User-Agent=okhttp/3.12\nReferer=http://www.example.com/");
+        input.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, Theme.sp(18));
+        input.setTextColor(0xFFFFFFFF);
+        input.setHintTextColor(0xFF8A8A90);
+        input.setBackgroundColor(0xFF1B1C1F);
+        input.setPadding(Theme.px(18), Theme.px(14), Theme.px(18), Theme.px(14));
+        input.setMinLines(3);
+        input.setGravity(Gravity.TOP | Gravity.START);
+
+        new android.app.AlertDialog.Builder(this)
+                .setTitle("全局请求头（一行一条，留空清除）")
+                .setView(input)
+                .setPositiveButton("保存", new android.content.DialogInterface.OnClickListener() {
+                    @Override public void onClick(android.content.DialogInterface d, int w) {
+                        java.util.Map<String, String> h = parseHeaderText(input.getText().toString());
+                        globalHeaders = h == null ? new java.util.LinkedHashMap<String, String>() : h;
+                        saveHeaders();
+                        resetNoVideoStage();
+                        playChannel(playingChannel);
+                        osd.toast(globalHeaders.isEmpty() ? "已清除请求头" : "请求头已生效");
+                    }
+                })
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
+    /** 切换内核并立刻重开当前源。 */
+    private void rebuildEngine(PlaybackEngine e, boolean pinned) {
+        if (playerManager == null) return;
+        playerManager.setEngine(e, pinned);
+        playerManager.setSurfaceView(surfaceView);
+        playerManager.setCallback(playerCallback);
+    }
+
+    private PlaybackEngine engineOf(int decoderOption) { return PlaybackEngine.of(decoderOption); }
+
+    /**
+     * 唯一的播放入口。所有内核、所有模式都从这里走，
+     * 请求头也只在这里合并一次，避免某条路径忘了带头。
+     */
+    private void playUrl(String url, java.util.Map<String, String> headers, PlaybackBackend.Mode mode) {
+        if (url == null || url.isEmpty()) return;
+        if (playerManager == null) return;
+        java.util.Map<String, String> merged = HttpHeaderProfile.merge(globalHeaders, headers);
+        if (!merged.isEmpty()
+                && playerManager.engine() == PlaybackEngine.VLC) {
+            String lost = HttpHeaderProfile.vlcUnsupported(merged);
+            if (!lost.isEmpty()) osd.toast("VLC 不支持请求头 " + lost + "，可能影响播放");
+        }
+        playerManager.play(getApplicationContext(), url, merged, mode);
     }
 
     /** 用户主动换台 / 换分类：自愈进度清零。 */
@@ -863,8 +1014,8 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         StringBuilder sb = new StringBuilder();
         sb.append("当前地址: ").append(currentPlayUrl).append('\n');
         sb.append("播放器: ").append(player == null ? "null" : player.getClass().getSimpleName()).append('\n');
-        if (player instanceof Media3Backend) {
-            sb.append("状态: ").append(((Media3Backend) player).diagnostics()).append('\n');
+        if (playerManager != null) {
+            sb.append("状态: ").append(playerManager.diagnostics()).append('\n');
         }
         boolean surfaceOk = surfaceView != null
                 && surfaceView.getHolder().getSurface() != null
@@ -1298,7 +1449,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         osd.showChannel(no, ch.name + " · 回看 " + EpgParser.hm(prog.startMs), ch.group);
         osd.setProgram(null, null, -1f);
         refreshOsdTags();
-        player.play(getApplicationContext(), url, PlaybackBackend.Mode.TIMESHIFT);
+        playUrl(url, null, PlaybackBackend.Mode.TIMESHIFT);
         closeEpgPanel();
     }
 
@@ -1469,11 +1620,24 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         if (row == ROW_TIMEOUT_SWITCH || row == ROW_TIMEOUT_SECONDS) {
             armWatchdog();     // 立即按新策略重新计时
         } else if (row == ROW_DECODER) {
-            // 「解码方式」以前只是个选项，改了完全没人读，等于摆设。
-            if (player instanceof Media3Backend) {
-                ((Media3Backend) player).setPreferSoftwareDecoder(value == 1);
+            // 软硬解：只对 Exo 有意义。改了就重建播放器（渲染器在 build 时固定）。
+            if (playerManager != null && playerManager.engine() == PlaybackEngine.EXO) {
+                softPref = (value == 1);
+                rebuildEngine(PlaybackEngine.EXO, true);
+                playChannel(playingChannel);
             }
+        } else if (row == ROW_ENGINE) {
+            // 用户手选内核 → 锁定，不再自动降级，否则设置等于没设
+            PlaybackEngine e = PlaybackEngine.of(value);
+            if (!PlayerManager.available(e)) {
+                osd.toast(e.label + " 内核在本机不可用（ABI 不匹配）");
+                return;
+            }
+            resetNoVideoStage();
+            rebuildEngine(e, true);
             playChannel(playingChannel);
+        } else if (row == ROW_HEADERS) {
+            openHeaderEditor();
         } else if (row == ROW_RATIO) {
             applyAspectRatio(value);
         }

@@ -5,6 +5,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+import com.mintv.tv.ui.player.HttpHeaderProfile;
+
 /**
  * M3U / M3U8 / TXT 直播源解析器。
  *
@@ -151,6 +153,8 @@ public final class PlaylistParser {
         String pendingLogo = null;
         String pendingTvgId = null;
         String pendingCatchup = null, pendingCatchupSrc = null, pendingCatchupCorr = null;
+        // 播放器指令行挂在「下一条地址」上，跟 #EXTINF 一样是前导式的
+        java.util.Map<String, String> pendingHeaders = null;
 
         String[] lines = text.split("\r?\n");
         for (String raw : lines) {
@@ -170,6 +174,51 @@ public final class PlaylistParser {
                 continue;
             }
 
+            // ---- 播放器指令：这些以前全被 "if (startsWith("#")) continue" 丢掉了，
+            //      结果「需要特定请求头才出画面的源」一律黑屏，而且查不到原因 ----
+            if (line.startsWith("#EXTHTTP:")) {
+                java.util.Map<String, String> h = HttpHeaderProfile.parseJson(
+                        line.substring("#EXTHTTP:".length()).trim());
+                pendingHeaders = HttpHeaderProfile.merge(pendingHeaders, h);
+                continue;
+            }
+            if (line.startsWith("#EXTVLCOPT:")) {
+                String opt = line.substring("#EXTVLCOPT:".length()).trim();
+                if (opt.startsWith("http-user-agent=")) {
+                    pendingHeaders = HttpHeaderProfile.merge(pendingHeaders, single(
+                            "User-Agent", opt.substring("http-user-agent=".length())));
+                } else if (opt.startsWith("http-referrer=")) {
+                    pendingHeaders = HttpHeaderProfile.merge(pendingHeaders, single(
+                            "Referer", opt.substring("http-referrer=".length())));
+                } else if (opt.startsWith("http-referer=")) {
+                    pendingHeaders = HttpHeaderProfile.merge(pendingHeaders, single(
+                            "Referer", opt.substring("http-referer=".length())));
+                } else if (opt.startsWith("http-cookie=")) {
+                    pendingHeaders = HttpHeaderProfile.merge(pendingHeaders, single(
+                            "Cookie", opt.substring("http-cookie=".length())));
+                } else if (opt.startsWith("http-origin=")) {
+                    pendingHeaders = HttpHeaderProfile.merge(pendingHeaders, single(
+                            "Origin", opt.substring("http-origin=".length())));
+                }
+                // 其余 #EXTVLCOPT（:network-caching 等）与播放无关，忽略
+                continue;
+            }
+            if (line.startsWith("#KODIPROP:inputstream.adaptive")) {
+                continue;    // DASH DRM 相关，本项目不做
+            }
+            if (line.startsWith("#KODIPROP:inputstream.inputstreamhelper") && line.contains("=")) {
+                // 少数源把 UA 塞这里，顺手捡一下
+                String v = line.substring(line.indexOf('=') + 1).trim();
+                if (v.toLowerCase(java.util.Locale.US).startsWith("user-agent")) {
+                    int eq = v.indexOf('=', v.indexOf("user-agent") + 10);
+                    if (eq > 0) {
+                        pendingHeaders = HttpHeaderProfile.merge(pendingHeaders,
+                                single("User-Agent", v.substring(eq + 1).trim()));
+                    }
+                }
+                continue;
+            }
+
             if (line.startsWith("#")) continue;   // 其它指令忽略
 
             // 到这里就是地址行
@@ -177,7 +226,7 @@ public final class PlaylistParser {
             String url = line;
             String name = pendingName;
             if (name == null || name.isEmpty()) name = nameFromUrl(url);
-            addSource(pl, byName, name, pendingGroup, pendingLogo, pendingTvgId, url);
+            addSource(pl, byName, name, pendingGroup, pendingLogo, pendingTvgId, url, pendingHeaders);
 
             // 回看属性绑到刚建/命中的频道上
             Channel just = byName.get(name + "|" + pendingGroup);
@@ -198,6 +247,7 @@ public final class PlaylistParser {
             pendingCatchup = null;
             pendingCatchupSrc = null;
             pendingCatchupCorr = null;
+            pendingHeaders = null;
             pendingLogo = null;
             pendingTvgId = null;
             pendingGroup = DEFAULT_GROUP;
@@ -264,7 +314,7 @@ public final class PlaylistParser {
 
             // 普通频道行： 名称,地址
             if (right.isEmpty()) continue;
-            addSource(pl, byName, left, currentGroup, null, null, right);
+            addSource(pl, byName, left, currentGroup, null, null, right, null);
         }
         return pl;
     }
@@ -272,7 +322,8 @@ public final class PlaylistParser {
     // ---------------- 公共 ----------------
 
     private static void addSource(Playlist pl, Map<String, Channel> byName,
-                                  String name, String group, String logo, String tvgId, String url) {
+                                  String name, String group, String logo, String tvgId, String url,
+                                  Map<String, String> directiveHeaders) {
         String key = name + "|" + group;
         Channel ch = byName.get(key);
         if (ch == null) {
@@ -286,7 +337,16 @@ public final class PlaylistParser {
             }
             list.add(ch);
         }
-        ch.sources.add(new Source(url, parseHeaders(url)));
+        // URL 尾部的 |UA=.. 与独立的 #EXTHTTP/#EXTVLCOPT 合并，后者优先：
+        // 指令行是频道级的显式声明，比 URL 尾巴更可信。
+        ch.sources.add(new Source(url,
+                HttpHeaderProfile.merge(parseHeaders(url), directiveHeaders)));
+    }
+
+    private static Map<String, String> single(String k, String v) {
+        Map<String, String> m = new LinkedHashMap<>();
+        m.put(k, v);
+        return m;
     }
 
     /**
@@ -295,24 +355,76 @@ public final class PlaylistParser {
      *   http://x/a.m3u8$User-Agent=xx&Referer=yy
      */
     static Map<String, String> parseHeaders(String url) {
-        Map<String, String> h = null;
+        int cut = headerCut(url);
+        if (cut < 0) return null;
+        return HttpHeaderProfile.parsePairs(url.substring(cut + 1));
+    }
+
+    /**
+     * 找「哪里开始是请求头参数」。
+     *
+     * <p>TVBox / IPTV 生态里三种写法并存，必须全认：
+     * <pre>
+     *   http://x/a.m3u8|User-Agent=xx|Referer=yy     竖线
+     *   http://x/a.m3u8$User-Agent=xx&amp;Referer=yy    美元符
+     *   http://x/a.m3u8#User-Agent=xx#Referer=yy    井号（新兴写法）
+     * </pre>
+     *
+     * <p>井号这条特别容易踩：URL 本身也可能带 # 片段，所以不能见 # 就切，
+     * 必须 # 后面紧跟 {@code key=value} 才算。以前只认 | 和 $，
+     * 带 # 的源会把整串参数当 URL 发给服务器 —— 必 403 或 404，
+     * 而且日志里那个地址看着「没问题」，排查时会往请求头那边想错方向。
+     */
+    static int headerCut(String url) {
+        int cut = -1;
         int bar = url.indexOf('|');
         int dollar = url.indexOf('$');
-        int cut = -1;
         if (bar > 0) cut = bar;
         if (dollar > 0 && (cut < 0 || dollar < cut)) cut = dollar;
-        if (cut < 0) return null;
 
-        String tail = url.substring(cut + 1);
-        String[] parts = tail.split("\\|");
-        for (String part : parts) {
-            if (part.isEmpty()) continue;
-            int eq = part.indexOf('=');
-            if (eq <= 0) continue;
-            if (h == null) h = new LinkedHashMap<>();
-            h.put(part.substring(0, eq).trim(), part.substring(eq + 1).trim());
+        // # 后面的 key 必须真的像个请求头名，否则当 URL 片段。
+        // 反例：m3u8 的时间片段 #t=10、#duration=9.98 —— 它们也是 key=value，
+        // 只按等号判断会把整条源切成「地址 + 头」，浏览器能放的地址就放不了了。
+        int hash = url.indexOf('#');
+        while (hash > 0) {
+            String after = url.substring(hash + 1);
+            int sep = firstSep(after);
+            String first = sep < 0 ? after : after.substring(0, sep);
+            int eq = first.indexOf('=');
+            if (eq > 0 && isHeaderName(first.substring(0, eq))) {
+                if (cut < 0 || hash < cut) cut = hash;
+                break;
+            }
+            hash = url.indexOf('#', hash + 1);
         }
-        return h;
+        return cut;
+    }
+
+    /** 已知请求头名白名单 + 「带横杠就是自定义头」这条通用规则。 */
+    private static boolean isHeaderName(String raw) {
+        String n = raw.trim().toLowerCase(java.util.Locale.US);
+        if (n.isEmpty()) return false;
+        if (n.indexOf('-') > 0) return true;      // X-Real-IP / User-Agent / X-Forwarded-For
+        switch (n) {
+            case "ua": case "useragent": case "user_agent":
+            case "referer": case "referrer": case "ref":
+            case "cookie": case "origin": case "host": case "accept":
+            case "authorization": case "token": case "headers":
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    /** 参数串里第一个分隔符的位置（| & #）。 */
+    private static int firstSep(String s) {
+        int i = -1;
+        char[] seps = {'|', '&', '#'};
+        for (char c : seps) {
+            int p = s.indexOf(c);
+            if (p >= 0 && (i < 0 || p < i)) i = p;
+        }
+        return i;
     }
 
     /**
@@ -394,11 +506,7 @@ public final class PlaylistParser {
 
     /** 去掉 URL 上的参数尾巴，只留真实地址。 */
     public static String cleanUrl(String url) {
-        int bar = url.indexOf('|');
-        int dollar = url.indexOf('$');
-        int cut = -1;
-        if (bar > 0) cut = bar;
-        if (dollar > 0 && (cut < 0 || dollar < cut)) cut = dollar;
+        int cut = headerCut(url);
         return cut < 0 ? url : url.substring(0, cut);
     }
 
