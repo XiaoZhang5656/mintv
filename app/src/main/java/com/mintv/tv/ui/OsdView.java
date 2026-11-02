@@ -272,55 +272,55 @@ public class OsdView extends View {
             p.setShadowLayer(0, 0, 0, 0);
         }
 
-        // 数字键输入提示。
-        //
-        // 位置是算过的，不是随手放：
-        //   · 水平方向在**视频区**居中（用 leftInset 让开左侧三栏），
-        //     所以打开频道列表时也不会压在列表上；
-        //   · 垂直放在 30% 高度 —— 上面是时钟（顶部 18+margins），
-        //     下面 OSD 卡片从约 78% 开始，两边都不碰；
-        //   · 和 toast(16%) 、音量条(底部 120px) 也错开，三个同时出现也不会糊在一起。
+        // 数字键输入提示 —— 按机顶盒/IPTV 的惯例放**右上角**：
+        // 白色大号数字、半透明圆角底、右对齐，一眼看清已经按了几位，
+        // 又不会挡住画面主体和下方 OSD 卡片。位置跟时钟错开（时钟在 topMargin 18），
+        // 所以这里从上方 130px 开始往下排。
         if (numberInput != null && !numberInput.isEmpty()) {
-            float avail = w - leftInset;
-            float cx = leftInset + avail / 2f;
-            p.setTextSize(Theme.sp(64));
-            p.setTextAlign(Paint.Align.CENTER);
+            p.setTextSize(Theme.sp(46));
+            p.setTextAlign(Paint.Align.RIGHT);
             p.setFakeBoldText(true);
             float tw = p.measureText(numberInput);
-            float cy = h * 0.30f;
-            fill.setColor(0xCC000000);
-            r.set(cx - tw / 2f - Theme.px(36), cy - Theme.px(56),
-                    cx + tw / 2f + Theme.px(36), cy + Theme.px(56));
-            c.drawRoundRect(r, Theme.px(12), Theme.px(12), fill);
+            float right = w - Theme.px(36);
+            float baseline = Theme.px(130) + Theme.px(46) * 0.78f;
+            fill.setColor(0xB3000000);
+            r.set(right - tw - Theme.px(28), Theme.px(130) - Theme.px(10),
+                    right + Theme.px(20), Theme.px(130) + Theme.px(62));
+            c.drawRoundRect(r, Theme.px(10), Theme.px(10), fill);
             p.setColor(0xFFFFFFFF);
-            p.setShadowLayer(Theme.px(6), 0, 0, 0xAA000000);
-            c.drawText(numberInput, cx, cy + Theme.px(22), p);
+            p.setShadowLayer(Theme.px(4), 0, 0, 0xAA000000);
+            c.drawText(numberInput, right, baseline, p);
             p.setShadowLayer(0, 0, 0, 0);
             p.setFakeBoldText(false);
             p.setTextAlign(Paint.Align.LEFT);
         }
 
-        // 音量条：底部居中，压在一切之上（这是临时反馈，允许盖住其它东西）
+        // 音量条：右下角、压在网速标签上方。
+        // 放底部居中的话会和 OSD 卡片撞（卡片底部在 h-56，高度约 300），
+        // 放到右下角既符合 TV 习惯，又和网速(底部30)、数字输入(右上)分开。
         if (volumePercent >= 0) {
-            float bw = Theme.px(420), bh = Theme.px(10);
-            float bx = (w - bw) / 2f;
-            float by = h - Theme.px(120);
-            float alpha = 1f;
+            float bw = Theme.px(300), bh = Theme.px(8);
+            float right = w - Theme.px(40);
+            float bx = right - bw;
+            float by = h - Theme.px(150);
             fill.setColor(0xCC000000);
-            r.set(bx - Theme.px(70), by - Theme.px(46),
-                    bx + bw + Theme.px(24), by + bh + Theme.px(22));
+            r.set(bx - Theme.px(64), by - Theme.px(40),
+                    right + Theme.px(12), by + bh + Theme.px(18));
             c.drawRoundRect(r, Theme.px(10), Theme.px(10), fill);
 
             p.setColor(Theme.TEXT);
-            p.setTextSize(Theme.sp(17));
+            p.setTextSize(Theme.sp(16));
             p.setTextAlign(Paint.Align.LEFT);
-            c.drawText(volumeMuted ? "静音" : "音量", bx - Theme.px(56), by + Theme.px(4), p);
+            c.drawText(volumeMuted ? "静音" : "音量", bx - Theme.px(54), by + Theme.px(3), p);
+            p.setTextAlign(Paint.Align.RIGHT);
+            c.drawText(volumePercent + "%", right, by + Theme.px(3), p);
+            p.setTextAlign(Paint.Align.LEFT);
 
             fill.setColor(0x33FFFFFF);
-            r.set(bx, by, bx + bw, by + bh);
+            r.set(bx, by + Theme.px(14), bx + bw, by + Theme.px(14) + bh);
             c.drawRoundRect(r, bh / 2f, bh / 2f, fill);
             fill.setColor(volumeMuted ? 0xFF6B6B6B : Theme.FOCUS_BLUE);
-            r.set(bx, by, bx + bw * (volumePercent / 100f), by + bh);
+            r.set(bx, by + Theme.px(14), bx + bw * (volumePercent / 100f), by + Theme.px(14) + bh);
             c.drawRoundRect(r, bh / 2f, bh / 2f, fill);
         }
 
