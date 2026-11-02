@@ -232,6 +232,11 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         bindChannels();
         updateNavFocus(1);
         updateChannelFocus(0);
+        // 面板可见时 OSD 要让开左边。setPanelVisible 会因为"状态没变"提前返回，
+        // 所以启动这条路必须自己调一次，否则 inset 永远是 0。
+        ui.post(new Runnable() {
+            @Override public void run() { updateOsdInset(); }
+        });
         restoreLastChannel();     // 回到上次看的台
 
         playerManager = new PlayerManager(this);
@@ -428,6 +433,40 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         // 只铺右侧视频区，别盖住左侧三栏 —— 铺满全屏会让列表点击全部失效。
         videoTap.setVisibility(View.GONE);   // 面板建好后再按布局显示
         root.addView(videoTap, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
+        // OSD 只是"视频层的字幕"，必须垫在面板之下。
+        // 以前它最后 addView（最上层），结果信息条压在频道列表上，
+        // 打开列表时两者叠成一团。放到这里之后，面板自然盖住它，
+        // 纯播放态（面板收起）它才完整可见。
+        // --- OSD ---
+        osd = new OsdView(this);
+        // 进度条拖动：能不能 seek 由播放内核说了算（直播 = false）
+        osd.setSeekListener(new OsdView.SeekListener() {
+            @Override public boolean canSeek() {
+                return player != null && player.canSeek() && curDuration > 0;
+            }
+            @Override public long durationMs() { return curDuration; }
+            @Override public void onPreview(long ms) {
+                if (seekOverlay != null) {
+                    seekOverlay.update(ms, ms, curDuration);
+                    seekOverlay.show();
+                }
+            }
+            @Override public void onCommit(long ms) {
+                if (player != null && player.canSeek()) {
+                    player.seekTo(ms);
+                    osd.toast("已跳转到 " + fmtMs(ms));
+                }
+                seekHandler.postDelayed(new Runnable() {
+                    @Override public void run() { if (seekOverlay != null) seekOverlay.hide(); }
+                }, 500);
+            }
+            @Override public void onSeekBlocked() {
+                osd.toast("直播流没有可跳转时间轴，回看才能拖");
+            }
+        });
+        root.addView(osd, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
         // --- 遮罩 ---
@@ -657,35 +696,6 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             @Override public void run() { layoutVideoTap(); }
         });
 
-        // --- OSD ---
-        osd = new OsdView(this);
-        // 进度条拖动：能不能 seek 由播放内核说了算（直播 = false）
-        osd.setSeekListener(new OsdView.SeekListener() {
-            @Override public boolean canSeek() {
-                return player != null && player.canSeek() && curDuration > 0;
-            }
-            @Override public long durationMs() { return curDuration; }
-            @Override public void onPreview(long ms) {
-                if (seekOverlay != null) {
-                    seekOverlay.update(ms, ms, curDuration);
-                    seekOverlay.show();
-                }
-            }
-            @Override public void onCommit(long ms) {
-                if (player != null && player.canSeek()) {
-                    player.seekTo(ms);
-                    osd.toast("已跳转到 " + fmtMs(ms));
-                }
-                seekHandler.postDelayed(new Runnable() {
-                    @Override public void run() { if (seekOverlay != null) seekOverlay.hide(); }
-                }, 500);
-            }
-            @Override public void onSeekBlocked() {
-                osd.toast("直播流没有可跳转时间轴，回看才能拖");
-            }
-        });
-        root.addView(osd, new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
     }
 
     private View buildNavHeader() {
@@ -1539,8 +1549,17 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         playingChannel = idx;
         focus.setChannelCount(channels.size());
         focus.resetChannelFocus();
-        while (focus.chanIndex() < idx) focus.onKey(KeyEvent.KEYCODE_DPAD_DOWN);
-        updateChannelFocus(idx);
+        // onCreate 阶段 ScrollView 还没测量，getHeight() 是 0，这时候滚不动。
+        // 等一帧、布局完成后再定位。
+        final int target = idx;
+        if (chanScroll != null) {
+            chanScroll.post(new Runnable() {
+                @Override public void run() {
+                    ensureBound(target);
+                    updateChannelFocus(target);
+                }
+            });
+        }
     }
 
     private void loadLinePrefs() {
