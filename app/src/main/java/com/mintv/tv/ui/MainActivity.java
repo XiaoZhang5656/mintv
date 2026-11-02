@@ -176,10 +176,8 @@ public class MainActivity extends Activity implements FocusEngine.Host {
 
             @Override public void onError(String msg) {
                 dumpPlaybackState("ERROR", msg);
+                // 播放失败只显示在 OSD 上，不弹框（弹框只留给崩溃）
                 osd.setStatus("播放失败：" + msg);
-                if (errorPanel != null) {
-                    errorPanel.show("播放失败", "地址：" + currentPlayUrl + "\n\n" + msg);
-                }
             }
 
             @Override public void onVideoFormat(String res, String vc, String ac, String ch, String fps) {
@@ -454,12 +452,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                 final String result = body;
                 if (result == null || result.trim().isEmpty()) {
                     ui.post(new Runnable() {
-                        @Override public void run() {
-                            if (errorPanel != null) {
-                                errorPanel.show("直播源拉取失败",
-                                        "地址：" + url + "\n\n请检查网络或换一个源地址。");
-                            }
-                        }
+                        @Override public void run() { osd.toast("直播源拉取失败，请检查网络"); }
                     });
                     return;
                 }
