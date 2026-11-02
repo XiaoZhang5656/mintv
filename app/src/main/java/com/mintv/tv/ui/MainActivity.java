@@ -814,6 +814,12 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                         rebuildCategoryColumn();
                         bindChannels();
                         updateChannelFocus(0);
+                        // 源拉回来了、列表整个重建过，恢复目标要重新应用一次。
+                        // 用户已经自己点过就自动失效（那时 restoreChanKey 已被清空）。
+                        if (restoreChanKey != null) {
+                            restoreDone = false;
+                            tryRestoreIfPending();
+                        }
                     }
                 });
             }
@@ -957,7 +963,6 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             @Override public void run() {
                 syncPool(true);
                 applyFocusToPool();
-                tryRestoreIfPending();   // 源异步回来后重建列表，也要回到上次那台
             }
         });
     }
@@ -1136,7 +1141,6 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         // 所以先把目标行滚进可见区、必要时重绑，再套焦点样式。
         lastFocusedChan = index;
         scrollChannelIntoView(index);
-        ensureBound(index);
         applyFocusToPool();
     }
 
@@ -1540,39 +1544,46 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     }
 
     /** 启动时恢复上次的频道。找不到就保持默认（第一个台）。 */
-    /** 列表重建后调用：把「上次在看的那台」重新定位出来。用户一动手就放弃。 */
+    /** 恢复只做一次：成功定位后就不再碰滚动位置，避免和用户滚动打架。 */
+    private boolean restoreDone = false;
+
     private void tryRestoreIfPending() {
-        if (restoreChanKey == null || restoreChanKey.isEmpty()) return;
+        if (restoreDone) return;
+        if (restoreChanKey == null || restoreChanKey.isEmpty()) { restoreDone = true; return; }
         if (categories == null || categories.isEmpty() || channels == null) return;
 
-        // ① 分类
         int ci = indexOfCategory(restoreCatName);
         if (ci >= 0 && !restoreCatName.equals(currentCategoryName())) {
             focus.setNavIndexSilently(ci);
             switchCategory(ci);
             updateNavFocus(ci);
         }
-        // ② 频道
+
         int idx = -1;
         for (int i = 0; i < channels.size(); i++) {
             if (favKey(channels.get(i)).equals(restoreChanKey)) { idx = i; break; }
         }
-        if (idx < 0) return;
+        if (idx < 0) { restoreDone = true; return; }
+
+        restoreDone = true;          // 先置位，后面的滚动/渲染不要再被打断
         final int prev = playingChannel;
         playingChannel = idx;
         focus.setChannelCount(channels.size());
         focus.resetChannelFocus();
+
         final int target = idx;
         if (chanScroll != null) {
+            // 直接定位到目标行，再重绑行池。用 scrollTo 而不是 smoothScroll，
+            // 一次性到位，不会留下正在跑的滚动动画。
+            int top = listTopPx() + target * rowH() - Theme.px(160);
+            chanScroll.scrollTo(0, Math.max(0, top));
             chanScroll.post(new Runnable() {
                 @Override public void run() {
-                    ensureBound(target);
+                    syncPool(true);
                     updateChannelFocus(target);
                 }
             });
         }
-        // 界面已经起播了（Surface 先就绪、源后回来）就把正在播的台也切过去，
-        // 否则会出现"列表停在那台、声音还是第一台"的错位。
         if (prev != idx && currentPlayUrl != null) {
             playChannelInternal(idx, false);
         }
@@ -1582,6 +1593,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     private void clearRestorePending() {
         restoreChanKey = null;
         restoreCatName = null;
+        restoreDone = true;
     }
 
     private void restoreLastChannel() {
