@@ -39,6 +39,7 @@ public abstract class BaseCardView extends android.view.View {
         setWillNotDraw(false);
         setFocusable(false);   // 焦点由 FocusEngine 统一管理，View 本身不抢
         setFocusableInTouchMode(false);
+        // 默认不可点；需要响应触摸的子类在外部 setClickable(true) + setOnClickListener
         setClickable(false);
         strokePaint.setStyle(Paint.Style.STROKE);
         strokePaint.setStrokeWidth(strokeW);
