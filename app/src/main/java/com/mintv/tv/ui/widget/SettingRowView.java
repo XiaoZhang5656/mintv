@@ -59,6 +59,40 @@ public class SettingRowView extends android.view.View {
 
     private int segResult = 0;
 
+    /** 点右侧某个选项时的回调。 */
+    public interface OnOptionClick {
+        void onOption(SettingRowView row, int optionIndex);
+    }
+
+    private OnOptionClick onOptionClick;
+
+    public void setOnOptionClick(OnOptionClick l) { this.onOptionClick = l; }
+
+    /**
+     * 分段控件是手动 layout 的，没有 addView 进视图树，
+     * 所以它自己永远收不到触摸事件。命中测试只能在这里做：
+     * 触摸点落在 seg 的矩形里就转成 seg 的局部坐标去问 indexAt()。
+     */
+    @Override
+    public boolean onTouchEvent(android.view.MotionEvent ev) {
+        if (seg == null || ev.getActionMasked() != android.view.MotionEvent.ACTION_UP) {
+            return true;   // 按下/移动吃掉，抬手再判定，避免滑动误触
+        }
+        float x = ev.getX() - seg.getLeft();
+        float y = ev.getY() - seg.getTop();
+        if (x >= 0 && x <= seg.getWidth() && y >= 0 && y <= seg.getHeight()) {
+            int idx = seg.indexAt(x);
+            if (idx >= 0) {
+                setSelected(idx);
+                if (onOptionClick != null) onOptionClick.onOption(this, idx);
+                return true;
+            }
+        }
+        // 没点到选项 → 当作"选中这一行"
+        performClick();
+        return true;
+    }
+
     public void setSelected(int i) { seg.setSelected(i); segResult = i; }
 
     public void setRowFocused(boolean f) { rowFocused = f; if (f) optFocused = false; seg.setFocusedOption(-1); invalidate(); }

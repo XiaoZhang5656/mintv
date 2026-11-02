@@ -1486,20 +1486,22 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         dialogRoot = new FrameLayout(this);
         dialogRoot.setBackgroundColor(0x66000000);
         dialogRoot.setVisibility(View.GONE);
+        // 关键：这里绝对不能挂 OnTouchListener。
+        // OnTouchListener 先于子 View 的 onTouchEvent 执行，只要它 return true
+        // 就把事件整条吃掉 —— 于是弹窗里 Tab、✕、每一行的选项全都点不动。
+        // 之前的 handleSettingsTouch 正是这样把所有点击吞了。
+        // 正确做法：点遮罩关闭由 dialogRoot 的 OnClickListener 负责，
+        // 内部控件各自挂自己的监听。
+        dialogRoot.setClickable(true);
         dialogRoot.setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View v) { }   // 吞掉点击
-        });
-        // 触屏/鼠标：以前 handleSettingsTouch 写好了却从没被调用，
-        // 结果设置弹窗里点选项完全没反应，只能靠遥控器。
-        dialogRoot.setOnTouchListener(new View.OnTouchListener() {
-            @Override public boolean onTouch(View v, android.view.MotionEvent e) {
-                return handleSettingsTouch(e);
-            }
+            @Override public void onClick(View v) { closeSettings(); }
         });
 
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
         card.setBackgroundColor(Theme.DLG_BG);
+        // 卡片自己消费点击，否则点在卡片空白处会穿透到 dialogRoot 把弹窗关掉
+        card.setClickable(true);
 
         int w = Theme.px(Theme.DLG_W);
         FrameLayout.LayoutParams cardLp = new FrameLayout.LayoutParams(
@@ -1579,6 +1581,19 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                     while (focus.rowIndex() < rowIndex) focus.onKey(KeyEvent.KEYCODE_DPAD_DOWN);
                     while (focus.rowIndex() > rowIndex) focus.onKey(KeyEvent.KEYCODE_DPAD_UP);
                     applyRowFocus(rowIndex);
+                }
+            });
+            // 点右侧分段 → 直接改值并提交。以前分段控件压根没挂监听，
+            // 点上去什么都不发生。
+            row.setOnOptionClick(new SettingRowView.OnOptionClick() {
+                @Override public void onOption(SettingRowView r, int opt) {
+                    while (focus.rowIndex() < rowIndex) focus.onKey(KeyEvent.KEYCODE_DPAD_DOWN);
+                    while (focus.rowIndex() > rowIndex) focus.onKey(KeyEvent.KEYCODE_DPAD_UP);
+                    applyRowFocus(rowIndex);
+                    r.setSelected(opt);
+                    r.setRowFocused(false);
+                    r.setOptionFocused(opt);
+                    onSettingCommitted(rowIndex, opt);
                 }
             });
             LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(

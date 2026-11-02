@@ -184,7 +184,18 @@ public final class Media3Backend implements PlaybackBackend {
 
             @Override public void onPlayerError(PlaybackException error) {
                 notifyState(State.ERROR);
-                if (cb != null) cb.onError(error.getErrorCodeName());
+                // getErrorCodeName() 只有 ERROR_CODE_IO_BAD_HTTP_STATUS 这种常量，
+                // 真正的原因（哪一跳、什么状态码）在 message 和 cause 里。
+                StringBuilder sb = new StringBuilder(error.getErrorCodeName());
+                Throwable c = error.getCause();
+                int depth = 0;
+                while (c != null && depth++ < 4) {
+                    String m = c.getMessage();
+                    if (m != null && !m.isEmpty()) sb.append(" | ").append(m);
+                    c = c.getCause();
+                }
+                android.util.Log.e("MinTV", "player error: " + sb);
+                if (cb != null) cb.onError(sb.toString());
             }
 
             @Override public void onRenderedFirstFrame() {
