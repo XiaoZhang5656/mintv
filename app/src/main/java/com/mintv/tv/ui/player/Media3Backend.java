@@ -207,7 +207,18 @@ public final class Media3Backend implements PlaybackBackend {
                     c = c.getCause();
                 }
                 android.util.Log.e("MinTV", "player error: " + sb);
-                if (cb != null) cb.onError(sb.toString());
+
+                // 解码能力问题：换内核能解决，不是源坏了
+                int code = error.errorCode;
+                boolean retryable =
+                        code == PlaybackException.ERROR_CODE_DECODER_INIT_FAILED
+                     || code == PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED
+                     || code == PlaybackException.ERROR_CODE_DECODING_FAILED
+                     || code == PlaybackException.ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES;
+                if (cb != null) {
+                    if (retryable) cb.onErrorRetryable(sb.toString());
+                    else cb.onError(sb.toString());
+                }
             }
 
             @Override public void onRenderedFirstFrame() {
@@ -427,6 +438,9 @@ public final class Media3Backend implements PlaybackBackend {
      * Media3 对直播 HLS 调用 seekTo 会跳到直播窗口内最近的可播放点，
      * 在没有 seekable window 的情况下会抛 IllegalSeekPositionException。
      */
+    /** Exo 的画面由 Activity 改 Surface 的 LayoutParams 实现，这里无需处理。 */
+    @Override public void setAspectMode(int mode) { }
+
     @Override public void pause() {
         if (player != null) main.post(new Runnable() {
             @Override public void run() { player.pause(); }

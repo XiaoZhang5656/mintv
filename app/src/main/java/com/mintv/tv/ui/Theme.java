@@ -36,6 +36,29 @@ public final class Theme {
     // ---------- 皮肤色（三套主题各自的取值见 applyPalette）----------
     /** OSD 信息卡底 */
     public static int CARD_BG        = 0xE0101216;
+
+    // ── OSD 卡片专用（跟随主题，不再写死） ──
+    /** 卡片底。 */
+    public static int OSD_CARD_BG    = 0xEE101216;
+    /** 分类胶囊底 / 字。 */
+    public static int OSD_CAT_BG     = 0xFF22304A;
+    public static int OSD_CAT_TXT    = 0xFFB9CBE6;
+    /** 节目名文字（比正文略暗）。 */
+    public static int OSD_PROG_TXT   = 0xFFD9DEE6;
+    /** 进度条空槽（白色低透明，随主题底色自动融合）。 */
+    public static int OSD_BAR_TRACK  = 0x29FFFFFF;
+    /** 直播虚线纹理。 */
+    public static int OSD_BAR_DASH   = 0x1AFFFFFF;
+    /** 直播标签底 / 字。 */
+    public static int OSD_LIVE_BG    = 0x14FFFFFF;
+    public static int OSD_LIVE_TXT   = 0xFF9FB3CC;
+    /** 控制条次要按钮底。 */
+    public static int OSD_CTL_BG     = 0x1CFFFFFF;
+    /** 技术标签：源用绿字，其余灰字。 */
+    public static int OSD_CHIP_SRC_TXT = 0xFF7FD8A6;
+    public static int OSD_CHIP_TXT   = 0xFFC6CDD6;
+    /** 卡片内时钟。 */
+    public static int OSD_CLOCK_TXT  = 0xFF7E858F;
     /** 「可回看」这类小徽标底 */
     public static int BADGE_BG       = 0x29FFFFFF;
     /** EPG 里「正在播」那行底 */
@@ -75,6 +98,14 @@ public final class Theme {
                 FOCUS_BG     = 0x331E9BFF;
                 LINE         = 0x22FFFFFF;
                 CARD_BG      = 0xE60A1A26;
+                OSD_CARD_BG  = 0xF00A1A26;
+                OSD_CAT_BG   = 0xFF12314F;  OSD_CAT_TXT  = 0xFFA8CDEF;
+                OSD_PROG_TXT = 0xFFD3E4F5;
+                OSD_BAR_TRACK= 0x33B8D8F5;  OSD_BAR_DASH = 0x22B8D8F5;
+                OSD_LIVE_BG  = 0x1AB8D8F5;  OSD_LIVE_TXT = 0xFF9BC4E6;
+                OSD_CTL_BG   = 0x22B8D8F5;
+                OSD_CHIP_SRC_TXT = 0xFF6FE0C0; OSD_CHIP_TXT = 0xFFC2D8EC;
+                OSD_CLOCK_TXT= 0xFF7FA6C9;
                 BADGE_BG     = 0x33FFFFFF;
                 EPG_LIVE_BG  = 0x331E9BFF;
                 EPG_FOCUS_BG = 0x1EFFFFFF;
@@ -103,6 +134,14 @@ public final class Theme {
                 FOCUS_BG     = 0x33FFA53D;
                 LINE         = 0x22FFE9C8;
                 CARD_BG      = 0xE61A1410;
+                OSD_CARD_BG  = 0xF01A1410;
+                OSD_CAT_BG   = 0xFF4A3423;  OSD_CAT_TXT  = 0xFFE3C39B;
+                OSD_PROG_TXT = 0xFFEDE0CE;
+                OSD_BAR_TRACK= 0x33F0DCC0;  OSD_BAR_DASH = 0x22F0DCC0;
+                OSD_LIVE_BG  = 0x1AF0DCC0;  OSD_LIVE_TXT = 0xFFD9BE99;
+                OSD_CTL_BG   = 0x22F0DCC0;
+                OSD_CHIP_SRC_TXT = 0xFFC9E08A; OSD_CHIP_TXT = 0xFFE0CEB4;
+                OSD_CLOCK_TXT= 0xFFBFA184;
                 BADGE_BG     = 0x33FFE9C8;
                 EPG_LIVE_BG  = 0x33FFA53D;
                 EPG_FOCUS_BG = 0x1EFFE9C8;
@@ -131,6 +170,14 @@ public final class Theme {
                 FOCUS_BG     = 0x292F7BFF;
                 LINE         = 0x12FFFFFF;
                 CARD_BG      = 0xE0101216;
+                OSD_CARD_BG  = 0xEE101216;
+                OSD_CAT_BG   = 0xFF22304A;  OSD_CAT_TXT  = 0xFFB9CBE6;
+                OSD_PROG_TXT = 0xFFD9DEE6;
+                OSD_BAR_TRACK= 0x29FFFFFF;  OSD_BAR_DASH = 0x1AFFFFFF;
+                OSD_LIVE_BG  = 0x14FFFFFF;  OSD_LIVE_TXT = 0xFF9FB3CC;
+                OSD_CTL_BG   = 0x1CFFFFFF;
+                OSD_CHIP_SRC_TXT = 0xFF7FD8A6; OSD_CHIP_TXT = 0xFFC6CDD6;
+                OSD_CLOCK_TXT= 0xFF7E858F;
                 BADGE_BG     = 0x29FFFFFF;
                 EPG_LIVE_BG  = 0x332F7BFF;
                 EPG_FOCUS_BG = 0x1AFFFFFF;

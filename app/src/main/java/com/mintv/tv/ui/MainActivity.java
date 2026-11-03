@@ -160,6 +160,8 @@ public class MainActivity extends Activity implements FocusEngine.Host {
      * 遥控器永远选不到。这个标记用来在弹窗期间把按键交还给系统。
      */
     private boolean sysDialogOpen = false;
+    /** 本次换台已经降级过一次（防止 Exo↔VLC 来回切）。 */
+    private boolean retryDone = false;
     /** MENU 按下但还没抬手：用于区分短按（设置）与长按（诊断）。 */
     private boolean menuPressed = false;
 
@@ -359,6 +361,29 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                 dumpPlaybackState("ERROR", msg);
                 // 播放失败只显示在 OSD 上，不弹框（弹框只留给崩溃）
                 osd.setStatus("播放失败：" + msg);
+            }
+
+            /**
+             * 解码能力问题 → 无感切 VLC 重试。
+             *
+             * <p>用户不该知道内核出过什么事。Exo 解不了的源，VLC 大概率能解，
+             * 所以这里不报错、不提示，直接换个内核重播同一个地址。
+             * 只有当降级链走到底（VLC 也不行）才让 onError 兜底。
+             */
+            @Override public void onErrorRetryable(String msg) {
+                dumpPlaybackState("RETRY", msg);
+                android.util.Log.w("MinTV", "解码失败，尝试降级内核: " + msg);
+                // 同一次换台只降级一次：否则 VLC 也失败时会来回切，
+                // 表现为"画面一直闪、日志刷屏"。
+                if (retryDone) { onError(msg); return; }
+                retryDone = true;
+                if (playerManager != null && playerManager.degrade()) {
+                    osd.setStatus("切换解码器…");
+                    playChannelInternal(playingChannel, true);   // 保留线路
+                } else {
+                    // 没有下一张牌了：按普通错误处理
+                    onError(msg);
+                }
             }
 
             @Override public void onVideoFormat(String res, String vc, String ac, String ch, String fps) {
@@ -1405,6 +1430,10 @@ public class MainActivity extends Activity implements FocusEngine.Host {
      */
     private void playChannelInternal(int index, boolean keepLine) {
         if (index < 0 || index >= channels.size()) return;
+        // 新的一次播放，允许重新降级一次。
+        // 但"降级后重播同一台"这条路径传 keepLine=true 且引擎已变，
+        // 不能再无条件清零，否则会 Exo→VLC→Exo 死循环。
+        if (!keepLine) retryDone = false;
         if (index != playingChannel && playingChannel >= 0 && playingChannel < channels.size()) {
             lastChannelNum = channels.get(playingChannel).number;
         }
@@ -2305,6 +2334,9 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         playerManager.setEngine(e, pinned);
         playerManager.setSurfaceView(surfaceView);
         playerManager.setCallback(playerCallback);
+        // 新内核是全新实例，画面比例要重新下发一次 ——
+        // VLC 的比例存在它自己的 MediaPlayer 里，换了实例就丢了。
+        if (player != null) player.setAspectMode(selections[ROW_RATIO]);
     }
 
     private PlaybackEngine engineOf(int decoderOption) { return PlaybackEngine.of(decoderOption); }
@@ -4881,6 +4913,8 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         }
         lp.gravity = Gravity.CENTER;
         out.setLayoutParams(lp);
+        // 通知内核：VLC 必须用自己的 ScaleType 才能生效
+        if (player != null) player.setAspectMode(mode);
         ui.postDelayed(new Runnable() {
             @Override public void run() {
                 SurfaceHolder h = surfaceView.getHolder();

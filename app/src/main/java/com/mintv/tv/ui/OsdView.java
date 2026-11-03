@@ -465,46 +465,52 @@ public class OsdView extends View {
      * "▶" 这类字符宽度和基线与中文差别很大，对不齐。
      */
     private void drawPlayIcon(Canvas c, int which, float cx, float cy, int color) {
-        float s = Theme.px(11);          // 单个三角形的高度一半
-        float w = s * 0.9f;              // 三角形宽度
-        float g = Theme.px(4);           // 双三角间距
+        float s = Theme.px(10);          // 三角形半高
+        float w = Theme.px(9);           // 三角形底宽
         android.graphics.Path path = new android.graphics.Path();
         fill.setColor(color);
         fill.setStyle(Paint.Style.FILL);
 
         if (which == 1) {
             if (paused) {
-                // 播放：一个右向三角
+                // 播放：右向三角（尖朝右）
                 path.reset();
-                path.moveTo(cx - w * 0.5f, cy - s);
-                path.lineTo(cx + w * 1.1f, cy);
-                path.lineTo(cx - w * 0.5f, cy + s);
+                path.moveTo(cx - w * 0.45f, cy - s);
+                path.lineTo(cx + w * 0.75f, cy);
+                path.lineTo(cx - w * 0.45f, cy + s);
                 path.close();
                 c.drawPath(path, fill);
             } else {
-                // 暂停：两条竖条
-                float bw2 = Theme.px(5), bh2 = s * 1.7f;
-                r.set(cx - Theme.px(7), cy - bh2 / 2f, cx - Theme.px(7) + bw2, cy + bh2 / 2f);
+                // 暂停：两条圆角竖条
+                float bw2 = Theme.px(6), bh2 = s * 1.9f;
+                r.set(cx - Theme.px(9), cy - bh2 / 2f, cx - Theme.px(9) + bw2, cy + bh2 / 2f);
                 c.drawRoundRect(r, Theme.px(2), Theme.px(2), fill);
-                r.set(cx + Theme.px(2), cy - bh2 / 2f, cx + Theme.px(2) + bw2, cy + bh2 / 2f);
+                r.set(cx + Theme.px(3), cy - bh2 / 2f, cx + Theme.px(3) + bw2, cy + bh2 / 2f);
                 c.drawRoundRect(r, Theme.px(2), Theme.px(2), fill);
             }
             return;
         }
 
-        // 上一集 / 下一集：双三角 + 一条竖线
-        float dir = (which == 0) ? -1f : 1f;
+        // 上一集 / 下一集：两个同向三角 + 外侧一条竖线（业界通行画法）
+        // which=0 朝左，which=1... 实际上是 0=prev 朝左、2=next 朝右
+        boolean left = (which == 0);
+        float dir = left ? -1f : 1f;
+        float step = w + Theme.px(3);
+        // 两个三角：靠内的一枚 + 靠外的一枚
         for (int k = 0; k < 2; k++) {
-            float ox = cx + dir * (k * (w + g) - (w + g) / 2f) - dir * Theme.px(4);
+            float base = cx - dir * Theme.px(7) + dir * (k * step);
             path.reset();
-            path.moveTo(ox + dir * w * 0.5f, cy - s);
-            path.lineTo(ox - dir * w * 0.5f, cy);
-            path.lineTo(ox + dir * w * 0.5f, cy + s);
+            // 三角尖朝 dir 方向
+            path.moveTo(base - dir * w * 0.5f, cy - s);
+            path.lineTo(base + dir * w * 0.5f, cy);
+            path.lineTo(base - dir * w * 0.5f, cy + s);
             path.close();
             c.drawPath(path, fill);
         }
-        r.set(cx + dir * Theme.px(16), cy - s, cx + dir * Theme.px(16) + Theme.px(4), cy + s);
-        c.drawRoundRect(r, Theme.px(2), Theme.px(2), fill);
+        // 外侧竖线（表示"到顶/到头"）
+        float barX = cx + dir * Theme.px(14);
+        r.set(left ? barX : barX - Theme.px(3), cy - s, left ? barX + Theme.px(3) : barX, cy + s);
+        c.drawRoundRect(r, Theme.px(1.5f), Theme.px(1.5f), fill);
     }
 
     private long pctToMs(float x) {
@@ -525,186 +531,219 @@ public class OsdView extends View {
         invalidate();
     }
 
+    /**
+     * 参考稿 1:1 实现（osd-ref.html）。
+     *
+     * 设计要点：
+     *  · 卡片 900×自适应，左边 4px 蓝条，圆角 12
+     *  · 五段式：台号台名分类 / 正在播 / 进度 / 控制 / 技术标签
+     *  · 控制条居中，中间那颗蓝色实心（暂停是最高频操作）
+     *  · 直播时进度条画虚线纹理 + 独立「直播」标签，不写进进度里
+     *  · 全部分段顺序排版，不再有"钉死在底部"的行（会撞）
+     */
     private void drawOsd(Canvas c, float h) {
-        float padH = Theme.px(22);
-        float cardW = Theme.px(1080);
+        final float padH = Theme.px(24);
+        final float cardW = Theme.px(900);
+        final float LEFT_BAR = Theme.px(4);
 
-        // 先量高度：标题行 + 目前 + 进度 + 下个 + 标签行
-        float lineTitle = Theme.sp(28);
-        float lineSub = Theme.sp(18);
-        float barH = Theme.px(6);
-        float chipH = Theme.px(26);
-        float gap = Theme.px(10);
+        // ---- 字号 ----
+        final float fsName = Theme.sp(29);
+        final float fsNo   = Theme.sp(19);
+        final float fsCat  = Theme.sp(15);
+        final float fsLabel= Theme.sp(16);
+        final float fsProg = Theme.sp(18);
+        final float fsChip = Theme.sp(15);
 
-        float ctlH = Theme.px(46);
-        // 进度条现在常驻（直播画灰槽），控制条也常驻 ——
-        // 两行都必须算进高度，否则内容会画到卡片外面，
-        // 出现"文字叠在另一行上"的重叠（实测截图就是这么糊的）。
-        float contentH = padH
-                + lineTitle + gap
-                + (nowText != null ? lineSub + gap : 0)
-                + barH + gap
-                + (nextText != null ? lineSub + gap : 0)
-                + ctlH + gap
-                + chipH + padH;
-        float cardH = contentH;
-        // 底部居中，但要让开左侧面板：剩下的那块区域里居中。
+        // ---- 间距 ----
+        final float gap1 = Theme.px(14);   // 标题行后
+        final float gap2 = Theme.px(12);   // 节目行后
+        final float gap3 = Theme.px(16);   // 进度后
+        final float gap4 = Theme.px(16);   // 控制条后
+        final float barH = Theme.px(6);
+        final float chipH = Theme.px(30);
+        final float noH = Theme.px(30);
+        final float ctlH = Theme.px(44);
+        final float padV = Theme.px(20);
+
+        // ---- 高度：顺序累加，每一段都算进去 ----
+        float contentH = padV
+                + noH + gap1                 // 第一行
+                + (nowText != null ? fsProg + gap2 : 0)
+                + barH + gap3                // 进度条（常驻）
+                + ctlH + gap4                // 控制条（常驻）
+                + chipH + padV;              // 技术标签
+        float bottom = h - Theme.px(56);
+        float top = bottom - contentH;
+
+        // ---- 卡片底 ----
         float avail = getWidth() - leftInset;
         float left = leftInset + Math.max(0f, (avail - cardW) / 2f);
-        float bottom = h - Theme.px(56);
-        float top = bottom - cardH;
-
-        // 卡片底
         r.set(left, top, left + cardW, bottom);
-        fill.setColor(Theme.CARD_BG);
-        c.drawRoundRect(r, Theme.px(8), Theme.px(8), fill);
-        // 左侧蓝条
+        fill.setColor(Theme.OSD_CARD_BG);
+        c.drawRoundRect(r, Theme.px(12), Theme.px(12), fill);
+
+        // 左侧蓝条（圆角内缩，避免超出圆角）
         fill.setColor(Theme.FOCUS_BLUE);
-        r.set(left, top, left + Theme.px(3), bottom);
-        c.drawRoundRect(r, Theme.px(1), Theme.px(1), fill);
+        r.set(left, top + Theme.px(12), left + LEFT_BAR, bottom - Theme.px(12));
+        c.drawRoundRect(r, LEFT_BAR / 2f, LEFT_BAR / 2f, fill);
 
         float x = left + padH;
-        float y = top + padH + lineTitle * 0.78f;
+        float y = top + padV;                 // 当前段的**顶部**
 
-        // ---- 第 1 行：台号块 + 台名 + 分类胶囊 ----
-        float noW = Theme.px(66), noH = Theme.px(30);
-        float noTop = y - Theme.sp(28) * 0.78f + Theme.px(2);
+        // ═══════════ 第 1 行：台号 + 台名 + 分类 ═══════════
+        float noTop = y;
+        float noW = Theme.px(66);
         fill.setColor(Theme.FOCUS_BLUE);
         r.set(x, noTop, x + noW, noTop + noH);
-        c.drawRoundRect(r, Theme.px(3), Theme.px(3), fill);
-        p.setColor(Theme.TEXT);
-        p.setTextSize(Theme.sp(18));
+        c.drawRoundRect(r, Theme.px(5), Theme.px(5), fill);
+        p.setColor(0xFFFFFFFF);
+        p.setTextSize(fsNo);
+        p.setFakeBoldText(true);
         p.setTextAlign(Paint.Align.CENTER);
-        c.drawText(no == null ? "" : no, x + noW / 2f, noTop + noH / 2f + Theme.px(6), p);
+        c.drawText(no == null ? "" : no, x + noW / 2f,
+                noTop + noH / 2f - (p.ascent() + p.descent()) / 2f, p);
         p.setTextAlign(Paint.Align.LEFT);
-
-        p.setColor(Theme.TEXT);
-        p.setTextSize(lineTitle);
         p.setFakeBoldText(false);
+
         float nameX = x + noW + Theme.px(16);
-        c.drawText(name, nameX, y, p);
+        p.setColor(Theme.TEXT);
+        p.setTextSize(fsName);
+        float nameBaseline = noTop + noH / 2f - (p.ascent() + p.descent()) / 2f;
 
-        // 分类胶囊靠右
+        // 分类胶囊（先量宽度，给台名留出空间）
+        float catW = 0f;
         if (group != null && !group.isEmpty()) {
-            float cs = Theme.sp(16);
-            p.setTextSize(cs);
-            float cw = p.measureText(group) + Theme.px(18);
-            float cx = left + cardW - padH - cw;
-            fill.setColor(0xFF3A6EA5);
-            r.set(cx, noTop, cx + cw, noTop + noH);
-            c.drawRoundRect(r, Theme.px(3), Theme.px(3), fill);
-            p.setColor(Theme.TEXT);
-            c.drawText(group, cx + Theme.px(9), noTop + noH / 2f + Theme.px(5), p);
+            p.setTextSize(fsCat);
+            catW = p.measureText(group) + Theme.px(22);
         }
+        float nameMaxW = cardW - padH * 2 - noW - Theme.px(16)
+                - (catW > 0 ? catW + Theme.px(12) : 0);
+        p.setTextSize(fsName);
+        c.drawText(fit(name == null ? "" : name, nameMaxW, fsName),
+                nameX, nameBaseline, p);
 
-        y += gap;
+        if (catW > 0) {
+            float catX = left + cardW - padH - catW;
+            fill.setColor(Theme.OSD_CAT_BG);
+            r.set(catX, noTop + Theme.px(3), catX + catW, noTop + noH - Theme.px(3));
+            c.drawRoundRect(r, Theme.px(5), Theme.px(5), fill);
+            p.setColor(Theme.OSD_CAT_TXT);
+            p.setTextSize(fsCat);
+            c.drawText(group, catX + Theme.px(11),
+                    noTop + noH / 2f - (p.ascent() + p.descent()) / 2f, p);
+        }
+        y += noH + gap1;
 
-        // ---- 第 2 行：目前播放 ----
-        float rowX = x;
+        // ═══════════ 第 2 行：正在播 ═══════════
         if (nowText != null) {
-            y += lineSub * 0.8f;
+            p.setTextSize(fsLabel);
             p.setColor(Theme.TEXT_SUB);
-            p.setTextSize(Theme.sp(17));
-            c.drawText("目前播放:", rowX, y, p);
-            float labelW = p.measureText("目前播放:");
-            p.setColor(Theme.TEXT);
-            p.setTextSize(lineSub);
-            c.drawText(fit(nowText, cardW - padH * 2 - labelW - Theme.px(10), lineSub),
-                    rowX + labelW + Theme.px(10), y, p);
-            y += gap;
+            c.drawText("正在播", x, y + fsProg * 0.8f, p);
+            float labelW = p.measureText("正在播");
+            p.setTextSize(fsProg);
+            p.setColor(Theme.OSD_PROG_TXT);
+            c.drawText(fit(nowText, cardW - padH * 2 - labelW - Theme.px(12), fsProg),
+                    x + labelW + Theme.px(12), y + fsProg * 0.8f, p);
+            y += fsProg + gap2;
         }
 
-        // ---- 第 3 行：进度条 ----
-        //
-        // 直播流没有可跳转时间轴（progress < 0），但**槽位照样要画**：
-        // 少了它卡片在直播/回看之间会忽高忽低，而且用户看不出"这里本来是进度条"。
-        // 没有进度时画一条灰槽 + 「直播」字样，可拖动时才是蓝色填充。
-        barShown = false;
+        // ═══════════ 第 3 行：进度条 ═══════════
+        // 直播没有时间轴：画虚线纹理槽 + 右侧独立「直播」标签。
+        // 不把"直播"写进进度百分比的位置 —— 那样会让人以为有进度可拖。
         {
-            float fullW = cardW - padH * 2;
-            float barW = fullW - Theme.px(60);
-            float barTop = y;
-            barRect.set(rowX, barTop - Theme.px(14), rowX + barW, barTop + barH + Theme.px(14));
+            float liveTagW = Theme.px(56);
+            float barW = cardW - padH * 2 - liveTagW - Theme.px(14);
+            barRect.set(x, y - Theme.px(12), x + barW, y + barH + Theme.px(12));
             barShown = true;
 
             // 槽
-            fill.setColor(0x33FFFFFF);
-            r.set(rowX, barTop, rowX + barW, barTop + barH);
+            fill.setColor(Theme.OSD_BAR_TRACK);
+            r.set(x, y, x + barW, y + barH);
             c.drawRoundRect(r, barH / 2f, barH / 2f, fill);
 
             if (progress >= 0f) {
-                fill.setColor(0xFF2F7BFF);
-                r.set(rowX, barTop, rowX + barW * Math.min(1f, progress), barTop + barH);
+                // 回看：蓝色实心
+                fill.setColor(Theme.FOCUS_BLUE);
+                r.set(x, y, x + barW * Math.min(1f, progress), y + barH);
                 c.drawRoundRect(r, barH / 2f, barH / 2f, fill);
+                p.setColor(Theme.TEXT_SUB);
+                p.setTextSize(fsChip);
+                String pct = Math.round(progress * 100) + "%";
+                c.drawText(pct, x + barW + Theme.px(14),
+                        y + barH / 2f - (p.ascent() + p.descent()) / 2f, p);
+            } else {
+                // 直播：虚线纹理（用短条交替铺，模拟 repeating-linear-gradient）
+                fill.setColor(Theme.OSD_BAR_DASH);
+                float seg = Theme.px(12), gapSeg = Theme.px(12);
+                float px0 = x;
+                while (px0 < x + barW) {
+                    float px1 = Math.min(px0 + seg, x + barW);
+                    r.set(px0, y, px1, y + barH);
+                    c.drawRoundRect(r, barH / 2f, barH / 2f, fill);
+                    px0 += seg + gapSeg;
+                }
+                // 「直播」标签
+                float ltX = x + barW + Theme.px(14);
+                fill.setColor(Theme.OSD_LIVE_BG);
+                r.set(ltX, y - Theme.px(8), ltX + liveTagW, y + barH + Theme.px(8));
+                c.drawRoundRect(r, Theme.px(4), Theme.px(4), fill);
+                p.setColor(Theme.OSD_LIVE_TXT);
+                p.setTextSize(Theme.sp(15));
+                p.setTextAlign(Paint.Align.CENTER);
+                c.drawText("直播", ltX + liveTagW / 2f,
+                        y + barH / 2f - (p.ascent() + p.descent()) / 2f, p);
+                p.setTextAlign(Paint.Align.LEFT);
             }
-
-            p.setColor(Theme.TEXT_SUB);
-            p.setTextSize(Theme.sp(16));
-            String right = progress >= 0f
-                    ? Math.round(progress * 100) + "%"
-                    : "直播";
-            c.drawText(right, rowX + barW + Theme.px(12), barTop + barH + Theme.px(4), p);
-            y += barH + gap;
+            y += barH + gap3;
         }
 
-        // ---- 第 4 行：播放控制按钮（上一台 / 暂停·播放 / 下一台）----
+        // ═══════════ 第 4 行：播放控制（居中）═══════════
         {
-            // 通用播放器图标：◀◀ 上一集 / ⏸·▶ 暂停继续 / ▶▶ 下一集。
-            // 用文字"上一台/下一台"既不合播放器惯例，又占地方。
-            float bw = Theme.px(104), bh = Theme.px(46);
-            float gapB = Theme.px(12);
+            float bw = Theme.px(96), gapB = Theme.px(10);
             float totalW = bw * 3 + gapB * 2;
-            float bx = rowX;
+            float bx = left + (cardW - totalW) / 2f;
             for (int i = 0; i < 3; i++) {
                 float l = bx + i * (bw + gapB);
                 boolean primary = (i == 1);
-                r.set(l, y, l + bw, y + bh);
-                fill.setColor(primary ? 0xFF2F7BFF : 0x33FFFFFF);
-                c.drawRoundRect(r, bh / 2f, bh / 2f, fill);
-                drawPlayIcon(c, i, l + bw / 2f, y + bh / 2f, primary ? 0xFFFFFFFF : 0xFFE6E6E6);
+                r.set(l, y, l + bw, y + ctlH);
+                fill.setColor(primary ? Theme.FOCUS_BLUE : Theme.OSD_CTL_BG);
+                c.drawRoundRect(r, ctlH / 2f, ctlH / 2f, fill);
+                drawPlayIcon(c, i, l + bw / 2f, y + ctlH / 2f,
+                        primary ? 0xFFFFFFFF : 0xFFE6E9EE);
             }
-            ctlRect.set(bx, y - Theme.px(8), bx + totalW, y + bh + Theme.px(8));
+            ctlRect.set(bx, y - Theme.px(8), bx + totalW, y + ctlH + Theme.px(8));
             ctlShown = true;
-            y += bh + gap;
+            y += ctlH + gap4;
         }
 
-        // ---- 第 4 行：下个节目 ----
-        if (nextText != null) {
-            y += lineSub * 0.8f;
-            p.setColor(Theme.TEXT_SUB);
-            p.setTextSize(Theme.sp(17));
-            c.drawText("下个节目:", rowX, y, p);
-            float labelW = p.measureText("下个节目:");
-            p.setColor(Theme.TEXT);
-            p.setTextSize(Theme.sp(17));
-            c.drawText(fit(nextText, cardW - padH * 2 - labelW - Theme.px(10), Theme.sp(17)),
-                    rowX + labelW + Theme.px(10), y, p);
-            y += gap;
+        // ═══════════ 第 5 行：技术标签 + 时钟 ═══════════
+        {
+            float chipTop = y;
+            float cx = x;
+            for (int i = 0; i < tags.length; i++) {
+                if (!tagOn[i] || tags[i] == null || tags[i].isEmpty()) continue;
+                p.setTextSize(fsChip);
+                float tw = p.measureText(tags[i]) + Theme.px(20);
+                if (cx + tw > left + cardW - padH - Theme.px(90)) break;   // 给时钟留位
+                fill.setColor(chipColor(i));
+                r.set(cx, chipTop, cx + tw, chipTop + chipH);
+                c.drawRoundRect(r, Theme.px(5), Theme.px(5), fill);
+                p.setColor(i == 0 ? Theme.OSD_CHIP_SRC_TXT : Theme.OSD_CHIP_TXT);
+                c.drawText(tags[i], cx + Theme.px(10),
+                        chipTop + chipH / 2f - (p.ascent() + p.descent()) / 2f, p);
+                cx += tw + Theme.px(8);
+            }
+            // 时钟右下
+            if (clockText != null) {
+                p.setColor(Theme.OSD_CLOCK_TXT);
+                p.setTextSize(fsChip);
+                p.setTextAlign(Paint.Align.RIGHT);
+                c.drawText(clockText, left + cardW - padH,
+                        chipTop + chipH / 2f - (p.ascent() + p.descent()) / 2f, p);
+                p.setTextAlign(Paint.Align.LEFT);
+            }
+            y += chipH;
         }
-
-        // ---- 第 5 行：技术标签 + 时钟 ----
-        float chipTop = bottom - padH - chipH;
-        float cx = rowX;
-        for (int i = 0; i < tags.length; i++) {
-            if (!tagOn[i]) continue;
-            p.setTextSize(Theme.sp(15));
-            float tw = p.measureText(tags[i]) + Theme.px(16);
-            fill.setColor(chipColor(i));
-            r.set(cx, chipTop, cx + tw, chipTop + chipH);
-            c.drawRoundRect(r, Theme.px(3), Theme.px(3), fill);
-            p.setColor(Theme.TEXT);
-            c.drawText(tags[i], cx + Theme.px(8), chipTop + chipH / 2f + Theme.px(5), p);
-            cx += tw + Theme.px(8);
-            if (cx > left + cardW - Theme.px(90)) break;   // 放不下就截断
-        }
-
-        // 右下角时钟
-        String t = clockText != null ? clockText : nowClock();
-        p.setColor(Theme.TEXT_DIM);
-        p.setTextSize(Theme.sp(16));
-        p.setTextAlign(Paint.Align.RIGHT);
-        c.drawText(t, left + cardW - padH, chipTop + chipH / 2f + Theme.px(5), p);
-        p.setTextAlign(Paint.Align.LEFT);
     }
 
     private static int chipColor(int i) {

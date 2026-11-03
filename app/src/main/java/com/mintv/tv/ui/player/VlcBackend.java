@@ -29,6 +29,8 @@ public final class VlcBackend implements PlaybackBackend {
     private final Handler main = new Handler(Looper.getMainLooper());
     private LibVLC libVlc;
     private MediaPlayer player;
+    /** 后台收尾线程（stop/release）。libVLC 的 join 可能要几秒，不能在主线程等。 */
+    private Thread ioThread;
     private SurfaceView surfaceView;
     private android.view.TextureView textureView;
     private Callback cb;
@@ -224,23 +226,75 @@ public final class VlcBackend implements PlaybackBackend {
         return lost.toString();
     }
 
-    @Override public boolean supportsHeaders() { return true; }
-
-    private void releasePlayer() {
-        main.removeCallbacks(tick);
-        if (player != null) {
-            try { player.stop(); } catch (Throwable ignored) { }
-            try { player.release(); } catch (Throwable ignored) { }
-            player = null;
-            viewsAttached = false;
-        }
+    @Override
+    public void setAspectMode(int mode) {
+        if (player == null) return;
+        try {
+            // libVLC 的缩放发生在视频输出层，必须用它的 ScaleType，
+            // 改 SurfaceView 的 LayoutParams 它根本不看。
+            switch (mode) {
+                case 1:  player.setVideoScale(MediaPlayer.ScaleType.SURFACE_16_9); break;
+                case 2:  player.setVideoScale(MediaPlayer.ScaleType.SURFACE_4_3); break;
+                case 3:  player.setVideoScale(MediaPlayer.ScaleType.SURFACE_ORIGINAL); break;
+                case 4:  player.setVideoScale(MediaPlayer.ScaleType.SURFACE_FILL); break;
+                default: player.setVideoScale(MediaPlayer.ScaleType.SURFACE_BEST_FIT); break;
+            }
+        } catch (Throwable ignored) { }
     }
 
+    @Override public boolean supportsHeaders() { return true; }
+
+    /**
+     * 后台线程专用。**绝对不能在主线程调用**。
+     */
+    private void releasePlayer() {
+        main.removeCallbacks(tick);
+        final org.videolan.libvlc.MediaPlayer p = player;
+        player = null;
+        viewsAttached = false;
+        if (p == null) return;
+        if (ioThread != null && ioThread != Thread.currentThread()) {
+            // 已在别的线程：等它按顺序做完（stop 之后再 release）
+            try { ioThread.join(3000); } catch (Throwable ignored) { }
+        }
+        try { p.stop(); } catch (Throwable ignored) { }
+        try { p.release(); } catch (Throwable ignored) { }
+    }
+
+    /**
+     * 停止播放。
+     *
+     * <p><b>为什么必须异步</b>：libVLC 的 MediaPlayer.stop() 会走
+     * {@code input_Close → vlc_join}，同步等待解复用线程退出。
+     * 网络源卡住时这个 join 能等好几秒，放在主线程就是 ANR。
+     *
+     * <p>实测 ANR 堆栈（anr_2026-11-03_14-38）+ 主线程 native stack：
+     * <pre>
+     *   "main" prio=5 tid=1 Native
+     *   #00 libc.so (syscall)
+     *   #01 base.apk (vlc_cond_wait)
+     *   #02 base.apk (vlc_sem_wait)
+     *   #03 base.apk (vlc_join)
+     *   #04 base.apk (input_Close)
+     * </pre>
+     * 就是这条链把主线程挂死了 5 秒以上。
+     */
     @Override
     public void stop() {
         main.removeCallbacks(tick);
-        if (player != null) {
-            try { player.stop(); } catch (Throwable ignored) { }
+        final org.videolan.libvlc.MediaPlayer p = player;
+        if (p != null) {
+            // 立刻从"当前播放器"里摘掉，避免后续操作再碰它
+            player = null;
+            viewsAttached = false;
+            ioThread = new Thread(new Runnable() {
+                @Override public void run() {
+                    try { p.stop(); } catch (Throwable ignored) { }
+                    try { p.release(); } catch (Throwable ignored) { }
+                }
+            }, "vlc-stop");
+            ioThread.setPriority(Thread.MIN_PRIORITY);
+            ioThread.start();
         }
         emit(State.IDLE);
     }
@@ -248,12 +302,25 @@ public final class VlcBackend implements PlaybackBackend {
     @Override
     public void release() {
         released = true;
-        releasePlayer();
-        if (libVlc != null) {
-            try { libVlc.release(); } catch (Throwable ignored) { }
-            libVlc = null;
-        }
+        main.removeCallbacks(tick);
+        final org.videolan.libvlc.MediaPlayer p = player;
+        final org.videolan.libvlc.LibVLC lv = libVlc;
+        player = null;
+        libVlc = null;
+        viewsAttached = false;
         surfaceView = null;
+        // 释放同样走后台：LibVLC.release() 也会等内部回放线程收尾
+        new Thread(new Runnable() {
+            @Override public void run() {
+                if (p != null) {
+                    try { p.stop(); } catch (Throwable ignored) { }
+                    try { p.release(); } catch (Throwable ignored) { }
+                }
+                if (lv != null) {
+                    try { lv.release(); } catch (Throwable ignored) { }
+                }
+            }
+        }, "vlc-release").start();
     }
 
     @Override public String tag() { return PlaybackEngine.VLC.name(); }

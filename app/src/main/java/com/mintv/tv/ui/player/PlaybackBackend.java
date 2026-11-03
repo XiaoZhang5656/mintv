@@ -30,6 +30,17 @@ public interface PlaybackBackend {
     interface Callback {
         void onState(State state);
         void onError(String msg);
+
+        /**
+         * 播放失败，但**换一个内核可能就能播**。
+         *
+         * <p>典型场景：Exo 遇到 MP2 音轨、非标 TS、AVS 这类它不支持的编码，
+         * 会抛 DECODER_INIT_FAILED / DECODING_FORMAT_UNSUPPORTED。
+         * 这不是"源坏了"，而是"这个内核解不了" —— 换 VLC 往往就能播。
+         *
+         * <p>默认实现退回 onError，老代码不用改。
+         */
+        default void onErrorRetryable(String msg) { onError(msg); }
         void onFirstFrame();
 
         /**
@@ -97,6 +108,14 @@ public interface PlaybackBackend {
 
     /** 当前是否允许 seek。直播流必须返回 false。 */
     boolean canSeek();
+
+    /**
+     * 画面比例。0=自动适应 1=16:9 2=4:3 3=原始 4=铺满
+     *
+     * <p>必须由**内核自己**实现：VLC 的画面缩放发生在它的视频输出层，
+     * 改 View 的 LayoutParams 对它无效 —— 这就是"VLC 右边一大块黑边"的原因。
+     */
+    default void setAspectMode(int mode) { }
 
     /** 暂停。默认空实现，不支持的后端直接忽略。 */
     default void pause() { }
