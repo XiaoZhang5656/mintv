@@ -160,6 +160,8 @@ public class MainActivity extends Activity implements FocusEngine.Host {
      * 遥控器永远选不到。这个标记用来在弹窗期间把按键交还给系统。
      */
     private boolean sysDialogOpen = false;
+    /** MENU 按下但还没抬手：用于区分短按（设置）与长按（诊断）。 */
+    private boolean menuPressed = false;
 
     // 「关于 / 手机助手」页里的可聚焦控件（设置弹窗的按键只有这一条通道，
     // 这些页面不在 rowColumn 里，必须单独维护一份列表，否则遥控器碰不到）
@@ -864,60 +866,89 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         }
     }
 
+    /** 当前订阅自带请求头（可能为 null / 空）。 */
+    private java.util.Map<String, String> headersOfActiveSub() {
+        com.mintv.tv.data.SubscriptionStore.Sub sub =
+                com.mintv.tv.data.SubscriptionStore.active(this);
+        if (sub == null) return null;
+        return com.mintv.tv.ui.player.HttpHeaderProfile.parsePairs(sub.headers);
+    }
+
+    /**
+     * 把配置里的请求头写到连接上。
+     *
+     * <p>**没有配置就一个都不写**，包括 User-Agent —— 让 HttpURLConnection
+     * 用它自己的默认值。写死一个 "TVUI/1.0" 会让某些源直接 403
+     * （服务端按 UA 白名单过滤），而用户根本不知道是这里的问题。
+     */
+    private void applyConfiguredHeaders(java.net.HttpURLConnection conn,
+                                        java.util.Map<String, String> hdrs) {
+        if (conn == null || hdrs == null || hdrs.isEmpty()) return;
+        for (java.util.Map.Entry<String, String> e : hdrs.entrySet()) {
+            String k = e.getKey();
+            String v = e.getValue();
+            if (k == null || v == null || k.isEmpty() || v.isEmpty()) continue;
+            try { conn.setRequestProperty(k, v); } catch (Throwable ignored) { }
+        }
+    }
+
     /** 后台拉源，成功后重建界面。失败就继续用缓存/示范。 */
     private void fetchSourceAsync(final String url) {
         new Thread(new Runnable() {
             @Override public void run() {
-                String body = null;
-                String lastEtag = null;
-                long lastModified = 0L;
-                java.net.HttpURLConnection conn = null;
-                try {
-                    conn = (java.net.HttpURLConnection) new java.net.URL(url).openConnection();
-                    conn.setConnectTimeout(10000);
-                    conn.setReadTimeout(15000);
-                    conn.setRequestProperty("User-Agent", "TVUI/1.0");
-                    conn.setInstanceFollowRedirects(true);
+                // 统一走 Http：结构不对（HTML/JSON）在读的时候就中止
+                java.util.Map<String, String> hdrs =
+                        com.mintv.tv.ui.player.HttpHeaderProfile.merge(
+                                globalHeaders, headersOfActiveSub());
 
-                    // 条件请求：源没变就让服务端回 304，不必每次启动重下 200KB。
-                    // 两个校验字段都带上，GitHub Pages 走 ETag，nginx 多数走 Last-Modified。
-                    String etag = SourceStore.etag(MainActivity.this);
-                    long lastMod = SourceStore.lastModified(MainActivity.this);
-                    if (etag != null && !etag.isEmpty()) {
-                        conn.setRequestProperty("If-None-Match", etag);
-                    }
-                    if (lastMod > 0) conn.setIfModifiedSince(lastMod);
-
-                    int code = conn.getResponseCode();
-                    if (code == 304) {
-                        SourceStore.touch(MainActivity.this);
-                        return;                 // 缓存就是最新的，界面不用动
-                    }
-                    java.io.InputStream in = conn.getInputStream();
-                    java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
-                    byte[] buf = new byte[16384];
-                    int n;
-                    while ((n = in.read(buf)) > 0) bos.write(buf, 0, n);
-                    in.close();
-                    body = bos.toString("UTF-8");
-                    lastEtag = conn.getHeaderField("ETag");
-                    lastModified = conn.getLastModified();
-                } catch (Exception ignored) {
-                } finally {
-                    if (conn != null) conn.disconnect();
+                String etag = SourceStore.etag(MainActivity.this);
+                long lastMod = SourceStore.lastModified(MainActivity.this);
+                java.util.Map<String, String> withCache = hdrs;
+                if (etag != null && !etag.isEmpty()) {
+                    withCache = new java.util.LinkedHashMap<>(hdrs);
+                    withCache.put("If-None-Match", etag);
                 }
-                final String result = body;
-                if (result == null || result.trim().isEmpty()) {
+                if (lastMod > 0) {
+                    if (withCache == hdrs) withCache = new java.util.LinkedHashMap<>(hdrs);
+                    withCache.put("If-Modified-Since",
+                            new java.text.SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss 'GMT'",
+                                    java.util.Locale.US).format(new java.util.Date(lastMod)));
+                }
+
+                com.mintv.tv.data.Http.Result r = com.mintv.tv.data.Http.get(
+                        url, withCache, 10000, 15000, true);
+                if (r.code == 304) {
+                    SourceStore.touch(MainActivity.this);
+                    return;
+                }
+                final String body = r.body;
+                final String err = r.error;
+                final String lastEtag = r.etag;
+                final long lastModified = r.lastModified;
+
+                if (body == null) {
+                    android.util.Log.w("MinTV", "拉源失败：" + err);
                     ui.post(new Runnable() {
-                        @Override public void run() { osd.toast("直播源拉取失败，请检查网络"); }
+                        @Override public void run() {
+                            if (osd != null) {
+                                osd.toast(err == null ? "源拉取失败" : "源拉取失败：" + err);
+                            }
+                        }
                     });
                     return;
                 }
-                SourceStore.saveBody(MainActivity.this, result,
-                        lastEtag, lastModified);
+                if (body.trim().isEmpty()) {
+                    ui.post(new Runnable() {
+                        @Override public void run() {
+                            if (osd != null) osd.toast("源内容为空");
+                        }
+                    });
+                    return;
+                }
+                SourceStore.saveBody(MainActivity.this, body, lastEtag, lastModified);
                 ui.post(new Runnable() {
                     @Override public void run() {
-                        applyPlaylist(result);
+                        applyPlaylist(body);
                         // 记下这个订阅解析出多少频道，手机助手页要显示"839 个频道"。
                         // applyPlaylist 之后 playlist 已经是新解析的结果。
                         com.mintv.tv.data.SubscriptionStore.Sub act =
@@ -3350,7 +3381,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             conn = (java.net.HttpURLConnection) new java.net.URL(url).openConnection();
             conn.setConnectTimeout(10000);
             conn.setReadTimeout(20000);
-            conn.setRequestProperty("User-Agent", "TVUI/1.0");
+            applyConfiguredHeaders(conn, globalHeaders);
             conn.setInstanceFollowRedirects(true);
             java.io.InputStream in = conn.getInputStream();
             java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream(2 << 20);
@@ -3542,6 +3573,8 @@ public class MainActivity extends Activity implements FocusEngine.Host {
 
     /** 展开抽屉：分类收进去，露出「频道列表 + EPG 节目」。 */
     private void showEpgPanel(int channelIndex) {
+        // 设置开着的时候不弹节目单：两层同时存在，遥控必然打架
+        if (dialogRoot != null && dialogRoot.getVisibility() == View.VISIBLE) return;
         fillEpg(channelIndex);
         // 把节目单的光标落在"正在播"那一行，用户一进来就知道自己在哪
         if (epgPanel != null) {
@@ -3681,6 +3714,15 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                 .setDuration(Theme.T_PANEL).start();
         layoutVideoTap();
         updateOsdInset();
+
+        // 焦点必须回到频道列。
+        // 少了这一步，关掉节目单后焦点引擎还停在"节目单已开"的旧状态，
+        // 再按左右键既不动分类也不动频道 —— 看起来就是"界面卡住了"。
+        if (focus.zone() != FocusEngine.Zone.CHAN) {
+            focus.setZone(FocusEngine.Zone.CHAN);
+        }
+        updateNavFocus(focus.navIndex());
+        updateChannelFocus(focus.chanIndex());
     }
 
     /** ③ 纯播放：整套面板淡出，只留视频。任意方向键/点击恢复。 */
@@ -4614,6 +4656,8 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     }
 
     private void openSettings() {
+        if (sysDialogOpen) return;                       // 系统弹窗在上面，先处理它
+        if (dialogRoot != null && dialogRoot.getVisibility() == View.VISIBLE) return;  // 已开，幂等
         // 上层优先：设置弹窗要盖住节目单，先把它收掉。
         // 不然关掉设置后节目单还留着，而焦点已经退回主界面，状态对不上。
         if (epgPanelOpen) closeEpgPanel();
@@ -4831,39 +4875,55 @@ public class MainActivity extends Activity implements FocusEngine.Host {
      * <p>以前写成"先 reshow() 再 showPanel()"，而 reshow() 只要有过频道就恒为 true，
      * 于是频道列表永远打不开，OSD 反复弹 —— 这就是"一直显示这个、点不开列表"。
      */
+    /**
+     * 当前"活动层"。任何时刻只可能有一个，遥控按键和触摸都先问它。
+     *
+     * <p>为什么要这个东西：以前各层各判各的 —— 按键走 if 链，
+     * 触摸走 onVideoTapped，两边条件不一致。结果就是设置弹窗开着的时候
+     * 点屏幕还能触发下面的面板逻辑，用户按遥控器也分不清现在在操作谁。
+     *
+     * <p>层级从高到低：系统弹窗 > 设置弹窗 > 节目单 > 主界面面板 > 纯播放。
+     */
+    private static final int LAYER_SYS_DIALOG = 5;
+    private static final int LAYER_SETTINGS = 4;
+    private static final int LAYER_EPG = 3;
+    private static final int LAYER_PANEL = 2;
+    private static final int LAYER_PLAYER = 1;
+
+    private int activeLayer() {
+        if (sysDialogOpen) return LAYER_SYS_DIALOG;
+        if (dialogRoot != null && dialogRoot.getVisibility() == View.VISIBLE) return LAYER_SETTINGS;
+        if (epgPanelOpen) return LAYER_EPG;
+        if (panelVisible) return LAYER_PANEL;
+        return LAYER_PLAYER;
+    }
+
     private void onVideoTapped() {
+        int layer = activeLayer();
+        // 上层开着时，点画面不该穿透到底下：
+        //   系统弹窗 / 设置弹窗 → 完全忽略（由它们自己处理）
+        //   节目单           → 收起节目单（等于"点空白关掉抽屉"）
+        if (layer == LAYER_SYS_DIALOG || layer == LAYER_SETTINGS) return;
+        if (layer == LAYER_EPG) { closeEpgPanel(); return; }
+
         boolean left = tapX < Theme.px(Theme.NAV_W + Theme.CHAN_W + Theme.RAIL_W);
 
-        if (!panelVisible) {
-            // 纯播放态（面板收起）。左右分工，互不干扰：
-            //   点左边 → 收掉信息条 + 展开分类/频道列表
-            //   点右边 → 只切换信息条（显示/隐藏）
-            //
-            // 以前是"先问 reshow()，能弹就 return"，于是信息条显示着的时候
-            // 点左边永远进不到 showPanel()，用户就只能看着 OSD 干瞪眼。
+        if (layer == LAYER_PLAYER) {
+            // 纯播放态：左边唤回面板，右边只管信息条
             if (left) {
                 if (osd != null) osd.hideNow();
                 showPanel();
                 return;
             }
-            if (osd != null && osd.isVisible()) {
-                osd.hideNow();
-                return;
-            }
+            if (osd != null && osd.isVisible()) { osd.hideNow(); return; }
             if (osd != null && osd.reshow()) return;
             showPanel();
             return;
         }
 
-        // 面板可见：点 OSD 区域收起它，点别处收起整块面板
-        if (osd != null && osd.isVisible()) {
-            osd.hideNow();
-            return;
-        }
-        if (osd != null && osd.reshow()) {
-            // 面板可见时点画面：先把信息条叫出来，再点才收面板
-            return;
-        }
+        // LAYER_PANEL：面板可见
+        if (osd != null && osd.isVisible()) { osd.hideNow(); return; }
+        if (osd != null && osd.reshow()) return;
         enterFullPlayer();
     }
 
@@ -5009,6 +5069,15 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         //  吞掉，不允许落到下层 —— 否则就会出现"设置和频道同时响应"。
         //  ══════════════════════════════════════════════════════════
 
+        // ---- 音量键：最高优先，任何层都要能调 ----
+        // 以前放在 L1 之后，设置弹窗开着时音量键被 handleSettingsKey 吞掉，
+        // 用户在看设置页时连音量都调不了。
+        if (keyCode == KeyEvent.KEYCODE_VOLUME_UP || keyCode == KeyEvent.KEYCODE_VOLUME_DOWN
+                || keyCode == KeyEvent.KEYCODE_VOLUME_MUTE) {
+            handleVolumeKey(keyCode);
+            return true;
+        }
+
         // L0
         if (sysDialogOpen) return super.onKeyDown(keyCode, event);
 
@@ -5018,14 +5087,33 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             return true;          // 无条件吞，绝不 return handleSettingsKey()
         }
 
-        // ---- 音量：接管系统音量键，给出 App 内反馈 ----
-        if (keyCode == KeyEvent.KEYCODE_VOLUME_UP || keyCode == KeyEvent.KEYCODE_VOLUME_DOWN
-                || keyCode == KeyEvent.KEYCODE_VOLUME_MUTE) {
-            handleVolumeKey(keyCode);
-            return true;
+
+        // 长按 MENU = 播放诊断，短按 MENU = 设置。
+        // 顺序不能反：原来短按那段写在前面且直接 return，
+        // 长按分支成了永远执行不到的死代码。
+        if (keyCode == KeyEvent.KEYCODE_MENU) {
+            if (event.getRepeatCount() == 0 && !event.isLongPress()) {
+                // 首帧按下：先跟踪，等抬手再决定 —— 这样长按不会被误判成短按
+                event.startTracking();
+                menuPressed = true;
+            }
+            return true;      // 具体动作放在 onKeyLongPress / onKeyUp
+        }
+
+        // ---- L2 节目单面板 ----
+        // 必须排在"纯播放态"之前：节目单开着时上下键是选节目，
+        // 不能被外面的"唤出面板"先吃掉。
+        if (epgPanelOpen) {
+            if (keyCode == KeyEvent.KEYCODE_BACK || keyCode == KeyEvent.KEYCODE_ESCAPE) {
+                closeEpgPanel();
+            } else {
+                handleEpgKey(keyCode);
+            }
+            return true;          // 节目单开着时任何键都不下传
         }
 
         // ---- 数字键换台 ----
+        // 放在 L2 之后：节目单开着时数字键不该换台（用户是在选节目）。
         if (keyCode >= KeyEvent.KEYCODE_0 && keyCode <= KeyEvent.KEYCODE_9) {
             appendChannelDigit(keyCode - KeyEvent.KEYCODE_0);
             return true;
@@ -5035,28 +5123,6 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         if (keyCode == KeyEvent.KEYCODE_LAST_CHANNEL || keyCode == KeyEvent.KEYCODE_MEDIA_PREVIOUS) {
             jumpToLastChannel();
             return true;
-        }
-
-        // 长按 MENU = 播放诊断，短按 MENU = 设置。
-        // 顺序不能反：原来短按那段写在前面且直接 return，
-        // 长按分支成了永远执行不到的死代码。
-        if (keyCode == KeyEvent.KEYCODE_MENU) {
-            if (event.isLongPress() || event.getRepeatCount() > 0
-                    || (event.getFlags() & KeyEvent.FLAG_LONG_PRESS) != 0) {
-                showDiagnostics();
-            } else {
-                event.startTracking();     // 让系统继续派发长按
-                openSettings();
-            }
-            return true;
-        }
-
-        // ---- L2 节目单面板 ----
-        // 必须排在"纯播放态"之前：节目单开着时上下键是选节目，
-        // 不能被外面的"唤出面板"先吃掉。
-        if (epgPanelOpen) {
-            handleEpgKey(keyCode);
-            return true;          // 节目单开着时任何键都不下传
         }
 
         // 信息键：直接调出 OSD 信息条（节目、进度、编码、网速）。
@@ -5102,7 +5168,17 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         // ---- L4 主界面三栏 ----
         // 面板收起 = 纯播放态在上层，三栏在下面。这时候绝不能再用焦点引擎，
         // 否则按键会改到看不见的分类/频道状态（切回来发现焦点莫名跳了）。
-        if (!panelVisible) return true;
+        if (!panelVisible) {
+            // 纯播放态：BACK 先唤回面板，再按一次才退出。
+            // 原来这里无条件 return true，按 BACK 直接 finish()，
+            // 用户在看片时误按一下就退出了。
+            if (keyCode == KeyEvent.KEYCODE_BACK) {
+                if (osd != null && osd.isVisible()) osd.hideNow();
+                showPanel();
+                return true;
+            }
+            return true;
+        }
         if (focus.onKey(keyCode)) return true;
 
         switch (keyCode) {
@@ -5116,13 +5192,14 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                 }
                 return true;
             case KeyEvent.KEYCODE_BACK:
-                if (epgPanelOpen) {
-                    closeEpgPanel();
-                } else if (panelVisible) {
-                    hidePanel();
-                } else {
-                    finish();
+                // 节目单在上面时就该优先关节目单，先看上层
+                if (epgPanelOpen) { closeEpgPanel(); return true; }
+                if (dialogRoot != null && dialogRoot.getVisibility() == View.VISIBLE) {
+                    closeSettings(); return true;
                 }
+                if (panelVisible) { hidePanel(); return true; }
+                if (osd != null && osd.isVisible()) { osd.hideNow(); return true; }
+                finish();
                 return true;
             default:
                 return super.onKeyDown(keyCode, event);
@@ -5131,8 +5208,15 @@ public class MainActivity extends Activity implements FocusEngine.Host {
 
     @Override
     public boolean onKeyLongPress(int keyCode, KeyEvent event) {
-        if (dialogRoot != null && dialogRoot.getVisibility() == View.VISIBLE) {
-            return super.onKeyLongPress(keyCode, event);
+        if (keyCode == KeyEvent.KEYCODE_MENU) {
+            menuPressed = false;          // 长按已消费，抬手不再当短按
+            showDiagnostics();
+            return true;
+        }
+        // 上层（系统弹窗 / 设置 / 节目单）在的时候，左右长按不该触发快进
+        int layer = activeLayer();
+        if (layer == LAYER_SYS_DIALOG || layer == LAYER_SETTINGS || layer == LAYER_EPG) {
+            return true;
         }
         if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) return startSeek(true);
         if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT) return startSeek(false);
@@ -5141,6 +5225,13 @@ public class MainActivity extends Activity implements FocusEngine.Host {
 
     @Override
     public boolean onKeyUp(int keyCode, KeyEvent event) {
+        if (keyCode == KeyEvent.KEYCODE_MENU && menuPressed) {
+            menuPressed = false;
+            if (event.isCanceled()) return true;
+            if (!event.isTracking()) return true;   // 长按已经被 onKeyLongPress 消费
+            openSettings();
+            return true;
+        }
         if (seeking && (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT
                 || keyCode == KeyEvent.KEYCODE_DPAD_LEFT)) {
             endSeek();

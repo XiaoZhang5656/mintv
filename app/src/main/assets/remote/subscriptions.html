@@ -10,6 +10,8 @@
   .tag{font-size:11px;padding:2px 7px;border-radius:5px;background:var(--card2);color:var(--muted)}
   .tag.on{background:rgba(46,168,90,.16);color:#2EA85A}
   .u{font-size:12px;color:var(--muted);word-break:break-all;margin-top:6px;font-family:ui-monospace,monospace}
+  .epgline{margin-top:3px;font-size:11.5px}
+  .dimline{opacity:.7}
   .acts{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}
   .acts button{flex:0 0 auto;padding:9px 16px;border-radius:10px;border:0;font-size:14px;
     background:var(--card2);color:var(--text)}
@@ -19,6 +21,20 @@
   .cur{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;
        font-size:13px;color:var(--muted)}
   .cur b{color:var(--text);font-weight:600}
+  /* 编辑面板：页面内的模态，不用浏览器原生 prompt */
+  .sheet{position:fixed;inset:0;background:rgba(0,0,0,.5);display:none;
+    align-items:flex-end;z-index:30;padding:0}
+  .sheet.on{display:flex}
+  .sheetbox{width:100%;background:var(--card);border-radius:20px 20px 0 0;
+    padding:20px 18px calc(20px + env(safe-area-inset-bottom));max-height:86vh;
+    overflow:auto;animation:up .18s ease-out}
+  @keyframes up{from{transform:translateY(24px);opacity:.6}to{transform:none;opacity:1}}
+  .sheetbox h3{margin:0 0 16px;font-size:17px;font-weight:650;color:var(--text)}
+  .sheetacts{display:flex;gap:10px;margin-top:20px}
+  .sheetacts button{flex:1;padding:14px;border:0;border-radius:12px;font-size:15px;
+    font-family:inherit;font-weight:600;cursor:pointer}
+  .ghostbtn{background:var(--card2);color:var(--text)}
+  .primary2{background:var(--blue);color:#fff}
 </style>
 </head>
 <body>
@@ -48,15 +64,17 @@
   <input id="fUrl" placeholder="https://…">
   <label class="lbl">请求头（可选，留空用内核默认 UA）</label>
   <input id="fHdr" placeholder="可留空">
-  <p class="hint">这个订阅单独填的请求头会覆盖全局设置。</p>
+  <label class="lbl">EPG 节目单（可选）</label>
+  <input id="fEpgNew" placeholder="https://…/e.xml.gz">
+  <p class="hint">每个订阅可以绑不同的 EPG。留空表示用下面的全局默认。</p>
   <button class="primary big" onclick="addSub()">添加</button>
 </div>
 
-<p class="sect">EPG 节目单</p>
+<p class="sect">全局默认 EPG</p>
 <div class="card">
-  <label class="lbl">EPG 地址（留空关闭）</label>
+  <label class="lbl">EPG 地址（订阅没单独绑时用这个，留空关闭）</label>
   <input id="fEpg" placeholder="https://…/e.xml.gz">
-  <p class="hint">支持 xml 与 xml.gz。</p>
+  <p class="hint">支持 xml 与 xml.gz。订阅里单独填的会覆盖这里。</p>
 </div>
 
 <p class="sect">全局请求头</p>
@@ -66,6 +84,24 @@
 </div>
 
 <button class="primary big" onclick="saveAll()">保存并让盒子生效</button>
+
+<div class="sheet" id="sheet">
+  <div class="sheetbox">
+    <h3 id="sheetTitle">编辑订阅</h3>
+    <label class="lbl">名称</label>
+    <input id="eName" placeholder="例如：省内源">
+    <label class="lbl">地址</label>
+    <input id="eUrl" placeholder="https://…">
+    <label class="lbl">请求头（可留空）</label>
+    <input id="eHdr" placeholder="UA=… Referer=…">
+    <label class="lbl">EPG 节目单（留空用全局默认）</label>
+    <input id="eEpg" placeholder="https://…/e.xml.gz">
+    <div class="sheetacts">
+      <button class="ghostbtn" onclick="closeSheet()">取消</button>
+      <button class="primary2" onclick="saveSheet()">保存</button>
+    </div>
+  </div>
+</div>
 
 <div class="toast" id="toast"></div>
 
@@ -116,6 +152,8 @@ function render() {
         '<span class="tag">' + (s.count || 0) + ' 个频道</span>' +
       '</div>' +
       '<div class="u">' + esc(s.url) + '</div>' +
+      (s.epgUrl ? '<div class="u epgline">EPG：' + esc(s.epgUrl) + '</div>'
+                : '<div class="u epgline dimline">EPG：使用全局默认</div>') +
       '<div class="acts">' + acts + '</div>' +
     '</div>';
   }).join('');
@@ -148,14 +186,16 @@ function addSub() {
   var name = document.getElementById('fName').value.trim();
   var url = document.getElementById('fUrl').value.trim();
   var hdr = document.getElementById('fHdr').value.trim();
+  var epg = document.getElementById('fEpgNew').value.trim();
   if (!url) { toast('地址不能为空'); return; }
-  MintvApi.subsAction('save', { name: name || '未命名', url: url, headers: hdr })
+  MintvApi.subsAction('save', { name: name || '未命名', url: url, headers: hdr, epgUrl: epg })
     .then(function (r) {
       if (r && r.ok) {
         toast('已添加');
         document.getElementById('fName').value = '';
         document.getElementById('fUrl').value = '';
         document.getElementById('fHdr').value = '';
+        document.getElementById('fEpgNew').value = '';
         load();
       } else toast((r && r.msg) || '添加失败');
     });
@@ -183,17 +223,36 @@ function del(id) {
   });
 }
 
+var editingId = null;
+
 function edit(id) {
   var s = data.subs.filter(function (x) { return x.id === id; })[0];
-  if (!s) return;
-  var n = prompt('名称', s.name || '');
-  if (n === null) return;
-  var u = prompt('地址', s.url || '');
-  if (u === null) return;
-  var h = prompt('请求头（可留空）', s.headers || '');
-  if (h === null) h = '';
-  MintvApi.subsAction('save', { id: id, name: n, url: u, headers: h })
-    .then(function () { toast('已保存'); load(); });
+  if (!s) { toast('找不到这条订阅'); return; }
+  editingId = id;
+  document.getElementById('sheetTitle').textContent = '编辑订阅';
+  document.getElementById('eName').value = s.name || '';
+  document.getElementById('eUrl').value = s.url || '';
+  document.getElementById('eHdr').value = s.headers || '';
+  document.getElementById('eEpg').value = s.epgUrl || '';
+  document.getElementById('sheet').classList.add('on');
+}
+
+function closeSheet() {
+  document.getElementById('sheet').classList.remove('on');
+  editingId = null;
+}
+
+function saveSheet() {
+  var n = document.getElementById('eName').value.trim();
+  var u = document.getElementById('eUrl').value.trim();
+  var h = document.getElementById('eHdr').value.trim();
+  var epg = document.getElementById('eEpg').value.trim();
+  if (!u) { toast('地址不能为空'); return; }
+  var body = { id: editingId, name: n || '未命名', url: u, headers: h, epgUrl: epg };
+  MintvApi.subsAction('save', body).then(function (r) {
+    if (r && r.ok) { toast('已保存'); closeSheet(); load(); }
+    else toast((r && r.msg) || '保存失败');
+  });
 }
 
 function saveAll() {
@@ -211,6 +270,16 @@ function saveAll() {
 render();          // 先画出空状态，别等第一个请求回来才有内容
 load();
 MintvPoll(load, 5000);
+</script>
+<script>
+// 离开本页前停掉轮询，防止和下一个页面的定时器打架
+document.addEventListener('click', function(e){
+  var a = e.target.closest && e.target.closest('a[href]');
+  if (a && a.getAttribute('href').indexOf('://') < 0 && window.MintvStopPoll) {
+    window.MintvStopPoll();
+  }
+}, true);
+window.addEventListener('pagehide', function(){ if (window.MintvStopPoll) window.MintvStopPoll(); });
 </script>
 </body>
 </html>

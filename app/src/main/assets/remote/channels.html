@@ -311,5 +311,15 @@ refreshNow();
 // 3 秒刷一次列表（别的设备或遥控器可能刚换了台）
 MintvPoll(function () { load(); refreshNow(); }, 3000);
 </script>
+<script>
+// 离开本页前停掉轮询，防止和下一个页面的定时器打架
+document.addEventListener('click', function(e){
+  var a = e.target.closest && e.target.closest('a[href]');
+  if (a && a.getAttribute('href').indexOf('://') < 0 && window.MintvStopPoll) {
+    window.MintvStopPoll();
+  }
+}, true);
+window.addEventListener('pagehide', function(){ if (window.MintvStopPoll) window.MintvStopPoll(); });
+</script>
 </body>
 </html>

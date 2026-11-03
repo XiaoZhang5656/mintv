@@ -276,5 +276,15 @@ function loadEpg() {
 // 状态每秒刷新；切后台自动停（theme.js 里的 MintvPoll 处理）
 MintvPoll(refresh, 1000);
 </script>
+<script>
+// 离开本页前停掉轮询，防止和下一个页面的定时器打架
+document.addEventListener('click', function(e){
+  var a = e.target.closest && e.target.closest('a[href]');
+  if (a && a.getAttribute('href').indexOf('://') < 0 && window.MintvStopPoll) {
+    window.MintvStopPoll();
+  }
+}, true);
+window.addEventListener('pagehide', function(){ if (window.MintvStopPoll) window.MintvStopPoll(); });
+</script>
 </body>
 </html>
