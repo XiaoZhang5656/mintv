@@ -142,6 +142,11 @@ public final class PlayerManager implements PlaybackBackend {
         }
     }
 
+    /** 视口尺寸变化：只有 VLC 需要（它按窗口尺寸做缩放）。 */
+    public void updateWindowSize(int w, int h) {
+        if (impl instanceof VlcBackend) ((VlcBackend) impl).updateWindowSize(w, h);
+    }
+
     @Override
     public void stop() { if (impl != null) impl.stop(); }
 

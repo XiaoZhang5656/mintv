@@ -123,6 +123,16 @@ public final class VlcBackend implements PlaybackBackend {
         if (player == null) return;
         if (surfaceView == null && textureView == null) return;
         try {
+            // ⚠ setWindowSize 必须在 attachViews 之前调用。
+            //
+            // 不调的话 VLC 不知道视口多大，就按解码出来的原始尺寸画
+            // （实测日志：libvlc decoder: output 1920x1088 stride 0 0, crop 0 0 0 0），
+            // 画面就贴在左上角、右边留一大块黑 —— 这正是"VLC 右边黑边"的根因。
+            int w = surfaceView != null ? surfaceView.getWidth() : textureView.getWidth();
+            int h = surfaceView != null ? surfaceView.getHeight() : textureView.getHeight();
+            if (w > 0 && h > 0) {
+                player.getVLCVout().setWindowSize(w, h);
+            }
             if (surfaceView != null) player.getVLCVout().setVideoView(surfaceView);
             else player.getVLCVout().setVideoView(textureView);
             player.getVLCVout().attachViews();
@@ -132,8 +142,37 @@ public final class VlcBackend implements PlaybackBackend {
         }
     }
 
+    /** 画面尺寸变了（旋转 / 比例切换 / 布局完成）后重新告知 VLC。 */
+    public void updateWindowSize(int w, int h) {
+        if (player == null || w <= 0 || h <= 0) return;
+        try { player.getVLCVout().setWindowSize(w, h); } catch (Throwable ignored) { }
+    }
+
     @Override
     public void play(Context appCtx, String url, Mode m) { play(appCtx, url, null, m); }
+
+    /**
+     * 换源前先停掉上一个实例。
+     *
+     * <p>**异步**：libVLC 的 stop() 内部走 input_Close→vlc_join，
+     * 同步等解复用线程退出，网络源卡住时能等好几秒。
+     * 以前 PlayerManager.play 直接在主线程调 stop()，就是 ANR 的来源。
+     */
+    private void stopOldAsync() {
+        final org.videolan.libvlc.MediaPlayer old = player;
+        if (old == null) return;
+        if (viewsAttached) {
+            try { old.getVLCVout().detachViews(); } catch (Throwable ignored) { }
+            viewsAttached = false;
+        }
+        player = null;
+        new Thread(new Runnable() {
+            @Override public void run() {
+                try { old.stop(); } catch (Throwable ignored) { }
+                try { old.release(); } catch (Throwable ignored) { }
+            }
+        }, "vlc-replace").start();
+    }
 
     @Override
     public void play(Context appCtx, String url, boolean live) {
@@ -149,7 +188,9 @@ public final class VlcBackend implements PlaybackBackend {
         ensureLibVlc(appCtx);
         if (libVlc == null) return;
 
-        releasePlayer();
+        // 换源时**异步**停掉旧实例：同步 stop 会 vlc_join 等线程，
+        // 网络源卡住时直接 ANR（实测主线程 native 栈就是这条链）。
+        stopOldAsync();
         emit(State.BUFFERING);
 
         player = new MediaPlayer(libVlc);
@@ -307,9 +348,20 @@ public final class VlcBackend implements PlaybackBackend {
         final org.videolan.libvlc.LibVLC lv = libVlc;
         player = null;
         libVlc = null;
-        viewsAttached = false;
         surfaceView = null;
-        // 释放同样走后台：LibVLC.release() 也会等内部回放线程收尾
+
+        // ⚠ 关键顺序：**先 detachViews，再 release**。
+        //
+        // 以前直接 release，而 SurfaceView 上还挂着视频输出。
+        // native 侧把 LibVLC 销毁后，Surface 的尺寸/销毁回调仍会打到
+        // 已经释放的对象上 —— use-after-free，进程直接 SIGSEGV。
+        // 这就是"切内核必闪退"的根因。
+        if (viewsAttached && p != null) {
+            try { p.getVLCVout().detachViews(); } catch (Throwable ignored) { }
+            viewsAttached = false;
+        }
+
+        // 释放同样走后台：LibVLC.release() 会等内部回放线程收尾
         new Thread(new Runnable() {
             @Override public void run() {
                 if (p != null) {

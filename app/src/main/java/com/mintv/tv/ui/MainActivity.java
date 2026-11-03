@@ -419,6 +419,8 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                 if (h.getSurface() != null && h.getSurface().isValid()) {
                     player.setSurface(h.getSurface());
                 }
+                // VLC 需要知道视口尺寸，否则按解码原始尺寸画（右边留黑边）
+                playerManager.updateWindowSize(w, ht);
             }
             @Override public void surfaceDestroyed(SurfaceHolder h) { player.setSurface(null); }
         });
@@ -4192,8 +4194,14 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                     onSettingCommitted(rowIndex, opt);
                 }
             });
+            // 行高按"有没有副标题"自适应。
+            // 以前固定 82px，而副标题基线画在 y=62、字号 20，底部就到 82+，
+            // 直接被裁掉一半 —— 截图里"请求头"那行副标题看着只有上半截。
+            boolean hasDesc = DemoData.ROW_TITLES[i][1] != null
+                    && !DemoData.ROW_TITLES[i][1].isEmpty();
+            int rowH = hasDesc ? Theme.px(96) : Theme.px(72);
             LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT, Theme.px(82));
+                    ViewGroup.LayoutParams.MATCH_PARENT, rowH);
             p.bottomMargin = Theme.px(12);
             rowColumn.addView(row, p);
             rowViews.add(row);

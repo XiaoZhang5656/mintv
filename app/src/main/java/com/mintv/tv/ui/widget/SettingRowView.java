@@ -138,16 +138,23 @@ public class SettingRowView extends android.view.View {
         t.setColor(Theme.TEXT);
         t.setTextSize(titleSize);
         t.setFakeBoldText(true);
-        float ty = desc.isEmpty()
-                ? getHeight() / 2f - (t.descent() + t.ascent()) / 2f
-                : Theme.px(34);
-        c.drawText(title, padH, ty, t);
+        // 基线用行高的比例算，不再写死 px(34)/px(62)。
+        // 写死的问题：行高一改文字就被裁，而且高低不同的行基线会跳。
+        if (desc.isEmpty()) {
+            t.setColor(Theme.TEXT);
+            t.setTextSize(titleSize);
+            c.drawText(title, padH,
+                    getHeight() / 2f - (t.descent() + t.ascent()) / 2f, t);
+        } else {
+            float titleY = getHeight() * 0.36f;
+            t.setColor(Theme.TEXT);
+            t.setTextSize(titleSize);
+            c.drawText(title, padH, titleY, t);
 
-        if (!desc.isEmpty()) {
             t.setColor(0xFF93939A);
             t.setTextSize(descSize);
             t.setFakeBoldText(false);
-            c.drawText(desc, padH, Theme.px(62), t);
+            c.drawText(desc, padH, getHeight() * 0.72f, t);
         }
 
         // 把分段控件画进来（它已经 layout 好了）
