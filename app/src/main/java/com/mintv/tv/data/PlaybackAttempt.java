@@ -160,6 +160,9 @@ public final class PlaybackAttempt {
     public Action onPosition(long pos, long now) {
         // 暂停中不判卡顿（位置本来就不动）；没出帧时不判（起播交给看门狗）
         if (paused || !autoSwitch || !firstFrame || timeoutMs <= 0) return Action.NONE;
+        // 位置拿不到有效值（某些直播源 getTime() 恒为 0）：判不了，别乱判。
+        // 没有这个保护，恒 0 的源会一直"卡住"，用户看到画面在动却被踢去换线路。
+        if (pos <= 0) return Action.NONE;
 
         if (pos != stallLastPos) {
             stallLastPos = pos;

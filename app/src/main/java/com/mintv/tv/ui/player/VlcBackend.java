@@ -97,7 +97,15 @@ public final class VlcBackend implements PlaybackBackend {
             long t = 0;
             try { t = player.getTime(); } catch (Throwable ignored) { }
             if (cb != null) {
-                if (mode == Mode.LIVE) cb.onTimeline(-1, -1, 0);
+                // ⚠ 直播也要把真实播放位置传上去。
+                //
+                // 原来写的是 onTimeline(-1, -1, 0)：位置恒定 -1，
+                // 而卡顿检测 checkStall 的判据正是「位置有没有变化」——
+                // 于是每一路直播都会被判定为卡住，画面明明在动却一直弹
+                // 「播放卡住，该频道只有一条线路」。
+                // 直播没有时长（duration 给 -1），但 getTime() 是递增的，
+                // 正好用来判断是否还在走。
+                if (mode == Mode.LIVE) cb.onTimeline(t, -1, 0);
                 else cb.onTimeline(t, duration, 0);
             }
             main.postDelayed(this, 500);
@@ -441,7 +449,15 @@ public final class VlcBackend implements PlaybackBackend {
                         emit(State.READY);
                         break;
                     case MediaPlayer.Event.Buffering:
-                        if (event.getBuffering() < 99f) emit(State.BUFFERING);
+                        // 只有**还没出画面**的时候才把 Buffering 当作状态。
+                        //
+                        // 直播流的 buffering 百分比会长期停在 90 多并反复
+                        // 触发这个事件，而 Playing（对应 READY）只在开头发
+                        // 一次 —— 一旦被拉回 BUFFERING 就再没有事件来清空，
+                        // 右下角永远挂着「缓冲中…」，哪怕画面在正常播。
+                        if (!firstFrame && event.getBuffering() < 99f) {
+                            emit(State.BUFFERING);
+                        }
                         break;
                     case MediaPlayer.Event.EncounteredError:
                         emit(State.ERROR);
