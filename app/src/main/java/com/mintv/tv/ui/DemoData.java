@@ -69,7 +69,6 @@ public final class DemoData {
             {"画面输出", "黑屏只有声音时切到 SurfaceView 试试"},
             {"界面主题", "只换配色，布局与操作完全一致"},
             {"频道分组管理", "隐藏不看的分类，只留常用的"},
-            {"检查更新", "读取 GitHub 上的最新版本号"},
     };
 
     public static final String[][] ROW_OPTIONS = {
@@ -89,10 +88,9 @@ public final class DemoData {
             {"TextureView", "SurfaceView"},
             {"暗黑", "盒子蓝", "暖色"},
             {"打开管理"},
-            {"立即检查"},
     };
 
-    public static final int[] ROW_DEFAULT = {0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0};
+    public static final int[] ROW_DEFAULT = {0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0};
 
     // ---------- 无源时的示范 M3U ----------
 
@@ -100,34 +98,6 @@ public final class DemoData {
      * 示范数据同样走解析器，字段结构跟真实源一致，
      * 这样「有源 / 无源」两条路的渲染代码只有一份。
      */
-    public static final String SAMPLE_M3U =
-            "#EXTM3U x-tvg-url=\"\"\n"
-            + "#EXTINF:-1 tvg-id=\"bjws\" tvg-name=\"北京卫视\" group-title=\"省内\",北京卫视\n"
-            + "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8\n"
-            + "#EXTINF:-1 group-title=\"省内\",北京文艺\n"
-            + "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8\n"
-            + "#EXTINF:-1 group-title=\"省内\",北京纪实科教\n"
-            + "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8\n"
-            + "#EXTINF:-1 group-title=\"省内\",北京影视\n"
-            + "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8\n"
-            + "#EXTINF:-1 group-title=\"省内\",北京财经\n"
-            + "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8\n"
-            + "#EXTINF:-1 group-title=\"省内\",北京生活\n"
-            + "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8\n"
-            + "#EXTINF:-1 group-title=\"省内\",北京新闻\n"
-            + "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8\n"
-            + "#EXTINF:-1 group-title=\"省内\",卡酷少儿\n"
-            + "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8\n"
-            + "央视,#genre#\n"
-            + "CCTV-1 综合,https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8\n"
-            + "CCTV-2 财经,https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8\n"
-            + "CCTV-5 体育,https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8\n"
-            + "CCTV-6 电影,https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8\n"
-            + "CCTV-9 纪录,https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8\n"
-            + "CCTV-13 新闻,https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8\n"
-            + "卫视,#genre#\n"
-            + "湖南卫视,https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8\n"
-            + "浙江卫视,https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8\n"
-            + "东方卫视,https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8\n"
-            + "江苏卫视,https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8\n";
+    // 内置演示频道已删除：正式包里不该出现用户没添加过的频道。
+    // 需要看布局效果时，自己加一个 m3u 源即可。
 }

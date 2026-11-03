@@ -33,10 +33,71 @@ public final class LocalIp {
     private LocalIp() { }
 
     public static String get(Context c) {
-        String ip = byUdpProbe();
-        if (ip == null) ip = byInterfaces();
+        // 顺序很重要：盒子可能同时挂着 VPN，
+        // UDP 探测拿到的是 VPN 的地址（如 10.10.14.1），
+        // 那个地址手机根本连不上。所以先找真实网卡（wlan / eth），
+        // 找不到才退到"默认出口地址"。
+        String ip = byLinkProperties(c);   // API 21+ 最可靠：系统告诉你当前网络的地址
+        if (ip == null) ip = byWifiInterface();
         if (ip == null) ip = byWifi(c);
+        if (ip == null) ip = byUdpProbe();
+        if (ip == null) ip = byInterfaces();
         return ip == null ? "127.0.0.1" : ip;
+    }
+
+    /**
+     * 从 ConnectivityManager 的 LinkProperties 读当前网络地址。
+     *
+     * <p>这是系统自己维护的"当前在用网络"信息，比枚举网卡准得多：
+     * 盒子挂着 VPN 时，网卡枚举会把 tun 的地址排在前面，
+     * 而 LinkProperties 给的是真实 Wi-Fi/以太网的地址。
+     */
+    private static String byLinkProperties(Context c) {
+        if (c == null || android.os.Build.VERSION.SDK_INT < 21) return null;
+        try {
+            android.net.ConnectivityManager cm =
+                    (android.net.ConnectivityManager) c.getSystemService(Context.CONNECTIVITY_SERVICE);
+            if (cm == null) return null;
+            android.net.Network[] nets = cm.getAllNetworks();
+            if (nets == null) return null;
+            for (android.net.Network n : nets) {
+                android.net.LinkProperties lp = cm.getLinkProperties(n);
+                if (lp == null) continue;
+                String iface = lp.getInterfaceName() == null ? "" : lp.getInterfaceName();
+                if (iface.startsWith("tun") || iface.startsWith("ppp")) continue;
+                for (android.net.LinkAddress la : lp.getLinkAddresses()) {
+                    InetAddress a = la.getAddress();
+                    if (!(a instanceof Inet4Address)) continue;
+                    if (a.isLoopbackAddress() || a.isLinkLocalAddress()) continue;
+                    String ip = a.getHostAddress();
+                    if (ip != null && isPrivate(ip)) return ip;
+                }
+            }
+        } catch (Throwable ignored) { }
+        return null;
+    }
+
+    /** 优先取 wlan / eth 这类真实局域网的网卡地址。 */
+    private static String byWifiInterface() {
+        try {
+            Enumeration<NetworkInterface> ifs = NetworkInterface.getNetworkInterfaces();
+            while (ifs != null && ifs.hasMoreElements()) {
+                NetworkInterface nif = ifs.nextElement();
+                if (nif == null || nif.isLoopback() || !nif.isUp()) continue;
+                String name = nif.getName() == null ? "" : nif.getName().toLowerCase(java.util.Locale.US);
+                if (!(name.startsWith("wlan") || name.startsWith("eth")
+                        || name.startsWith("ap") || name.startsWith("wifi"))) continue;
+                Enumeration<InetAddress> addrs = nif.getInetAddresses();
+                while (addrs != null && addrs.hasMoreElements()) {
+                    InetAddress a = addrs.nextElement();
+                    if (!(a instanceof Inet4Address)) continue;
+                    if (a.isLoopbackAddress() || a.isLinkLocalAddress()) continue;
+                    String ip = a.getHostAddress();
+                    if (ip != null && isPrivate(ip)) return ip;
+                }
+            }
+        } catch (Throwable ignored) { }
+        return null;
     }
 
     /** 内核视角的本机出口地址。最可靠，且零权限。 */

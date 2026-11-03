@@ -151,6 +151,20 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     private int remotePort = -1;
     private LinearLayout helperPage;
     private LinearLayout infoPageWrap;
+
+    /**
+     * 系统 AlertDialog 正在显示。
+     *
+     * <p>弹窗是独立的窗口，按键本该由它处理；但我们的 onKeyDown 会把所有按键
+     * 吃掉（设置页/主界面的方向键逻辑），结果弹窗里的「知道了 / 去设置 / 保存」
+     * 遥控器永远选不到。这个标记用来在弹窗期间把按键交还给系统。
+     */
+    private boolean sysDialogOpen = false;
+
+    // 「关于 / 手机助手」页里的可聚焦控件（设置弹窗的按键只有这一条通道，
+    // 这些页面不在 rowColumn 里，必须单独维护一份列表，否则遥控器碰不到）
+    private final java.util.ArrayList<View> pageFocus = new java.util.ArrayList<>();
+    private int pageFocusIdx = -1;
     private android.widget.ImageView qrView;
     private TextView helperAddr;
     private TextView helperState;
@@ -253,6 +267,16 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         startRemoteServer();
         loadHiddenCats();
         Theme.applyPalette(getSharedPreferences(PREF, MODE_PRIVATE).getInt(KEY_UI_THEME, 0));
+
+        // 崩溃页点了「重新进入」：从最保守的状态开始，不恢复现场。
+        // 崩溃后内存里留着坏的播放器句柄/Surface 绑定，直接接着用会二次崩溃。
+        boolean cleanStart = getSharedPreferences(PREF, MODE_PRIVATE)
+                .getBoolean("restart_clean", false);
+        if (cleanStart) {
+            getSharedPreferences(PREF, MODE_PRIVATE).edit()
+                    .remove("restart_clean").apply();
+            android.util.Log.i("MinTV", "崩溃后重启：跳过现场恢复");
+        }
 
         purgeLegacyDefaultSub();
 
@@ -776,28 +800,37 @@ public class MainActivity extends Activity implements FocusEngine.Host {
 
     // ================= 频道列表 =================
 
-    /** 读取源：有 URL 走网络（带本地缓存兜底），没有就用内置示范。 */
+    /**
+     * 读取源。
+     *
+     * <p>**没有订阅就显示空状态，不再拿内置演示频道冒充真实数据。**
+     * 以前这里会 fallback 到 DemoData.SAMPLE_M3U（北京卫视那一套），
+     * 结果用户从没加过任何源，一打开就看到一堆频道，点开还播不了 ——
+     * 那是给开发期做布局预览用的假数据，不该出现在正式包里。
+     */
     private void loadPlaylist() {
-        String url = SourceStore.url(this);
+        String url = currentSourceUrl();
         String body = null;
         if (url != null && !url.isEmpty()) {
             body = SourceStore.cachedBody(this);
         }
         if (body == null || body.trim().isEmpty()) {
-            if (url == null || url.isEmpty()) {
-                // 完全没配源 → 用内置示范
-                body = DemoData.SAMPLE_M3U;
-            } else {
-                // 配了源但还没缓存 → 先留空，等网络拉回来再渲染，
-                // 绝不拿示范数据冒充，否则会闪出一个"省内"分类
-                body = "#EXTM3U\n";
-            }
+            body = "#EXTM3U\n";     // 空源：等网络拉回来再渲染
         }
         applyPlaylist(body);
 
         if (url != null && !url.isEmpty()) {
             fetchSourceAsync(url);
         }
+    }
+
+    /** 当前生效的订阅地址（没有订阅就返回空串）。 */
+    private String currentSourceUrl() {
+        com.mintv.tv.data.SubscriptionStore.Sub s =
+                com.mintv.tv.data.SubscriptionStore.active(this);
+        if (s != null && s.url != null && !s.url.isEmpty()) return s.url;
+        // 兼容：还没迁移过的老配置
+        return SourceStore.hasUserUrl(this) ? SourceStore.url(this) : "";
     }
 
     private void applyPlaylist(String body) {
@@ -960,6 +993,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
 
         if (channels.isEmpty()) {
             focus.setChannelCount(0);
+            showChannelEmptyHint();
             return;
         }
 
@@ -1375,7 +1409,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     private static final int ROW_OUTPUT         = 13;
     private static final int ROW_THEME          = 14;
     private static final int ROW_GROUPMGR       = 15;
-    private static final int ROW_CHECKUPDATE    = 16;
+
     private static final String KEY_UI_THEME    = "ui_theme";
     private static final String KEY_SELECTIONS  = "selections";
     private static final String KEY_HIDDEN_CATS = "hidden_cats";
@@ -1557,7 +1591,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
      * LEANBACK_LAUNCHER / LAUNCHER，可以被设为默认桌面。
      */
     private void showAutoStartGuide() {
-        new android.app.AlertDialog.Builder(this)
+        showSystemDialog(new android.app.AlertDialog.Builder(this)
                 .setTitle("开机自启说明")
                 .setMessage("Android 4.4~9：打开后开机自动进入，无需额外设置。\n\n"
                         + "Android 10 及以上：系统禁止应用在后台自行启动界面。"
@@ -1576,7 +1610,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                     }
                 })
                 .setNegativeButton("知道了", null)
-                .show();
+                );
     }
 
     private void loadAutoPlayPref() {
@@ -2001,7 +2035,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         dialogRoot.addView(sc, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
-        new android.app.AlertDialog.Builder(this)
+        showSystemDialog(new android.app.AlertDialog.Builder(this)
                 .setTitle("频道分组管理（点一下切换显示/隐藏）")
                 .setView(dialogRoot)
                 .setPositiveButton("关闭", new android.content.DialogInterface.OnClickListener() {
@@ -2014,7 +2048,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                         applyGroupChanges();
                     }
                 })
-                .show();
+                );
     }
 
     /** 批量操作后统一刷新所有分组的显示状态。 */
@@ -2151,7 +2185,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         input.setMinLines(3);
         input.setGravity(Gravity.TOP | Gravity.START);
 
-        new android.app.AlertDialog.Builder(this)
+        showSystemDialog(new android.app.AlertDialog.Builder(this)
                 .setTitle("全局请求头（一行一条，留空清除）")
                 .setView(input)
                 .setPositiveButton("保存", new android.content.DialogInterface.OnClickListener() {
@@ -2165,7 +2199,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                     }
                 })
                 .setNegativeButton("取消", null)
-                .show();
+                );
     }
 
     /**
@@ -2385,13 +2419,18 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                 return handleRemoteCommand(type, value);
             }
             @Override public String subsJson() { return buildSubsJson(); }
+            @Override public String epgJson(String ch) { return buildEpgJson(ch); }
+            @Override public String searchJson(String q, String by) { return buildSearchJson(q, by); }
+            @Override public String channelsJson(int cat) { return buildChannelsJson(cat); }
             @Override public String onSubsAction(String action, org.json.JSONObject payload) {
                 return handleSubsAction(action, payload);
             }
         });
         remotePort = remote.start();
         if (remotePort < 0) {
-            osd.toast("手机助手启动失败：18899/18900 端口都被占用");
+            // 这里可能在 osd 还没创建时被调用（服务在 UI 之前启动），必须判空
+            android.util.Log.w("MinTV", "手机助手启动失败：18899/18900 端口都被占用");
+            if (osd != null) osd.toast("手机助手启动失败：端口被占用");
         } else {
             android.util.Log.i("MinTV", "手机助手 http://" + com.mintv.tv.data.LocalIp.get(MainActivity.this)
                     + ":" + remotePort + "/");
@@ -2450,8 +2489,24 @@ public class MainActivity extends Activity implements FocusEngine.Host {
      * 右侧显示频道数，别的行给「按 OK 切换」提示。
      * 之前是一整条平铺的 TextView，既没卡片感也没有操作提示。
      */
+    private String helperSig = "";
+
     private void rebuildHelperSubs() {
         if (helperSubs == null) return;
+        // 数据没变就别重建。每 2 秒无脑重建会让整页闪一下，
+        // 而且会把用户刚移到的焦点冲掉。
+        java.util.List<com.mintv.tv.data.SubscriptionStore.Sub> all =
+                com.mintv.tv.data.SubscriptionStore.list(this);
+        String activeId = com.mintv.tv.data.SubscriptionStore.activeId(this);
+        StringBuilder sig = new StringBuilder();
+        for (com.mintv.tv.data.SubscriptionStore.Sub t : all) {
+            sig.append(t.id).append('|').append(t.name).append('|')
+               .append(t.url).append('|').append(t.channelCount).append(';');
+        }
+        sig.append('#').append(activeId);
+        if (sig.toString().equals(helperSig)) return;
+        helperSig = sig.toString();
+
         helperSubs.removeAllViews();
         java.util.List<com.mintv.tv.data.SubscriptionStore.Sub> subs =
                 com.mintv.tv.data.SubscriptionStore.list(this);
@@ -2465,6 +2520,8 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             row.setGravity(Gravity.CENTER_VERTICAL);
             row.setPadding(Theme.px(20), 0, Theme.px(20), 0);
             row.setBackground(new SubCardBg(on));
+            // 记下"是不是当前订阅"，setPageFocus 要靠它重画圆角底
+            row.setTag(Boolean.valueOf(on));
             row.setFocusable(true);
             row.setClickable(true);
             row.setOnClickListener(new View.OnClickListener() {
@@ -2536,6 +2593,18 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                     ViewGroup.LayoutParams.MATCH_PARENT, Theme.px(76));
             lp.bottomMargin = Theme.px(10);
             helperSubs.addView(row, lp);
+        }
+
+        // 列表每 2 秒重建一次，重建后把焦点恢复到原来的位置，
+        // 否则用户在订阅列表里按上下，2 秒后焦点自己跑回第一行。
+        if (currentTab == TAB_HELPER) {
+            final int keep = pageFocusIdx;
+            ui.post(new Runnable() {
+                @Override public void run() {
+                    rebuildPageFocus();
+                    if (keep > 0 && keep < pageFocus.size()) setPageFocus(keep);
+                }
+            });
         }
 
         if (subs.isEmpty()) {
@@ -2732,6 +2801,28 @@ public class MainActivity extends Activity implements FocusEngine.Host {
      * <p>所有动作都转成对现有方法的调用（moveChannel / handleVolumeKey /
      * switchSource …），不另写一套播放逻辑 —— 避免手机端和遥控器行为不一致。
      */
+    /** 按台号切台（手机端点击频道用）。台号在源里唯一，比下标稳。 */
+    private void playByNumber(String no) {
+        if (no == null || no.isEmpty() || playlist == null || playlist.all == null) return;
+        int want;
+        try { want = Integer.parseInt(no); } catch (Throwable t) { return; }
+        for (int i = 0; i < channels.size(); i++) {
+            if (channels.get(i).number == want) {
+                playChannel(i);
+                return;
+            }
+        }
+        // 不在当前分类里：从全部里找，找到就先切到它所在分类再播
+        for (int i = 0; i < playlist.all.size(); i++) {
+            PlaylistParser.Channel c = playlist.all.get(i);
+            if (c.number == want) {
+                if (!channels.contains(c)) channels = playlist.all;
+                playChannel(channels.indexOf(c));
+                return;
+            }
+        }
+    }
+
     private String handleRemoteCommand(String type, String value) {
         if (type == null) return "未知命令";
         final String t = type;
@@ -2752,6 +2843,34 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                     // 上下键方向跟用户设置保持一致（「上下换台反转」）
                     else if ("UP".equals(t)) moveChannel(selections[ROW_REVERSE] != 0 ? +1 : -1);
                     else if ("DOWN".equals(t)) moveChannel(selections[ROW_REVERSE] != 0 ? -1 : +1);
+                    else if ("PLAYCH".equals(t)) {
+                        playByNumber(v);
+                    }
+                    else if ("CAT".equals(t)) {
+                        int ci = -1;
+                        try { ci = Integer.parseInt(v); } catch (Throwable ignored) { }
+                        if (ci >= 0 && ci < categories.size()) {
+                            focus.setNavIndexSilently(ci);
+                            switchCategory(ci);
+                            updateNavFocus(ci);
+                        }
+                    }
+                    else if ("PROG".equals(t)) {
+                        int idx = -1;
+                        try { idx = Integer.parseInt(v); } catch (Throwable ignored) { }
+                        int ch = (playingChannel >= 0 && playingChannel < channels.size())
+                                ? playingChannel : focus.chanIndex();
+                        EpgParser.Program prog = programAt(ch, idx);
+                        if (prog == null) { osd.toast("没有这个节目"); return; }
+                        long nowMs = System.currentTimeMillis();
+                        if (prog.startMs <= nowMs && prog.stopMs > nowMs) {
+                            returnToLive(ch);
+                        } else if (prog.stopMs <= nowMs) {
+                            playReplay(ch, idx);
+                        } else {
+                            osd.toast("该节目还没开始");
+                        }
+                    }
                     else if ("DIGIT".equals(t)) {
                         for (int i = 0; i < v.length(); i++) {
                             char c = v.charAt(i);
@@ -2793,6 +2912,221 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             }
             sp.edit().putBoolean("legacy_sub_purged", true).apply();
         } catch (Throwable ignored) { }
+    }
+
+    /**
+     * 当前频道的节目单（手机端展开"正在播放"卡片时读）。
+     *
+     * <p>复用 EPG 面板那份 epgWindow，不另建一套解析 ——
+     * 手机和电视看到的节目必须完全一致，否则用户会怀疑数据是假的。
+     */
+    /**
+     * 分类与频道列表（手机端"频道"页读）。
+     *
+     * <p>cat 参数是分类下标（0 = 全部，从 1 开始是各分组），
+     * 返回该分类下的频道。**不会真的切换盒子上的分类** ——
+     * 手机浏览不该影响电视正在放的东西，只有用户点了具体的台才切。
+     */
+    private String buildChannelsJson(int cat) {
+        try {
+            org.json.JSONArray cats = new org.json.JSONArray();
+            for (int i = 0; i < categories.size(); i++) {
+                DemoData.Category c = categories.get(i);
+                org.json.JSONObject o = new org.json.JSONObject();
+                o.put("i", i);
+                o.put("name", c.name);
+                o.put("count", c.count);
+                cats.put(o);
+            }
+
+            java.util.List<PlaylistParser.Channel> list;
+            String catName;
+            if (cat <= 0) {
+                list = playlist == null ? null : playlist.all;
+                catName = "全部";
+            } else if (cat - 1 < categories.size()) {
+                DemoData.Category c = categories.get(cat);
+                catName = c.name;
+                if (FAV_CATEGORY.equals(c.name)) {
+                    list = favoriteChannels();
+                } else {
+                    list = playlist == null ? null : playlist.byGroup.get(c.name);
+                }
+            } else {
+                list = null;
+                catName = "";
+            }
+
+            org.json.JSONArray arr = new org.json.JSONArray();
+            String nowNo = (playingChannel >= 0 && playingChannel < channels.size())
+                    ? num4(channels.get(playingChannel).number) : "";
+            if (list != null) {
+                for (int i = 0; i < list.size(); i++) {
+                    PlaylistParser.Channel c = list.get(i);
+                    org.json.JSONObject o = new org.json.JSONObject();
+                    String no = num4(c.number);
+                    o.put("no", no);
+                    o.put("name", c.name == null ? "" : c.name);
+                    o.put("group", c.group == null ? "" : c.group);
+                    o.put("playing", no.equals(nowNo));
+                    arr.put(o);
+                }
+            }
+
+            org.json.JSONObject root = new org.json.JSONObject();
+            root.put("cat", cat);
+            root.put("catName", catName);
+            root.put("cats", cats);
+            root.put("list", arr);
+            return root.toString();
+        } catch (Throwable t) {
+            return "{\"cats\":[],\"list\":[]}";
+        }
+    }
+
+    /**
+     * 搜索频道。
+     *
+     * <p>两路匹配：
+     * <ul>
+     *   <li>频道名包含关键字；</li>
+     *   <li>该频道**当前正在播**的节目名包含关键字。</li>
+     * </ul>
+     * 第二路是"我想看新闻"这种真实需求 —— 用户不记得哪个台在播新闻。
+     * 只匹配"当前节目"，不扫全天节目单：600 个台 × 全天几十个节目
+     * 在低端盒子上要几百毫秒，搜一次卡一下不值得。
+     */
+    /**
+     * 搜索。
+     *
+     * <p>by：all = 频道名 + 节目名；name = 只搜频道名；prog = 只搜节目名。
+     *
+     * <p>按**节目**搜时匹配该频道的**全天节目单**（过去和未来的都算），
+     * 不只是"正在播" —— 用户搜「春晚」可能是想看今晚的，也可能是想回看
+     * 昨晚的，只看当前播放会把这两种都漏掉。
+     *
+     * <p>返回结果的主行永远是**频道名**，节目名只作为副行说明命中原因。
+     */
+    private String buildSearchJson(String q, String by) {
+        try {
+            org.json.JSONArray arr = new org.json.JSONArray();
+            if (q == null) q = "";
+            q = q.trim();
+            if (q.isEmpty() || playlist == null || playlist.all == null) {
+                return "{\"q\":\"\",\"list\":[]}";
+            }
+            String lower = q.toLowerCase(java.util.Locale.CHINA);
+            long now = System.currentTimeMillis();
+            int limit = 150;
+            boolean byName = !"prog".equals(by);
+            boolean byProg = !"name".equals(by);
+
+            for (int i = 0; i < playlist.all.size() && arr.length() < limit; i++) {
+                PlaylistParser.Channel c = playlist.all.get(i);
+                boolean hitName = byName && c.name != null
+                        && c.name.toLowerCase(java.util.Locale.CHINA).contains(lower);
+
+                String hitProg = null;      // 命中的节目名
+                long hitStart = 0;
+                boolean hitLive = false;
+                if (!hitName && byProg && epg != null) {
+                    String id = epgIdOf.get(i);
+                    if (id != null) {
+                        java.util.List<EpgParser.Program> all = epg.of(id);
+                        if (all != null) {
+                            for (EpgParser.Program p : all) {
+                                if (p.title == null) continue;
+                                if (!p.title.toLowerCase(java.util.Locale.CHINA).contains(lower)) continue;
+                                // 全表里挑最"有用"的一条：正在播的 > 未来的 > 更近的过去
+                                boolean live = p.startMs <= now && p.stopMs > now;
+                                if (hitProg == null
+                                        || (live && !hitLive)
+                                        || (live == hitLive && hitStart > 0
+                                            && Math.abs(p.startMs - now) < Math.abs(hitStart - now))) {
+                                    hitProg = p.title;
+                                    hitStart = p.startMs;
+                                    hitLive = live;
+                                }
+                            }
+                        }
+                    }
+                }
+                if (!hitName && hitProg == null) continue;
+
+                org.json.JSONObject o = new org.json.JSONObject();
+                o.put("no", num4(c.number));
+                o.put("name", c.name == null ? "" : c.name);
+                o.put("group", c.group == null ? "" : c.group);
+                o.put("playing", i == playingChannel);
+                if (hitProg != null) {
+                    o.put("prog", hitProg);
+                    o.put("live", hitLive);
+                    o.put("progTime", EpgParser.hm(hitStart));
+                }
+                arr.put(o);
+            }
+            org.json.JSONObject root = new org.json.JSONObject();
+            root.put("q", q);
+            root.put("list", arr);
+            return root.toString();
+        } catch (Throwable t) {
+            return "{\"q\":\"\",\"list\":[]}";
+        }
+    }
+
+    /** 收藏分类的频道列表。 */
+    private java.util.List<PlaylistParser.Channel> favoriteChannels() {
+        java.util.List<PlaylistParser.Channel> out = new java.util.ArrayList<>();
+        if (playlist == null || playlist.all == null) return out;
+        for (PlaylistParser.Channel c : playlist.all) {
+            if (isFavorite(c)) out.add(c);
+        }
+        return out;
+    }
+
+    /** EPG 查询：传台号则查那个台，不传则查当前在播的台。 */
+    private String buildEpgJson(String no) {
+        try {
+            int ch = -1;
+            if (no != null && !no.isEmpty()) {
+                try {
+                    int want = Integer.parseInt(no.replaceFirst("^0+", ""));
+                    for (int i = 0; i < channels.size(); i++) {
+                        if (channels.get(i).number == want) { ch = i; break; }
+                    }
+                } catch (Throwable ignored) { }
+            }
+            if (ch < 0) {
+                ch = (playingChannel >= 0 && playingChannel < channels.size())
+                        ? playingChannel : focus.chanIndex();
+            }
+            if (epgWindow.isEmpty() || ch != playingChannel) fillEpg(ch);
+            long now = System.currentTimeMillis();
+            PlaylistParser.Channel c = (ch >= 0 && ch < channels.size()) ? channels.get(ch) : null;
+            boolean canReplay = hasReplay(ch);
+            org.json.JSONObject root = new org.json.JSONObject();
+            root.put("name", c == null ? "" : c.name);
+            root.put("canReplay", canReplay);
+            org.json.JSONArray arr = new org.json.JSONArray();
+            for (int i = 0; i < epgWindow.size(); i++) {
+                EpgParser.Program p = epgWindow.get(i);
+                org.json.JSONObject o = new org.json.JSONObject();
+                o.put("i", i);
+                o.put("time", EpgParser.hm(p.startMs));
+                o.put("title", p.title);
+                boolean live = p.isLive(now);
+                boolean ended = p.stopMs <= now;
+                o.put("live", live);
+                o.put("ended", ended);
+                o.put("replay", ended && canReplay);
+                o.put("start", p.startMs);
+                arr.put(o);
+            }
+            root.put("list", arr);
+            return root.toString();
+        } catch (Throwable t) {
+            return "{\"list\":[]}";
+        }
     }
 
     private String buildSubsJson() {
@@ -2993,6 +3327,51 @@ public class MainActivity extends Activity implements FocusEngine.Host {
      * <p>行池里的 View 会被反复绑定到不同频道，所以这里必须按
      * chanBind 里记录的下标去取 EPG，不能拿池下标当频道下标用。
      */
+    /**
+     * 没有订阅时的空状态。
+     *
+     * <p>不再用假频道填满列表 —— 空着但说清楚"怎么变成有内容"，
+     * 比拿演示数据糊住用户诚实得多。
+     */
+    private void showChannelEmptyHint() {
+        if (chanColumn == null) return;
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(Theme.px(28), Theme.px(40), Theme.px(28), Theme.px(20));
+
+        TextView t1 = new TextView(this);
+        t1.setText("还没有添加订阅");
+        t1.setTextColor(Theme.TEXT);
+        t1.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, Theme.sp(22));
+        t1.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+        box.addView(t1);
+
+        TextView t2 = new TextView(this);
+        boolean hasRemote = remotePort > 0;
+        String ip = com.mintv.tv.data.LocalIp.get(this);
+        t2.setText(hasRemote
+                ? "用手机浏览器打开\n" + ip + ":" + remotePort + "\n粘贴 m3u / txt 源地址即可添加。"
+                : "按 MENU → 手机助手 查看添加地址。");
+        t2.setTextColor(Theme.TEXT_SUB);
+        t2.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, Theme.sp(17));
+        t2.setLineSpacing(Theme.px(8), 1f);
+        t2.setPadding(0, Theme.px(14), 0, 0);
+        box.addView(t2);
+
+        if (hasRemote) {
+            TextView t3 = new TextView(this);
+            t3.setText("盒子地址：" + ip + ":" + remotePort);
+            t3.setTextColor(Theme.FOCUS_BLUE);
+            t3.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, Theme.sp(16));
+            t3.setTypeface(android.graphics.Typeface.MONOSPACE);
+            t3.setPadding(0, Theme.px(16), 0, 0);
+            box.addView(t3);
+        }
+
+        chanColumn.addView(box, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, Theme.px(230)));
+    }
+
     private void refreshChannelSubs() {
         if (epg == null) return;
         long now = System.currentTimeMillis();
@@ -3102,6 +3481,13 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     /** 展开抽屉：分类收进去，露出「频道列表 + EPG 节目」。 */
     private void showEpgPanel(int channelIndex) {
         fillEpg(channelIndex);
+        // 把节目单的光标落在"正在播"那一行，用户一进来就知道自己在哪
+        if (epgPanel != null) {
+            int live = epgPanel.liveIndex();
+            epgCursor = live >= 0 ? live : 0;
+            epgPanel.setFocus(epgCursor);
+            scrollEpgTo(epgCursor);
+        }
         openEpgPanel();
     }
 
@@ -3439,6 +3825,9 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                 return true;
             }
             case KeyEvent.KEYCODE_DPAD_LEFT:
+            case KeyEvent.KEYCODE_DPAD_RIGHT:
+                // 左右都关闭：从频道列按右进来了，按右再回去最符合直觉，
+                // 按左也对（和列表方向一致）。不用逼用户记方向。
                 closeEpgPanel();
                 return true;
             default:
@@ -3757,7 +4146,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
 
         // 底栏
         TextView foot = new TextView(this);
-        foot.setText("ⓘ 白框 = 当前焦点；打勾 = 已选中的值        按 OK(Enter) 键修改配置，按 ESC 返回主画面");
+        foot.setText("ⓘ ← → 直接改值（即时生效）    ↑ 进顶部标签页    OK 打开/确认    ESC 返回");
         foot.setTextColor(0xFFB9B9BD);
         foot.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, Theme.sp(17));
         foot.setGravity(Gravity.CENTER_VERTICAL);
@@ -3777,13 +4166,65 @@ public class MainActivity extends Activity implements FocusEngine.Host {
      * 这里给每页一张说明卡，写清楚它依赖什么、当前状态如何 ——
      * 用户至少知道这里有什么、为什么还不能用。
      */
-    private void showTab(int index) {
-        currentTab = index;
+    /**
+     * 重绘 Tab 条的三种状态。
+     *
+     * <p>之前只区分「当前页」和「其它页」，没有任何「焦点在 Tab 条上」的视觉反馈 ——
+     * 用户按上键进了 Tab 条却看不出来，以为按键没反应。
+     * 现在：焦点在 Tab 条时当前页用实心蓝底 + 白字，没焦点时用淡底。
+     */
+    /** 收集当前页可聚焦的控件，并把焦点落在第一个。 */
+    private void rebuildPageFocus() {
+        pageFocus.clear();
+        if (currentTab == TAB_ABOUT) {
+            if (updateBtn != null && updateBtn.getVisibility() == View.VISIBLE) {
+                pageFocus.add(updateBtn);
+            }
+        } else if (currentTab == TAB_HELPER && helperSubs != null) {
+            for (int i = 0; i < helperSubs.getChildCount(); i++) {
+                View v = helperSubs.getChildAt(i);
+                if (v.isFocusable() || v.isClickable()) pageFocus.add(v);
+            }
+        }
+        setPageFocus(pageFocus.isEmpty() ? -1 : 0);
+    }
+
+    /** 高亮第 idx 个控件，其余恢复常态。 */
+    private void setPageFocus(int idx) {
+        pageFocusIdx = idx;
+        for (int i = 0; i < pageFocus.size(); i++) {
+            View v = pageFocus.get(i);
+            boolean on = (i == idx);
+            Object tag = v.getTag();
+            if (v instanceof LinearLayout && tag instanceof Boolean) {
+                // 订阅卡片：自己的圆角底，带 focus 参数重画
+                v.setBackground(new SubCardBg((Boolean) tag, on));
+            } else {
+                v.setBackgroundColor(on ? Theme.FOCUS_BLUE : Theme.DLG_OPT_BG);
+                if (v instanceof TextView) {
+                    ((TextView) v).setTextColor(on ? 0xFFFFFFFF : Theme.TEXT);
+                }
+            }
+        }
+    }
+
+    private void paintTabs() {
         for (int i = 0; i < tabViews.size(); i++) {
             TextView t = tabViews.get(i);
-            t.setTextColor(i == index ? Theme.TEXT : 0xFFD6D6D8);
-            t.setBackgroundColor(i == index ? 0x0FFFFFFF : Color.TRANSPARENT);
+            boolean cur = (i == currentTab);
+            if (tabFocus) {
+                t.setTextColor(cur ? 0xFFFFFFFF : 0xFFD6D6D8);
+                t.setBackgroundColor(cur ? Theme.FOCUS_BLUE : 0x1FFFFFFF);
+            } else {
+                t.setTextColor(cur ? Theme.TEXT : 0xFFD6D6D8);
+                t.setBackgroundColor(cur ? 0x0FFFFFFF : Color.TRANSPARENT);
+            }
         }
+    }
+
+    private void showTab(int index) {
+        currentTab = index;
+        paintTabs();
         boolean isSettings = (index == TAB_SETTINGS);
         boolean isHelper = (index == TAB_HELPER);
         rowScrollView.setVisibility(isSettings ? View.VISIBLE : View.GONE);
@@ -3791,6 +4232,9 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             helperPage.setVisibility(isHelper ? View.VISIBLE : View.GONE);
             if (isHelper) {
                 refreshHelperPage();
+                ui.post(new Runnable() {
+                    @Override public void run() { rebuildPageFocus(); }
+                });
                 ui.removeCallbacks(helperTick);
                 ui.postDelayed(helperTick, 2000);
             } else {
@@ -3804,9 +4248,13 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             }
             infoPage.setVisibility(View.VISIBLE);
             if (infoPageWrap != null) infoPageWrap.setVisibility(View.VISIBLE);
-        } else if (!isHelper) {
-            infoPage.setVisibility(View.GONE);
+            ui.post(new Runnable() {
+                @Override public void run() { rebuildPageFocus(); }
+            });
         } else {
+            // 播放设置 / 手机助手页：说明页整个隐藏。
+            // 外层 wrapper 必须一起收，否则从「关于」切回「播放设置」时
+            // 那层空容器还盖在列表上面，遥控器看起来"点不动"。
             infoPage.setVisibility(View.GONE);
             if (infoPageWrap != null) infoPageWrap.setVisibility(View.GONE);
         }
@@ -3913,7 +4361,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         // TV 上没人会去"复制地址"再挪到别处下载 —— 剪贴板在电视上没有意义。
         // 按钮就叫「更新」和「退出」：更新 = 盒子自己下载并调起安装器，
         // 退出 = 什么都不做，继续看。
-        new android.app.AlertDialog.Builder(this)
+        showSystemDialog(new android.app.AlertDialog.Builder(this)
                 .setTitle("发现新版本 " + (remoteName == null ? remote : remoteName))
                 .setMessage("当前版本：" + versionName() + "（" + local + "）\n"
                         + "最新版本：" + (remoteName == null ? "" : remoteName)
@@ -3925,7 +4373,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                     }
                 })
                 .setNegativeButton("退出", null)
-                .show();
+                );
     }
 
     /**
@@ -3995,6 +4443,24 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         } catch (Throwable t) {
             tip("无法调起安装器：" + t.getClass().getSimpleName());
         }
+    }
+
+    /**
+     * 显示系统弹窗，并在显示期间把按键交还给系统。
+     *
+     * <p>不包这一层的话，弹窗里的按钮遥控器点不到 ——
+     * 因为 Activity.onKeyDown 会先一步吃掉方向键和 OK。
+     */
+    private android.app.AlertDialog showSystemDialog(android.app.AlertDialog.Builder b) {
+        final android.app.AlertDialog d = b.create();
+        d.setOnDismissListener(new android.content.DialogInterface.OnDismissListener() {
+            @Override public void onDismiss(android.content.DialogInterface di) {
+                sysDialogOpen = false;
+            }
+        });
+        d.show();
+        sysDialogOpen = true;
+        return d;
     }
 
     private String httpGet(String url) {
@@ -4167,8 +4633,6 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             if (value == 0) showAutoStartGuide();
         } else if (row == ROW_GROUP_MGR) {
             openGroupManager();
-        } else if (row == ROW_CHECKUPDATE) {
-            checkUpdate(selections[ROW_CHECKUPDATE] == 0);
         } else if (row == ROW_THEME) {
             getSharedPreferences(PREF, MODE_PRIVATE).edit()
                     .putInt(KEY_UI_THEME, value).apply();
@@ -4449,6 +4913,8 @@ public class MainActivity extends Activity implements FocusEngine.Host {
 
     @Override
     public boolean onKeyDown(int keyCode, KeyEvent event) {
+        // 系统弹窗开着：按键全部交给它，否则遥控器选不到弹窗按钮
+        if (sysDialogOpen) return super.onKeyDown(keyCode, event);
         if (dialogRoot != null && dialogRoot.getVisibility() == View.VISIBLE) {
             return handleSettingsKey(keyCode, event);
         }
@@ -4477,9 +4943,9 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             return true;
         }
 
-        // 长按 OK 键（或 INFO 键）弹播放诊断，方便现场看"有声音没画面"
-        if (keyCode == KeyEvent.KEYCODE_INFO
-                || (keyCode == KeyEvent.KEYCODE_MENU && event.isLongPress())) {
+        // 长按 MENU 弹播放诊断（原来短按 INFO 也在这里，
+        // 但 INFO 更该是"看当前节目信息"，已经挪到下面调 OSD）
+        if (keyCode == KeyEvent.KEYCODE_MENU && event.isLongPress()) {
             showDiagnostics();
             return true;
         }
@@ -4494,10 +4960,22 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             }
         }
 
+        // 信息键：直接调出 OSD 信息条（节目、进度、编码、网速）。
+        // 电视遥控器上通常标 INFO / 信息 / i，不同厂商映射到这两个码之一。
+        if (keyCode == KeyEvent.KEYCODE_INFO || keyCode == KeyEvent.KEYCODE_GUIDE) {
+            if (osd != null) osd.reshow();
+            return true;
+        }
+
         // 抽屉态：左键 / 返回 → 收起抽屉，回到「分类 + 频道」
         if (epgPanelOpen && handleEpgKey(keyCode)) return true;
 
-        if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT && focus.zone() == FocusEngine.Zone.CHAN) {
+        // 右键：频道列 → 展开节目单。
+        // 条件放宽到"只要面板可见、不在分类列"，避免 zone 因为前面的操作
+        // 残留在别的值上时右键毫无反应。
+        if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT && panelVisible
+                && focus.zone() != FocusEngine.Zone.NAV
+                && focus.chanIndex() >= 0) {
             showEpgPanel(focus.chanIndex());
             return true;
         }
@@ -4563,6 +5041,16 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         return super.onKeyUp(keyCode, event);
     }
 
+    /**
+     * 这一行是「多选一的配置值」还是「一个按钮」。
+     *
+     * 值行：左右直接改；动作行：只有按 OK 才触发（否则左右一扫就会
+     * 反复弹出编辑框、反复发网络请求）。
+     */
+    private boolean isValueRow(int row) {
+        return row != ROW_SOURCE && row != ROW_HEADERS && row != ROW_GROUPMGR;
+    }
+
     private boolean handleSettingsKey(int keyCode, KeyEvent event) {
         if (keyCode == KeyEvent.KEYCODE_BACK || keyCode == KeyEvent.KEYCODE_ESCAPE) {
             closeSettings();
@@ -4575,24 +5063,59 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT) {
                 currentTab = (currentTab + DemoData.TABS.length - 1) % DemoData.TABS.length;
                 showTab(currentTab);
+                paintTabs();
                 return true;
             }
             if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) {
                 currentTab = (currentTab + 1) % DemoData.TABS.length;
                 showTab(currentTab);
+                paintTabs();
                 return true;
             }
             if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN
                     || keyCode == KeyEvent.KEYCODE_DPAD_CENTER
                     || keyCode == KeyEvent.KEYCODE_ENTER) {
                 tabFocus = false;
+                paintTabs();
                 applyRowFocus(focus.rowIndex());
                 return true;
             }
             return true;
         }
-        if (keyCode == KeyEvent.KEYCODE_DPAD_UP && focus.rowIndex() == 0) {
+        // 「关于 / 手机助手」页：方向键在自己那页的控件里走，OK 触发。
+        // 这两页不在 rowColumn 里，以前按键全被下面的逻辑吃掉，
+        // 「检测更新」按钮、订阅列表在遥控器上完全点不到。
+        if (currentTab != TAB_SETTINGS) {
+            if (keyCode == KeyEvent.KEYCODE_DPAD_UP) {
+                if (pageFocusIdx > 0) setPageFocus(pageFocusIdx - 1);
+                else { tabFocus = true; paintTabs(); }
+                return true;
+            }
+            if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
+                if (pageFocusIdx + 1 < pageFocus.size()) setPageFocus(pageFocusIdx + 1);
+                return true;
+            }
+            if (keyCode == KeyEvent.KEYCODE_DPAD_CENTER
+                    || keyCode == KeyEvent.KEYCODE_ENTER) {
+                if (pageFocusIdx >= 0 && pageFocusIdx < pageFocus.size()) {
+                    pageFocus.get(pageFocusIdx).performClick();
+                }
+                return true;
+            }
+            if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT
+                    || keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) {
+                return true;      // 这两页没有横向选项，别让事件漏到后面的列表逻辑
+            }
+        }
+
+        // 按「上」进 Tab 条。
+        // 判断条件不能只看 rowIndex()==0：在「关于 / 手机助手」页上
+        // 列表是隐藏的，焦点还停在旧位置上，那样永远进不去 Tab 条，
+        // 用户就以为遥控器切不了页。
+        if (keyCode == KeyEvent.KEYCODE_DPAD_UP
+                && (currentTab != TAB_SETTINGS || focus.rowIndex() == 0)) {
             tabFocus = true;
+            paintTabs();
             return true;
         }
         if (keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER) {
@@ -4610,15 +5133,30 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             return true;
         }
 
-        boolean handled = focus.onKey(keyCode);
-        // ← → 落到具体选项时，给选项白框、撤掉行白框
+        // ← →：移动选项，并**立即生效**。
+        //
+        // 以前是按左右只挪白框，还要再按一次 OK 才应用 ——
+        // 用户看着选项变了、实际没变，就会问"这些选择怎么切换"。
+        // 现在照 TV 设置页的通行做法：选中即应用。
+        // 动作行（切源 / 请求头 / 分组管理）不适用：
+        // 它们只有一个"按钮"，OK 才触发。
         if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT || keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) {
             int row = focus.rowIndex();
+            int before = focus.optIndex();
+            boolean handled2 = focus.onKey(keyCode);
+            int after = focus.optIndex();
             if (row >= 0 && row < rowViews.size()) {
                 rowViews.get(row).setRowFocused(false);
-                rowViews.get(row).setOptionFocused(focus.optIndex());
+                rowViews.get(row).setOptionFocused(after);
             }
+            if (after != before && isValueRow(row)) {
+                onSettingCommitted(row, after);
+                rowViews.get(row).setSelected(after);
+            }
+            return true;
         }
+
+        boolean handled = focus.onKey(keyCode);
         if (keyCode == KeyEvent.KEYCODE_DPAD_UP || keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
             applyRowFocus(focus.rowIndex());
         }

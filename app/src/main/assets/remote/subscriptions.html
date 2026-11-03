@@ -31,7 +31,7 @@
   <button class="themebtn" data-theme-btn onclick="MintvTheme.cycle()">跟随系统</button>
 </div>
 <div class="navtabs">
-  <a class="on">订阅</a><a href="remote">遥控</a>
+  <a class="on">订阅</a><a href="channels.html">频道</a><a href="remote">遥控</a>
 </div>
 
 <p class="sect">
@@ -208,6 +208,7 @@ function saveAll() {
   }).catch(function () { toast('保存失败'); });
 }
 
+render();          // 先画出空状态，别等第一个请求回来才有内容
 load();
 MintvPoll(load, 5000);
 </script>

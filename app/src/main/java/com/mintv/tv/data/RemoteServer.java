@@ -44,6 +44,15 @@ public final class RemoteServer {
         String onCommand(String type, String value);
         /** 订阅列表 JSON */
         String subsJson();
+
+        /** 节目单 JSON；ch 为空表示当前在播的频道。 */
+        String epgJson(String ch);
+
+        /** 按频道名 / 当前节目名搜索。 */
+        String searchJson(String q, String by);
+
+        /** 分类 + 指定分类下的频道。 */
+        String channelsJson(int cat);
         /** 订阅增删改切，返回 {"ok":true} 或 {"ok":false,"msg":"..."} */
         String onSubsAction(String action, org.json.JSONObject payload);
     }
@@ -189,6 +198,25 @@ public final class RemoteServer {
                     "{\"ok\":true,\"msg\":" + quote(result) + "}");
             return;
         }
+        if ("/api/channels".equals(path)) {
+            int cat = 0;
+            try {
+                int i = query.indexOf("cat=");
+                if (i >= 0) cat = Integer.parseInt(query.substring(i + 4).split("&")[0]);
+            } catch (Throwable ignored) { }
+            send(out, 200, "application/json; charset=utf-8", host.channelsJson(cat));
+            return;
+        }
+        if ("/api/epg".equals(path)) {
+            String ch = param(query, "ch");
+            send(out, 200, "application/json; charset=utf-8", host.epgJson(ch));
+            return;
+        }
+        if ("/api/search".equals(path)) {
+            send(out, 200, "application/json; charset=utf-8",
+                    host.searchJson(param(query, "q"), param(query, "by")));
+            return;
+        }
         if ("/api/subs".equals(path)) {
             if ("POST".equals(method)) {
                 String resp = host.onSubsAction(jsonField(body, "action"), safeJson(body));
@@ -208,6 +236,8 @@ public final class RemoteServer {
             name = "subscriptions.html";
         } else if (path.equals("/remote") || path.equals("/control")) {
             name = "index.html";
+        } else if (path.equals("/channels")) {
+            name = "channels.html";
         } else {
             name = path.substring(1);
         }
@@ -218,6 +248,23 @@ public final class RemoteServer {
             return;
         }
         send(out, 200, mimeOf(name), data);
+    }
+
+    private static String param(String query, String key) {
+        if (query == null || query.isEmpty()) return "";
+        String[] parts = query.split("&");
+        for (String p : parts) {
+            int i = p.indexOf('=');
+            if (i <= 0) continue;
+            if (key.equals(p.substring(0, i))) {
+                try {
+                    return java.net.URLDecoder.decode(p.substring(i + 1), "UTF-8");
+                } catch (Throwable t) {
+                    return p.substring(i + 1);
+                }
+            }
+        }
+        return "";
     }
 
     private byte[] readAsset(String name) {

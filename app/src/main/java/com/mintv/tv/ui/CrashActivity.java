@@ -99,30 +99,24 @@ public class CrashActivity extends Activity {
         btns.setOrientation(LinearLayout.HORIZONTAL);
         btns.setGravity(Gravity.END);
 
-        // 顺序按 TV 遥控器的使用频率排：先「继续用」，再「复制」，最后才是「退出」。
-        // 原来只有复制/退出，等于强制用户看完日志就滚蛋 —— 大多数时候用户
-        // 只是想赶紧回去看片，日志事后还能从 logcat 取。
-        btns.addView(mkBtn("继续使用", 0xFF2F7BFF, new View.OnClickListener() {
+        // 三个按钮，**默认焦点在「重新进入」**：
+        //   重新进入 —— 最常见诉求就是"赶紧回去继续看"，而且它做的是
+        //               真正的重启（重置运行状态），不会卡在同一个坏状态里；
+        //   复制     —— 需要上报时才用；
+        //   退出     —— 兜底。
+        // 原来第一个是"继续使用"，但它只是再起一个 Activity，
+        // 崩溃现场的状态还留在内存里，经常一点进去就又崩 —— 那才是"卡死"的来源。
+        btns.addView(mkBtn("重新进入", 0xFF2F7BFF, new View.OnClickListener() {
             @Override public void onClick(View v) {
-                // 回到主界面。本页在 :crash 进程里，直接拉起主进程的 Activity，
-                // 再把自己关掉，两个进程互不干扰。
-                try {
-                    Intent i = new Intent();
-                    i.setClassName(CrashActivity.this,
-                            "com.mintv.tv.ui.MainActivity");
-                    i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
-                            | Intent.FLAG_ACTIVITY_CLEAR_TOP);
-                    startActivity(i);
-                } catch (Throwable ignored) { }
-                finish();
+                restartApp();
             }
         }));
 
-        btns.addView(mkBtn("复制全部", 0xFF3A3B3E, new View.OnClickListener() {
+        btns.addView(mkBtn("复制", 0xFF3A3B3E, new View.OnClickListener() {
             @Override public void onClick(View v) {
                 ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
                 cm.setPrimaryClip(ClipData.newPlainText("mintv-crash", bodyView.getText()));
-                Toast.makeText(CrashActivity.this, "已复制，粘贴发给我", Toast.LENGTH_SHORT).show();
+                Toast.makeText(CrashActivity.this, "已复制", Toast.LENGTH_SHORT).show();
             }
         }));
 
@@ -136,6 +130,7 @@ public class CrashActivity extends Activity {
         root.addView(btns);
         setContentView(root);
         if (btns.getChildCount() > 0) {
+            // 默认焦点给「重新进入」
             final View first = btns.getChildAt(0);
             first.post(new Runnable() {
                 @Override public void run() { first.requestFocus(); }
@@ -143,13 +138,32 @@ public class CrashActivity extends Activity {
         }
     }
 
-    /** 返回键 = 继续使用，别让用户只能靠退出跑掉。 */
-    @Override
-    public void onBackPressed() {
+    /**
+     * 重新进入 —— 真正的重启，不是"再开一个界面"。
+     *
+     * <p>差别在哪：崩溃后主进程里残留着坏掉的状态（播放器句柄、Surface 绑定、
+     * 半初始化的引擎）。只 startActivity 的话，新界面会接着用这些残留，
+     * 大概率立刻二次崩溃 —— 用户看到的就是"点了没反应 / 一直卡住"。
+     *
+     * <p>这里做两件事：
+     * <ol>
+     *   <li>写一个 {@code restart_clean} 标记，主界面启动时读到它会
+     *       跳过「恢复上次频道」、强制回到 Exo 内核、展开面板 ——
+     *       也就是从最保守的安全状态开始；</li>
+     *   <li>用 CLEAR_TASK 把旧任务栈整个清掉再拉起，避免旧 Activity 实例被复用。</li>
+     * </ol>
+     */
+    private void restartApp() {
+        try {
+            getSharedPreferences("tvui", MODE_PRIVATE).edit()
+                    .putBoolean("restart_clean", true).apply();
+        } catch (Throwable ignored) { }
+
         try {
             Intent i = new Intent();
             i.setClassName(this, "com.mintv.tv.ui.MainActivity");
-            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
+                    | Intent.FLAG_ACTIVITY_CLEAR_TASK);
             startActivity(i);
         } catch (Throwable ignored) { }
         finish();
