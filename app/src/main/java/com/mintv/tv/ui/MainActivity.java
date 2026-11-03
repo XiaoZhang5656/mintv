@@ -103,6 +103,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     private int currentLine = 0;
     private int lineTotal = 1;
     private String lastResolution, lastFps, lastVCodec, lastACodec, lastBitrate;
+    private String lastChannels;
     // ---- 数字键换台 ----
     private final StringBuilder numBuf = new StringBuilder();
     private final Runnable numCommit = new Runnable() {
@@ -381,6 +382,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
 
             @Override public void onVideoFormat(String res, String vc, String ac, String ch, String fps) {
                 if (res != null) lastResolution = res;
+                if (ch != null) lastChannels = ch;
                 if (fps != null) lastFps = fps;
                 if (vc != null) lastVCodec = vc;
                 if (ac != null) lastACodec = ac;
@@ -3380,7 +3382,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         String src = lineTotal > 1 ? ("源 " + (currentLine + 1) + "/" + lineTotal) : "源 1/1";
         // 网速显示设置：0 = 显示，1 = 隐藏
         String speed = selections[ROW_SPEED] == 0 ? speedMeter.text() : null;
-        osd.setTags(src, null, lastResolution, lastVCodec, lastACodec, null,
+        osd.setTags(src, null, lastResolution, lastVCodec, lastACodec, lastChannels,
                 lastFps, lastBitrate, speed);
     }
 

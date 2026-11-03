@@ -8,6 +8,7 @@ import android.view.Surface;
 import android.view.SurfaceView;
 
 import org.videolan.libvlc.LibVLC;
+import org.videolan.libvlc.interfaces.IMedia;
 import org.videolan.libvlc.Media;
 import org.videolan.libvlc.MediaPlayer;
 
@@ -62,6 +63,9 @@ public final class VlcBackend implements PlaybackBackend {
      * 截图里那个「缓冲中…」就是这种情况。所以自己记一份。
      */
     private boolean pausedByUser = false;
+
+    /** 上次上报的轨道指纹，避免每个 Vout 事件都回调 UI。 */
+    private String tracksSig;
     private boolean firstFrame = false;
     private boolean viewsAttached = false;
     private String currentUrl;
@@ -150,6 +154,80 @@ public final class VlcBackend implements PlaybackBackend {
     /** 上一次 attach 的目标视图，用于幂等判断。 */
     private Object attachedTarget;
 
+    /**
+     * 把视频/音频轨道信息报给 UI（OSD 底栏的分辨率、编码、帧率、码率）。
+     *
+     * <p>这条链以前在 Media3Backend 里，靠 Exo 的 onTracksChanged 拿 Format。
+     * 删 Exo 时整条上报一起没了，所以 OSD 只剩「源 1/1」和网速。
+     *
+     * <p>VLC 的取法：视频用 {@code getCurrentVideoTrack()}（带 width/height/
+     * frameRate/bitrate/codec）；音频 {@code IMedia.Track} 没有按类型取的 API，
+     * 只能遍历后用 instanceof 认。
+     */
+    private void reportTracks() {
+        if (cb == null) return;
+        final MediaPlayer p = player;
+        if (p == null) return;
+        try {
+            String res = null, vc = null, fps = null, ac = null, chs = null, br = null;
+
+            IMedia.VideoTrack v = p.getCurrentVideoTrack();
+            if (v != null) {
+                if (v.width > 0 && v.height > 0) res = v.width + "x" + v.height;
+                if (v.codec != null) vc = prettyCodec(v.codec);
+                if (v.frameRateNum > 0 && v.frameRateDen > 0) {
+                    float f = v.frameRateNum / (float) v.frameRateDen;
+                    // 25/1 这种整数帧率不要显示成 25.00
+                    fps = (Math.abs(f - Math.round(f)) < 0.05f)
+                            ? (Math.round(f) + " fps")
+                            : (String.format(java.util.Locale.US, "%.2f fps", f));
+                }
+                if (v.bitrate > 0) br = (v.bitrate / 1000) + " kbps";
+            }
+
+            IMedia im = p.getMedia();
+            if (im != null) {
+                int n = im.getTrackCount();
+                for (int i = 0; i < n; i++) {
+                    IMedia.Track t = im.getTrack(i);
+                    if (t instanceof IMedia.AudioTrack) {
+                        IMedia.AudioTrack a = (IMedia.AudioTrack) t;
+                        if (a.codec != null) ac = prettyCodec(a.codec);
+                        if (a.channels > 0) chs = a.channels + "ch";
+                        break;
+                    }
+                }
+            }
+            String sig = res + "|" + vc + "|" + ac + "|" + chs + "|" + fps + "|" + br;
+            if (sig.equals(tracksSig)) return;   // 没变就不打扰 UI
+            tracksSig = sig;
+            cb.onVideoFormat(res, vc, ac, chs, fps);
+            if (br != null) cb.onBitrate(br);
+        } catch (Throwable ignored) {
+            // 拿不到就不显示，不要让诊断信息把播放搞挂
+        }
+    }
+
+    /** VLC 给的是 "h264"/"hevc"/"mp2a" 这种短名，换成台标栏能看的写法。 */
+    private static String prettyCodec(String c) {
+        if (c == null) return null;
+        // VLC 有时给 "H264" 有时给 "h264"，统一小写再比
+        switch (c.toLowerCase(java.util.Locale.US)) {
+            case "h264": case "avc1": return "H.264";
+            case "hevc": case "h265": return "H.265";
+            case "mpeg2": case "mpgv": return "MPEG-2";
+            case "avs2": return "AVS2";
+            case "avs3": return "AVS3";
+            case "mp2a": case "mpga": return "MP2";
+            case "aac": case "mp4a": return "AAC";
+            case "ac3": case "a52": return "AC3";
+            case "eac3": return "EAC3";
+            case "mp3": return "MP3";
+            case "opus": return "Opus";
+            default: return c.toUpperCase(java.util.Locale.US);
+        }
+    }
+
     private void attach() {
         if (player == null) return;
         Object target = surfaceView != null ? surfaceView : textureView;
@@ -226,6 +304,7 @@ public final class VlcBackend implements PlaybackBackend {
         // 解码方式（setHwMode → release）之后，播放器永久罢工，怎么点都不播。
         released = false;
         pausedByUser = false;
+        tracksSig = null;
         this.mode = m;
         this.currentUrl = url;
         this.firstFrame = false;
@@ -261,6 +340,8 @@ public final class VlcBackend implements PlaybackBackend {
                             firstFrame = true;
                             if (cb != null) cb.onFirstFrame();
                         }
+                        // 出画之后轨道信息才准，这时上报给 OSD 底栏。
+                        reportTracks();
                         break;
                     default:
                         break;
