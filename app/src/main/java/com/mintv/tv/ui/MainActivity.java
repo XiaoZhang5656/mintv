@@ -160,7 +160,6 @@ public class MainActivity extends Activity implements FocusEngine.Host {
      */
     private boolean sysDialogOpen = false;
     /** 本次换台已经降级过一次（防止 Exo↔VLC 来回切）。 */
-    private boolean retryDone = false;
     /** MENU 按下但还没抬手：用于区分短按（设置）与长按（诊断）。 */
     private boolean menuPressed = false;
 
@@ -330,8 +329,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                 osd.setStatus(OsdView.stateText(s));   // READY 返回 null，会自动清空
             }
             @Override public void onFirstFrame() {
-                playing = true;
-                watchdogFired = true;
+                attempt().onFirstFrame();
                 ui.removeCallbacks(playbackWatchdog);
                 osd.setStatus(null);
                 clearEngineAttempt();       // 出帧了，内核稳定
@@ -373,10 +371,9 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                 android.util.Log.w("MinTV", "解码失败，尝试降级内核: " + msg);
                 // 同一次换台只降级一次：否则 VLC 也失败时会来回切，
                 // 表现为"画面一直闪、日志刷屏"。
-                if (retryDone) { onError(msg); return; }
-                retryDone = true;
-                // 只剩一个内核，没有"降级"可走 —— 直接按错误处理，
+                // 只剩一个内核，没有"降级"可走 —— 记一次尝试后直接按错误处理，
                 // 由 onNoVideo / 看门狗去换线路。
+                attempt().onErrorRetryable();
                 onError(msg);
             }
 
@@ -1443,7 +1440,10 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         // 新的一次播放，允许重新降级一次。
         // 但"降级后重播同一台"这条路径传 keepLine=true 且引擎已变，
         // 不能再无条件清零，否则会 Exo→VLC→Exo 死循环。
-        if (!keepLine) retryDone = false;
+        // keepLine=true 表示"还是同一个频道的重开"（换线路/自愈），
+        // 必须复用同一个 attempt —— 否则换线路后降级进度清零，
+        // 会出现"换线路→无画面→又软解→又换线路"的循环。
+        if (!keepLine) attempt = null;
         // 换台必然重新起播，暂停态要清掉；否则新频道一进来 OSD 就常驻了
         if (osd != null) osd.setPaused(false);
         if (index != playingChannel && playingChannel >= 0 && playingChannel < channels.size()) {
@@ -1460,8 +1460,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         lastACodec = null;
         lastBitrate = null;
         speedMeter.reset();
-        stallLastPos = -1;
-        stallSince = 0;
+        attempt().onRestart();   // 重开一次播放：清掉卡顿采样，但保留降级进度
         lineTotal = ch.sources.size();
         replayStartMs = -1;
         osd.showChannel(no, ch.name, ch.group);
@@ -1491,18 +1490,19 @@ public class MainActivity extends Activity implements FocusEngine.Host {
 
     private final Runnable playbackWatchdog = new Runnable() {
         @Override public void run() {
-            if (!playing && !watchdogFired) {
-                watchdogFired = true;
+            com.mintv.tv.data.PlaybackAttempt.Action act = attempt().onStartupTimeout();
+            if (act == com.mintv.tv.data.PlaybackAttempt.Action.NONE) return;
+            if (act == com.mintv.tv.data.PlaybackAttempt.Action.SWITCH_SOURCE) {
                 PlaylistParser.Channel ch = (playingChannel >= 0 && playingChannel < channels.size())
                         ? channels.get(playingChannel) : null;
-                if (ch != null && ch.sources.size() > 1) {
+                if (ch != null) {
                     currentLine = (currentLine + 1) % ch.sources.size();
                     osd.toast("该线路无响应，切换线路 " + (currentLine + 1) + "/" + ch.sources.size());
                     playChannelInternal(playingChannel, true);
-                } else {
-                    osd.toast("该源无响应");
+                    return;
                 }
             }
+            osd.toast("该源无响应");
         }
     };
     /** 设置行下标（与 DemoData.ROW_TITLES 顺序一致） */
@@ -1540,18 +1540,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
      * <p>只在用户主动换台 / 换分类时清零。绝对不能放在 playChannel /
      * armWatchdog 里清零 —— 那是自愈自己调进去的，会被无限踢源。
      */
-    private int noVideoStage = 0;
 
-    /**
-     * 自动降级用的临时解码方式，-1 表示没覆盖。
-     *
-     * <p>**绝不能写回 selections / 持久化**。以前 onNoVideo 直接把
-     * selections[ROW_DECODER] 改成 2 并 saveSelections()，于是只要某个源
-     * 触发过一次"无画面"，用户的解码设置就被永久改成软解了 ——
-     * 再切回那个源，看到的是软解、听到的是没声音，而且 UI 上根本
-     * 没提示是被自动改的。自动降级只该在本次播放内生效。
-     */
-    private int tempDecoderOverride = -1;
 
     /** 是否已切到软解。Exo 的硬解在低端盒子上「初始化成功但不出帧」很常见。 */
 
@@ -1569,33 +1558,30 @@ public class MainActivity extends Activity implements FocusEngine.Host {
      */
     private void onNoVideo(String reason) {
         // 已经有明确结论了，别再让「无响应」看门狗插一脚去踢源
-        watchdogFired = true;
         ui.removeCallbacks(playbackWatchdog);
 
-        // ① 自动 → 软件解码（VLC 的 mediacodec 在某些源上会出不来画面）
-        if (noVideoStage == 0 && playerManager != null
-                && effectiveDecoder() == 0) {
-            noVideoStage = 1;
-            // 只影响本次播放，不动用户设置
-            tempDecoderOverride = 2;
-            playerManager.setDecoderMode(2);
-            osd.toast("无画面，临时切软件解码重试");
-            playChannel(playingChannel);
-            return;
-        }
-
-        // ② 换线路
+        com.mintv.tv.data.PlaybackAttempt.Action act = attempt().onNoVideo();
         PlaylistParser.Channel ch = (playingChannel >= 0 && playingChannel < channels.size())
                 ? channels.get(playingChannel) : null;
-        if (noVideoStage <= 1 && ch != null && ch.sources.size() > 1 && autoSwitchSource()) {
-            noVideoStage = 2;
-            currentLine = (currentLine + 1) % ch.sources.size();
-            osd.toast("该线路无画面，切换线路 " + (currentLine + 1) + "/" + ch.sources.size());
-            playChannelInternal(playingChannel, true);
-            return;
+
+        switch (act) {
+            case RETRY_SOFT_DECODE:
+                // 只影响本次尝试，不动用户设置
+                playerManager.setDecoderMode(attempt().decoderMode());
+                osd.toast("无画面，临时切软件解码重试");
+                playChannelInternal(playingChannel, true);
+                return;
+            case SWITCH_SOURCE:
+                if (ch != null && !ch.sources.isEmpty()) {
+                    currentLine = (currentLine + 1) % ch.sources.size();
+                    osd.toast("该线路无画面，切换线路 " + (currentLine + 1) + "/" + ch.sources.size());
+                    playChannelInternal(playingChannel, true);
+                    return;
+                }
+                break;
+            default:
+                break;
         }
-        // ③ 没得换，明说，不再黑着播
-        noVideoStage = 3;
         osd.setStatus("无画面：" + reason);
     }
 
@@ -2343,21 +2329,59 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             String lost = HttpHeaderProfile.vlcUnsupported(merged);
             if (!lost.isEmpty()) osd.toast("VLC 不支持请求头 " + lost + "，可能影响播放");
         }
+        // 每次起播都同步一次解码方式。
+        //
+        // 漏了这一步的后果：某个源触发过"无画面"，把本次尝试临时改成软解；
+        // 用户接着手动换台，attempt 重建、设置显示"自动"，但播放器里
+        // 还留着上一次的软解值 —— 显示和实际不一致，而且软解更吃 CPU。
+        playerManager.setDecoderMode(effectiveDecoder());
         playerManager.play(getApplicationContext(), url, merged, mode);
     }
 
     /** 用户主动换台 / 换分类：自愈进度清零。 */
+    /**
+     * 重置「本次播放尝试」的全部降级状态。
+     *
+     * <p>注意它**不会**改动用户设置里的解码方式 —— 自动降级只活在
+     * 这个 attempt 对象里，换台就没了。
+     */
     private void resetNoVideoStage() {
-        noVideoStage = 0;
-        tempDecoderOverride = -1;
+        attempt = null;
     }
 
-    /** 当前真正生效的解码方式（临时覆盖优先）。 */
+    /** 当前真正生效的解码方式（本次尝试的临时覆盖优先）。 */
     private int effectiveDecoder() {
-        return tempDecoderOverride >= 0 ? tempDecoderOverride : selections[ROW_DECODER];
+        return attempt != null ? attempt.decoderMode() : selections[ROW_DECODER];
     }
 
     private boolean autoSwitchSource() { return selections[ROW_TIMEOUT] != 0; }
+
+    // ================= 本次播放尝试 =================
+    //
+    // 以前这里散着 playing / watchdogFired / retryDone / noVideoStage /
+    // tempDecoderOverride / stallSince+stallLastPos 六个字段，由六处交叉读写，
+    // 没有任何一处能完整描述「这次播放到哪一步了」。漏复位就出 bug
+    // （改解码方式后播不了、切回来没声音，都是这个病）。
+    // 现在全部收进 data.PlaybackAttempt，那里有单测覆盖。
+    private com.mintv.tv.data.PlaybackAttempt attempt;
+
+    /** 懒创建：任何调用点都不用担心顺序。 */
+    private com.mintv.tv.data.PlaybackAttempt attempt() {
+        if (attempt == null) {
+            int n = 1;
+            if (playingChannel >= 0 && playingChannel < channels.size()) {
+                n = channels.get(playingChannel).sources.size();
+            }
+            attempt = new com.mintv.tv.data.PlaybackAttempt(
+                    selections[ROW_DECODER], switchTimeoutMs(), n, autoSwitchSource());
+        }
+        return attempt;
+    }
+
+    /** 是否已经出过画面（原 playing 字段的唯一用途）。 */
+    private boolean hasFirstFrame() {
+        return attempt != null && attempt.hasFirstFrame();
+    }
 
     /** 超时阈值。0 = 用户关了超时换源。 */
     private long switchTimeoutMs() {
@@ -2370,13 +2394,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         }
     }
 
-    private boolean playing = false;
-    private boolean watchdogFired = false;
 
-    // ---- 播放中卡顿检测 ----
-    /** 上一次看到的播放位置，以及它最后一次变化的时间。 */
-    private long stallLastPos = -1;
-    private long stallSince = 0;
 
     /**
      * 播放中卡顿检测。
@@ -2394,38 +2412,26 @@ public class MainActivity extends Activity implements FocusEngine.Host {
      * 这两种都该换源，所以不细分。
      */
     private void checkStall(long pos) {
-        if (!autoSwitchSource() || watchdogFired || !playing) return;
         long limit = switchTimeoutMs();
-        if (limit <= 0) return;                 // 关闭
-        long now = SystemClock.uptimeMillis();
+        com.mintv.tv.data.PlaybackAttempt.Action act =
+                attempt().onPosition(pos, SystemClock.uptimeMillis());
+        if (act == com.mintv.tv.data.PlaybackAttempt.Action.NONE) return;
 
-        if (pos != stallLastPos) {
-            stallLastPos = pos;
-            stallSince = now;
-            return;
-        }
-        if (stallSince == 0) { stallSince = now; return; }
-        if (now - stallSince < limit) return;
-
-        // 卡住了：换下一条线路
-        stallSince = now;
         PlaylistParser.Channel ch = (playingChannel >= 0 && playingChannel < channels.size())
                 ? channels.get(playingChannel) : null;
-        if (ch != null && ch.sources.size() > 1) {
+        if (act == com.mintv.tv.data.PlaybackAttempt.Action.SWITCH_SOURCE
+                && ch != null && ch.sources.size() > 1) {
             currentLine = (currentLine + 1) % ch.sources.size();
             osd.toast("播放卡住 " + (limit / 1000) + " 秒，切换线路 "
                     + (currentLine + 1) + "/" + ch.sources.size());
             playChannelInternal(playingChannel, true);
         } else {
             osd.toast("播放卡住，该频道只有一条线路");
-            watchdogFired = true;               // 别反复刷提示
         }
     }
 
     /** 起播后调用：8 秒没出画面就自愈。 */
     private void armWatchdog() {
-        playing = false;
-        watchdogFired = false;
         ui.removeCallbacks(playbackWatchdog);
         if (!autoSwitchSource()) return;      // 设置里关掉就不看门狗
         ui.postDelayed(playbackWatchdog, switchTimeoutMs());
@@ -2825,7 +2831,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             o.put("program", prog);
 
             o.put("speed", speedMeter.text());
-            o.put("playing", playing);
+            o.put("playing", hasFirstFrame());
             o.put("panel", panelVisible);
 
             com.mintv.tv.data.SubscriptionStore.Sub sub =
