@@ -81,7 +81,7 @@ public interface PlaybackBackend {
      * 「有声音没画面」。TextureView 走 GPU 合成、跟着视图树走，画面一定能出来，
      * 代价是多一次纹理拷贝。默认给 TextureView，能出图优先。
      */
-    default void setTextureView(android.view.TextureView tv) { }
+    void setTextureView(android.view.TextureView tv);
 
     /** 播放。mode 决定内核怎么配置（直播用低延迟缓冲，回看用可 seek 的缓冲）。 */
     void play(Context appCtx, String url, Mode mode);
@@ -115,14 +115,22 @@ public interface PlaybackBackend {
      * <p>必须由**内核自己**实现：VLC 的画面缩放发生在它的视频输出层，
      * 改 View 的 LayoutParams 对它无效 —— 这就是"VLC 右边一大块黑边"的原因。
      */
-    default void setAspectMode(int mode) { }
+    void setAspectMode(int mode);
 
-    /** 暂停。默认空实现，不支持的后端直接忽略。 */
-    default void pause() { }
+    /*
+     * 下面这几个**故意不给 default 空实现**。
+     *
+     * 曾经 setTextureView 是 default { }，结论是：删内核时把转发弄丢了，
+     * 编译器一声不响，运行时 VLC 从没绑过 vout —— 有声音没画面，
+     * 排查了两轮才找到。凡是"漏了就会静默坏掉"的方法，都必须让
+     * 缺实现直接编译失败。
+     */
+    /** 暂停。 */
+    void pause();
     /** 继续播放。 */
-    default void resume() { }
+    void resume();
     /** 当前是否在播（用于切换"暂停/播放"图标）。 */
-    default boolean isPlaying() { return true; }
+    boolean isPlaying();
 
     /**
      * 是否被用户暂停。
@@ -130,7 +138,7 @@ public interface PlaybackBackend {
      * <p>和 isPlaying() 分开：直播缓冲时 isPlaying() 是 false，
      * 但用户并没有暂停。控制条必须看这个，否则点暂停永远进 resume 分支。
      */
-    default boolean isPaused() { return false; }
+    boolean isPaused();
 
     /** 跳转。实现里要处理好直播边缘、缓冲不足等情况。 */
     void seekTo(long positionMs);

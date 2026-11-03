@@ -36,10 +36,18 @@ public final class VlcBackend implements PlaybackBackend {
 
     /** 设置解码方式。下次创建 LibVLC 时生效。 */
     public void setHwMode(int mode) {
-        if (mode == hwMode) return;
+        // 只记下来。下一次 play() 会作为 Media 选项带上，
+        // **不重建 LibVLC** —— 重建会短暂出现两个实例抢音频设备。
         hwMode = mode;
-        // 已经建好的 LibVLC 不会重读参数，需要重建
-        release();
+    }
+
+    /** 解码方式对应的 VLC 选项值。 */
+    private static String hwValue(int mode) {
+        switch (mode) {
+            case 1:  return "mediacodec";   // 强制 Android MediaCodec
+            case 2:  return "none";         // 强制软解
+            default: return "any";          // VLC 原生默认：逐级尝试，失败回落
+        }
     }
     private SurfaceView surfaceView;
     private android.view.TextureView textureView;
@@ -97,7 +105,7 @@ public final class VlcBackend implements PlaybackBackend {
     /** VLC 只认 SurfaceView（内部走 IVLCVout.attachViews）。TextureView 出不了图。 */
     public void setSurfaceView(SurfaceView sv) {
         this.surfaceView = sv;
-        if (player != null && sv != null && !viewsAttached) attach();
+        if (player != null && sv != null) attach();
     }
 
     @Override public void setSurface(Surface s) {
@@ -107,12 +115,7 @@ public final class VlcBackend implements PlaybackBackend {
     @Override public void setTextureView(android.view.TextureView tv) {
         this.textureView = tv;
         if (player != null && tv != null) {
-            try {
-                if (viewsAttached) player.getVLCVout().detachViews();
-                player.getVLCVout().setVideoView(tv);
-                player.getVLCVout().attachViews();
-                viewsAttached = true;
-            } catch (Throwable ignored) { }
+            attach();
         }
     }
 
@@ -125,27 +128,14 @@ public final class VlcBackend implements PlaybackBackend {
         args.add("--network-caching=800");
         args.add("--live-caching=800");
         args.add("--file-caching=800");
-        // 解码方式（--avcodec-hw）：
+        // 解码方式**不在这里设**，见 play() 里的 media option。
         //
-        //   0 自动        any          libVLC 原生默认。自己按顺序试
-        //                              mediacodec → 其它硬解 → 软解，
-        //                              任何一步失败自动往下退。最稳。
-        //   1 内置硬解码   mediacodec   强制走 Android MediaCodec。
-        //                              解不出来的源会直接失败，不再转软解。
-        //   2 软件解码     none         强制软解，兼容性最高、最费 CPU。
-        //
-        // ⚠ 上一版把「自动」也写成 mediacodec，结果自动不等于原生默认，
-        //   强制硬解把一批源直接搞挂（mediacodec 对这些直播源会初始化失败
-        //   且不回落）。自动必须是 any。
-        //
-        // ⚠ 另外删了 --no-mediacodec-dr。它禁用 direct rendering，
-        //   逼 VLC 走「解码到内存再拷给 Surface」，很多直播源在这条路径上
-        //   直接黑屏。默认开着 DR 才是对的。
-        switch (hwMode) {
-            case 1:  args.add("--avcodec-hw=mediacodec"); break;
-            case 2:  args.add("--avcodec-hw=none");       break;
-            default: args.add("--avcodec-hw=any");        break;
-        }
+        // 原因：--avcodec-hw 是实例级参数，改了必须重建 LibVLC。
+        // 而重建是异步释放旧实例 + 立刻建新实例，两个 LibVLC 会并存
+        // 一小段时间，音频输出(AudioTrack)互相抢占 —— 这就是
+        // "切一下解码方式再切回来就没声音"的根因。
+        // 放到 Media 级选项后，解封装/音频/视频输出全部复用，
+        // 切解码只是重新 open 一路流，不碰输出设备。
         args.add("--no-sub-autodetect-file");
         args.add("--no-osd");
         args.add("--no-video-title-show");
@@ -157,9 +147,18 @@ public final class VlcBackend implements PlaybackBackend {
         }
     }
 
+    /** 上一次 attach 的目标视图，用于幂等判断。 */
+    private Object attachedTarget;
+
     private void attach() {
         if (player == null) return;
-        if (surfaceView == null && textureView == null) return;
+        Object target = surfaceView != null ? surfaceView : textureView;
+        if (target == null) return;
+        // 同一个 player 已经绑过同一个视图就不要再绑。
+        // 重复 attachViews 会让 VLC 重新初始化 vout，表现为闪一下黑屏；
+        // 而"先 detach 再 attach"更糟 —— 中间那段没有 vout，
+        // 解码器出帧却没人接，就成了「有声音没画面」。
+        if (target == attachedTarget) return;
         try {
             // ⚠ setWindowSize 必须在 attachViews 之前调用。
             //
@@ -168,13 +167,16 @@ public final class VlcBackend implements PlaybackBackend {
             // 画面就贴在左上角、右边留一大块黑 —— 这正是"VLC 右边黑边"的根因。
             int w = surfaceView != null ? surfaceView.getWidth() : textureView.getWidth();
             int h = surfaceView != null ? surfaceView.getHeight() : textureView.getHeight();
-            if (w > 0 && h > 0) {
-                player.getVLCVout().setWindowSize(w, h);
-            }
+            // 尺寸还是 0 说明布局没走完。这时硬 attach 会让 VLC 按解码
+            // 原始尺寸往左上角画（实测 1920x1088，屏幕只显示一角），
+            // 看起来就是"没画面"。等 onSurfaceTextureSizeChanged 再来。
+            if (w <= 0 || h <= 0) return;
+            player.getVLCVout().setWindowSize(w, h);
             if (surfaceView != null) player.getVLCVout().setVideoView(surfaceView);
             else player.getVLCVout().setVideoView(textureView);
             player.getVLCVout().attachViews();
             viewsAttached = true;
+            attachedTarget = target;
         } catch (Throwable t) {
             if (cb != null) cb.onError("VLC 绑定画面失败: " + t.getMessage());
         }
@@ -237,6 +239,7 @@ public final class VlcBackend implements PlaybackBackend {
         emit(State.BUFFERING);
 
         player = new MediaPlayer(libVlc);
+        attachedTarget = null;   // 新实例，必须重新绑视图
         player.setEventListener(new MediaPlayer.EventListener() {
             @Override public void onEvent(MediaPlayer.Event event) {
                 switch (event.type) {
@@ -271,6 +274,8 @@ public final class VlcBackend implements PlaybackBackend {
         // 低延迟直播：不走本地缓存文件，直接吃网络流
         media.addOption(":network-caching=800");
         media.addOption(":live-caching=800");
+        // 解码方式在这里给：Media 级选项，切换时不用重建 LibVLC
+        media.addOption(":avcodec-hw=" + hwValue(hwMode));
         if (m == Mode.LIVE) media.addOption(":http-reconnect=true");
         dropped = applyHeaders(media, headers);
         player.setMedia(media);
@@ -437,6 +442,7 @@ public final class VlcBackend implements PlaybackBackend {
         player = null;
         libVlc = null;
         surfaceView = null;
+        attachedTarget = null;
 
         // ⚠ 关键顺序：**先 detachViews，再 release**。
         //

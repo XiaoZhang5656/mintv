@@ -393,7 +393,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         };
         playerManager.setCallback(playerCallback);
         // 解码方式直接交给 VLC：它是启动参数，不需要重建播放器
-        playerManager.setDecoderMode(selections[ROW_DECODER]);
+        playerManager.setDecoderMode(effectiveDecoder());
 
         // Surface 一就绪就开播，避免先黑屏再起播
         surfaceView.getHolder().addCallback(new SurfaceHolder.Callback() {
@@ -780,6 +780,17 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         // 记录点击坐标：靠它区分"点左边"和"点右边"
         gestureLayer.setOnTouchListener(new View.OnTouchListener() {
             @Override public boolean onTouch(View v, android.view.MotionEvent e) {
+                // ⚠ 先把事件喂给 OSD。
+                //
+                // gestureLayer 是纯播放态下唯一铺满全屏的可点层，而它是在
+                // osd 之后 addView 的 —— FrameLayout 从最上层往下分发，
+                // 所以点击永远先落到 gestureLayer，OSD 上的暂停/切台按钮
+                // 一次都收不到事件。表现就是"点暂停，按钮没反应，
+                // 反而当成点视频区把 OSD 收掉了"。
+                //
+                // 不能靠调换 addView 顺序解决：OSD 必须垫在面板之下
+                // （否则信息条会压在频道列表上）。所以在这里手工让位。
+                if (osd != null && osd.dispatchTouchEvent(e)) return true;
                 if (e.getActionMasked() == android.view.MotionEvent.ACTION_DOWN) {
                     tapX = e.getX();
                     tapY = e.getY();
@@ -1529,6 +1540,17 @@ public class MainActivity extends Activity implements FocusEngine.Host {
      */
     private int noVideoStage = 0;
 
+    /**
+     * 自动降级用的临时解码方式，-1 表示没覆盖。
+     *
+     * <p>**绝不能写回 selections / 持久化**。以前 onNoVideo 直接把
+     * selections[ROW_DECODER] 改成 2 并 saveSelections()，于是只要某个源
+     * 触发过一次"无画面"，用户的解码设置就被永久改成软解了 ——
+     * 再切回那个源，看到的是软解、听到的是没声音，而且 UI 上根本
+     * 没提示是被自动改的。自动降级只该在本次播放内生效。
+     */
+    private int tempDecoderOverride = -1;
+
     /** 是否已切到软解。Exo 的硬解在低端盒子上「初始化成功但不出帧」很常见。 */
 
     /**
@@ -1549,13 +1571,13 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         ui.removeCallbacks(playbackWatchdog);
 
         // ① 自动 → 软件解码（VLC 的 mediacodec 在某些源上会出不来画面）
-        if (noVideoStage == 0 && playerManager != null && selections[ROW_DECODER] == 0) {
+        if (noVideoStage == 0 && playerManager != null
+                && effectiveDecoder() == 0) {
             noVideoStage = 1;
-            selections[ROW_DECODER] = 2;
-            if (rowViews.size() > ROW_DECODER) rowViews.get(ROW_DECODER).setSelected(2);
-            saveSelections();
+            // 只影响本次播放，不动用户设置
+            tempDecoderOverride = 2;
             playerManager.setDecoderMode(2);
-            osd.toast("无画面，切换软件解码重试");
+            osd.toast("无画面，临时切软件解码重试");
             playChannel(playingChannel);
             return;
         }
@@ -2323,7 +2345,15 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     }
 
     /** 用户主动换台 / 换分类：自愈进度清零。 */
-    private void resetNoVideoStage() { noVideoStage = 0; }
+    private void resetNoVideoStage() {
+        noVideoStage = 0;
+        tempDecoderOverride = -1;
+    }
+
+    /** 当前真正生效的解码方式（临时覆盖优先）。 */
+    private int effectiveDecoder() {
+        return tempDecoderOverride >= 0 ? tempDecoderOverride : selections[ROW_DECODER];
+    }
 
     private boolean autoSwitchSource() { return selections[ROW_TIMEOUT] != 0; }
 
@@ -4760,7 +4790,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             armWatchdog();     // 立即按新策略重新计时
         } else if (row == ROW_DECODER) {
             // 解码方式是 VLC 的启动参数，改了要重建 LibVLC 实例。
-            // setDecoderMode 内部会 release 掉旧的，下次 play 时按新参数重建。
+            // setDecoderMode 只记下值，不重建 LibVLC；下次 play 作为 Media 选项生效。
             if (playerManager != null) {
                 playerManager.setDecoderMode(value);
                 playChannel(playingChannel);

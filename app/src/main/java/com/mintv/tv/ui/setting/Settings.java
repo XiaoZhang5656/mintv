@@ -18,26 +18,6 @@ import java.util.Map;
  */
 public final class Settings {
 
-    // ══════════════════════════════════════════════════════════
-    //  索引常量：给代码里用，避免写魔法数字
-    //  注意：新增请追加在末尾，不要插在中间（会让老配置错位）
-    // ══════════════════════════════════════════════════════════
-    public static final int IDX_SOURCE      = 0;
-    public static final int IDX_ASPECT      = 1;
-    public static final int IDX_EPG_POS     = 2;
-    public static final int IDX_REVERSE     = 3;
-    public static final int IDX_SWITCH_UI   = 4;
-    public static final int IDX_LEFT_KEY    = 5;
-    public static final int IDX_SPEED       = 6;
-    public static final int IDX_AUTOSTART   = 7;
-    public static final int IDX_DECODER     = 8;
-    public static final int IDX_TIMEOUT     = 9;
-    public static final int IDX_HEADERS     = 10;
-    public static final int IDX_CLOCK       = 11;
-    public static final int IDX_OUTPUT      = 12;
-    public static final int IDX_THEME       = 13;
-    public static final int IDX_GROUP_MGR   = 14;
-
     /** 总表。下标即行号。 */
     public static final SettingDef[] ALL = {
             SettingDef.action("source", "切源",
@@ -80,6 +60,38 @@ public final class Settings {
             SettingDef.action("group_mgr", "频道分组管理",
                     "隐藏不看的分类，只留常用的", "打开管理"),
     };
+
+    // ══════════════════════════════════════════════════════════
+    //  索引常量：由 id 在总表里的位置算出来，**不再手工编号**
+    //
+    //  以前是 public static final int IDX_CLOCK = 11; 这样硬写。
+    //  删掉「播放内核」那行时，后面四个常量必须手工往前挪，漏一个
+    //  编译器不会报错，运行时却静默读到相邻的另一项（用户看到的是
+    //  "改 A 结果 B 变了"）。改成查表后，删行自动重排，没有漏改的可能。
+    // ══════════════════════════════════════════════════════════
+    public static final int IDX_SOURCE = indexOf("source");
+    public static final int IDX_ASPECT = indexOf("aspect");
+    public static final int IDX_EPG_POS = indexOf("epg_pos");
+    public static final int IDX_REVERSE = indexOf("reverse");
+    public static final int IDX_SWITCH_UI = indexOf("switch_ui");
+    public static final int IDX_LEFT_KEY = indexOf("left_key");
+    public static final int IDX_SPEED = indexOf("speed");
+    public static final int IDX_AUTOSTART = indexOf("autostart");
+    public static final int IDX_DECODER = indexOf("decoder");
+    public static final int IDX_TIMEOUT = indexOf("timeout");
+    public static final int IDX_HEADERS = indexOf("headers");
+    public static final int IDX_CLOCK = indexOf("clock");
+    public static final int IDX_OUTPUT = indexOf("output");
+    public static final int IDX_THEME = indexOf("theme");
+    public static final int IDX_GROUP_MGR = indexOf("group_mgr");
+
+    /** 按 id 查行号。找不到直接抛 —— 说明常量名和总表里的 id 对不上。 */
+    private static int indexOf(String id) {
+        for (int i = 0; i < ALL.length; i++) {
+            if (ALL[i].id.equals(id)) return i;
+        }
+        throw new IllegalStateException("设置项不存在: " + id);
+    }
 
     private Settings() { }
 

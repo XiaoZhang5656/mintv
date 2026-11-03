@@ -3,6 +3,7 @@ package com.mintv.tv.ui.player;
 import android.content.Context;
 import android.view.Surface;
 import android.view.SurfaceView;
+import android.view.TextureView;
 
 import java.util.Map;
 
@@ -26,6 +27,7 @@ public final class PlayerManager implements PlaybackBackend {
 
     private VlcBackend impl;
     private SurfaceView surfaceView;
+    private TextureView textureView;
     private Callback cb;
 
     public PlayerManager(Context ctx) {
@@ -40,6 +42,23 @@ public final class PlayerManager implements PlaybackBackend {
     public void setSurfaceView(SurfaceView sv) {
         this.surfaceView = sv;
         if (impl != null) impl.setSurfaceView(sv);
+    }
+
+    /**
+     * 绑定画面输出（TextureView）。
+     *
+     * <p>⚠ 这个方法必须显式实现并转发。
+     * PlaybackBackend 里 setTextureView 有 default 空实现，一旦这里漏了
+     * 转发，调用方 playerManager.setTextureView(tv) 就静默变成空操作：
+     * VlcBackend.textureView 一直是 null，attach() 里拿不到目标视图直接
+     * return，VLC 从来没有绑定过 vout —— 音频照常解码出声，视频帧没有
+     * 出口，症状就是「有声音没画面」。
+     *
+     * <p>这就是删掉 Exo、重写这个类时弄丢的那一行。
+     */
+    @Override public void setTextureView(TextureView tv) {
+        this.textureView = tv;
+        if (impl != null) impl.setTextureView(tv);
     }
 
     /** 解码方式：0=自动 1=内置硬解 2=软件解码。 */
@@ -64,6 +83,9 @@ public final class PlayerManager implements PlaybackBackend {
     public void play(Context appCtx, String url, Map<String, String> headers, Mode mode) {
         if (impl == null) impl = new VlcBackend();
         if (headers == null) headers = java.util.Collections.emptyMap();
+        // 两个都补一遍：VLC 实例重建后 attachedTarget 已清空，
+        // 必须有人重新把当前生效的那个视图递进去，否则同样不出画面。
+        if (textureView != null) impl.setTextureView(textureView);
         if (surfaceView != null) impl.setSurfaceView(surfaceView);
         impl.play(appCtx, url, headers, mode);
     }
