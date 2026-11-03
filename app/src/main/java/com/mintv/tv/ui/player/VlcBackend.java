@@ -46,6 +46,14 @@ public final class VlcBackend implements PlaybackBackend {
     private Callback cb;
     private Mode mode = Mode.LIVE;
     private boolean released = false;
+    /**
+     * 用户按了暂停。
+     *
+     * <p>不能用 MediaPlayer.isPlaying() 反推：直播流在 buffering 状态下
+     * isPlaying() 返回 false，于是"点暂停"被当成"该恢复了"，永远停不下来。
+     * 截图里那个「缓冲中…」就是这种情况。所以自己记一份。
+     */
+    private boolean pausedByUser = false;
     private boolean firstFrame = false;
     private boolean viewsAttached = false;
     private String currentUrl;
@@ -117,16 +125,27 @@ public final class VlcBackend implements PlaybackBackend {
         args.add("--network-caching=800");
         args.add("--live-caching=800");
         args.add("--file-caching=800");
-        // 解码方式：0=自动 1=内置硬解 2=软件解码
+        // 解码方式（--avcodec-hw）：
         //
-        // libVLC 的 --avcodec-hw 取值：
-        //   any / mediacodec  优先硬件（Android 走 MediaCodec），失败自动转软解
-        //   none              强制软解
-        // 实测你这台机器 mediacodec 可用；花屏时切「软件解码」即可。
-        int decMode = hwMode;
-        if (decMode == 2) args.add("--avcodec-hw=none");
-        else args.add("--avcodec-hw=mediacodec");
-        args.add("--no-mediacodec-dr");
+        //   0 自动        any          libVLC 原生默认。自己按顺序试
+        //                              mediacodec → 其它硬解 → 软解，
+        //                              任何一步失败自动往下退。最稳。
+        //   1 内置硬解码   mediacodec   强制走 Android MediaCodec。
+        //                              解不出来的源会直接失败，不再转软解。
+        //   2 软件解码     none         强制软解，兼容性最高、最费 CPU。
+        //
+        // ⚠ 上一版把「自动」也写成 mediacodec，结果自动不等于原生默认，
+        //   强制硬解把一批源直接搞挂（mediacodec 对这些直播源会初始化失败
+        //   且不回落）。自动必须是 any。
+        //
+        // ⚠ 另外删了 --no-mediacodec-dr。它禁用 direct rendering，
+        //   逼 VLC 走「解码到内存再拷给 Surface」，很多直播源在这条路径上
+        //   直接黑屏。默认开着 DR 才是对的。
+        switch (hwMode) {
+            case 1:  args.add("--avcodec-hw=mediacodec"); break;
+            case 2:  args.add("--avcodec-hw=none");       break;
+            default: args.add("--avcodec-hw=any");        break;
+        }
         args.add("--no-sub-autodetect-file");
         args.add("--no-osd");
         args.add("--no-video-title-show");
@@ -199,7 +218,12 @@ public final class VlcBackend implements PlaybackBackend {
     }
 
     public void play(Context appCtx, String url, Map<String, String> headers, Mode m) {
-        if (released) return;
+        // ⚠ released 必须在起播时复位。
+        // 以前 release() 把它置 true 之后就再没有地方置回 false，
+        // 而 play() 第一行就是 if (released) return —— 于是在设置里改一次
+        // 解码方式（setHwMode → release）之后，播放器永久罢工，怎么点都不播。
+        released = false;
+        pausedByUser = false;
         this.mode = m;
         this.currentUrl = url;
         this.firstFrame = false;
@@ -317,11 +341,18 @@ public final class VlcBackend implements PlaybackBackend {
 
     @Override public void pause() {
         if (player == null) return;
+        pausedByUser = true;
         try { player.pause(); } catch (Throwable ignored) { }
+    }
+
+    /** 当前是否处于「用户暂停」状态（不看缓冲态）。 */
+    @Override public boolean isPaused() {
+        return pausedByUser;
     }
 
     @Override public void resume() {
         if (player == null) return;
+        pausedByUser = false;
         try { player.play(); } catch (Throwable ignored) { }
     }
 

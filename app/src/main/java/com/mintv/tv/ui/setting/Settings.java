@@ -61,7 +61,7 @@ public final class Settings {
                     "开机后自动拉起本应用",
                     new String[]{"开启", "关闭"}, 0),
             SettingDef.value("decoder", "解码方式",
-                    "自动最稳（硬解失败自动转软解）；花屏/绿屏时手动切软解",
+                    "自动＝VLC 原生策略（硬解失败自动退软解）；内置硬解码＝强制 MediaCodec；软件解码＝不用显卡",
                     new String[]{"自动", "内置硬解码", "软件解码"}, 0),
             SettingDef.value("timeout", "超时换源",
                     "起播无画面 / 播放中卡住超过该秒数，自动切下一条线路",

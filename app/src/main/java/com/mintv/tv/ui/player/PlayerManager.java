@@ -78,6 +78,7 @@ public final class PlayerManager implements PlaybackBackend {
     @Override public long durationMs() { return impl == null ? 0 : impl.durationMs(); }
     @Override public String tag() { return "VLC"; }
     @Override public Mode mode() { return impl == null ? Mode.LIVE : impl.mode(); }
+    @Override public boolean isPaused() { return impl != null && impl.isPaused(); }
     @Override public boolean isPlaying() { return impl != null && impl.isPlaying(); }
     @Override public void pause() { if (impl != null) impl.pause(); }
     @Override public void resume() { if (impl != null) impl.resume(); }

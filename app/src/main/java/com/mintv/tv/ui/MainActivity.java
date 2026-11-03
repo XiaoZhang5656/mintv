@@ -542,10 +542,12 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             @Override public void onNextChannel() { moveChannel(+1); }
             @Override public void onTogglePause() {
                 if (player == null) return;
-                boolean wasPlaying = player.isPlaying();
-                if (wasPlaying) player.pause(); else player.resume();
-                // OSD 跟着暂停状态走：暂停→常驻，继续→恢复正常 4 秒淡出
-                osd.setPaused(wasPlaying);
+                // ⚠ 必须读 isPaused()，不能读 isPlaying()。
+                // VLC 直播在 buffering 时 isPlaying() 返回 false，
+                // 用它会永远走 resume 分支 —— 表现就是"点暂停毫无反应"。
+                boolean nowPaused = !player.isPaused();
+                if (nowPaused) player.pause(); else player.resume();
+                osd.setPaused(nowPaused);
                 osd.reshow();
             }
         });

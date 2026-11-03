@@ -124,6 +124,14 @@ public interface PlaybackBackend {
     /** 当前是否在播（用于切换"暂停/播放"图标）。 */
     default boolean isPlaying() { return true; }
 
+    /**
+     * 是否被用户暂停。
+     *
+     * <p>和 isPlaying() 分开：直播缓冲时 isPlaying() 是 false，
+     * 但用户并没有暂停。控制条必须看这个，否则点暂停永远进 resume 分支。
+     */
+    default boolean isPaused() { return false; }
+
     /** 跳转。实现里要处理好直播边缘、缓冲不足等情况。 */
     void seekTo(long positionMs);
 
