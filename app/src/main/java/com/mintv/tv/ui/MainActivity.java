@@ -1245,18 +1245,28 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         fillEpg(index);
     }
 
+    /**
+     * 分类列的两种状态必须分开画，否则用户完全看不出区别：
+     * <ul>
+     *   <li><b>已生效的分类</b>（activeCategory）：始终有深色底；</li>
+     *   <li><b>焦点</b>（focus.zone()==NAV 时）：额外的蓝色描边。</li>
+     * </ul>
+     * 以前两者都用 focus.navIndex() 画，焦点一移动，原来的分类底色就消失，
+     * 看起来像"分类根本没切换" —— 其实焦点动了，只是没有视觉差别。
+     */
     private void updateNavFocus(int index) {
         boolean navZone = focus.zone() == FocusEngine.Zone.NAV;
         for (int i = 0; i < navViews.size(); i++) {
             NavItemView v = navViews.get(i);
-            // 当前分类始终有底，只有焦点真的在分类列时才画蓝框
-            v.setActive(i == focus.navIndex());
+            v.setActive(i == activeCategory);
             v.setFocused(navZone && i == index, true);
         }
     }
 
     /** 上一次画了焦点框的下标，用来只重绘变化的两行。 */
     private int lastFocusedChan = -1;
+    /** 已经生效的分类下标。焦点移走时它仍要保持高亮，否则用户看不出自己在哪个分类里。 */
+    private int activeCategory = 0;
     private int lastSubsFocus = -1;
 
     /**
@@ -4709,10 +4719,21 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         }, 60);
     }
 
+    private int lastHintZone = -1;
+
     @Override
     public void onZoneChanged(FocusEngine.Zone zone) {
         updateNavFocus(focus.navIndex());
         updateChannelFocus(focus.chanIndex());
+        // 第一次把焦点移进分类列时给一句操作提示。
+        // 没有提示的话，用户按左键看到蓝框跳过去，但列表没变，
+        // 会以为"切换分类没反应"（其实要先按 OK 才切）。
+        if (zone == FocusEngine.Zone.NAV && lastHintZone != 1 && navViews.size() > 1) {
+            lastHintZone = 1;
+            osd.toast("↑↓ 选择分类，OK 确认");
+        } else if (zone == FocusEngine.Zone.CHAN && lastHintZone != 0) {
+            lastHintZone = 0;
+        }
     }
 
     // ================= 触屏 / 手势（手机、平板、带触屏的盒子）=================
@@ -5165,6 +5186,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
 
     private void switchCategory(int index) {
         resetNoVideoStage();
+        activeCategory = index;
         for (int i = 0; i < navViews.size(); i++) {
             navViews.get(i).setActive(i == index);
         }
