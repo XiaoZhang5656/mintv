@@ -146,12 +146,19 @@ public final class VlcBackend implements PlaybackBackend {
     private void ensureLibVlc(Context ctx) {
         if (libVlc != null) return;
         List<String> args = new ArrayList<>();
-        // 直播低延迟 + 硬件解码 + 不显字幕
-        args.add("--no-drop-late-frames");
-        args.add("--no-skip-frames");
-        args.add("--network-caching=800");
-        args.add("--live-caching=800");
-        args.add("--file-caching=800");
+        // ⚠ 那两个 "--no-drop-late-frames / --no-skip-frames" 删掉了。
+        //
+        // 它们的含义是"迟到的帧也要画、绝不丢弃"。听起来很美好，实际上：
+        // 解码跟不上时，未丢弃的帧会一帧帧堆积，播放进度越来越落后于
+        // 音频 —— 看十分钟能差出好几秒，然后突然快进追帧，或者一直对不上。
+        // 这就是"总感觉不同步"的根源。
+        //
+        // VLC 默认是丢迟到帧保同步（音画以时间为准），直播必须这样。
+        //
+        // 缓冲从 800ms 降到 500ms：起播更快，弱网仍有余量。
+        args.add("--network-caching=500");
+        args.add("--live-caching=500");
+        args.add("--file-caching=500");
         // 解码方式**不在这里设**，见 play() 里的 media option。
         //
         // 原因：--avcodec-hw 是实例级参数，改了必须重建 LibVLC。
@@ -431,8 +438,8 @@ public final class VlcBackend implements PlaybackBackend {
 
         Media media = new Media(libVlc, Uri.parse(url));
         // 低延迟直播：不走本地缓存文件，直接吃网络流
-        media.addOption(":network-caching=800");
-        media.addOption(":live-caching=800");
+        media.addOption(":network-caching=500");
+        media.addOption(":live-caching=500");
         // 解码方式在这里给：Media 级选项，切换时不用重建 LibVLC
         media.addOption(":avcodec-hw=" + hwValue(hwMode));
         if (m == Mode.LIVE) media.addOption(":http-reconnect=true");

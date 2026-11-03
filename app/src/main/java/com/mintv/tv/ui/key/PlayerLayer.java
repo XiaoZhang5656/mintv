@@ -36,6 +36,17 @@ public final class PlayerLayer implements KeyLayer {
 
     private final Host host;
 
+    /**
+     * 换台节流。
+     *
+     * <p>按住上下键时，系统每 50ms 左右发一次带递增 repeatCount 的
+     * ACTION_DOWN。之前没有任何判断，按下去等于连续切二三十个台 ——
+     * 每切一次都要重新拉流，直接雪崩：画面疯狂闪、声音断续、看门狗
+     * 连番触发。电视遥控的 CH+/- 应该大约 5 台/秒，不是每帧一个。
+     */
+    private static final long SWITCH_MIN_GAP_MS = 200;
+    private long lastSwitchAt;
+
     public PlayerLayer(Host host) {
         this.host = host;
     }
@@ -49,18 +60,25 @@ public final class PlayerLayer implements KeyLayer {
 
         switch (code) {
             case KeyEvent.KEYCODE_DPAD_UP:
-            case KeyEvent.KEYCODE_DPAD_DOWN:
+            case KeyEvent.KEYCODE_DPAD_DOWN: {
                 // 纯播放态直接切台，不弹面板。
                 //
                 // 原来这里是 showPanel()：按上下只把左侧面板叫出来，
                 // 画面一动不动，也不换台 —— 手感就是"按了没反应"，
-                // 而且想看下一个台得按三次（弹面板→移到列表→再按）。
+                // 想看下一个台要按三次（弹面板→移到列表→再按）。
                 //
                 // 电视的通用交互是上下键=上一个/下一个频道。面板入口
                 // 仍然有：OK 键 / MENU 键 / BACK 键都能唤回。
+                long now = android.os.SystemClock.uptimeMillis();
+                if (now - lastSwitchAt < SWITCH_MIN_GAP_MS) {
+                    // 长按产生的重复事件：吃掉，但不切台
+                    return true;
+                }
+                lastSwitchAt = now;
                 if (code == KeyEvent.KEYCODE_DPAD_UP) host.channelUp();
                 else host.channelDown();
                 return true;
+            }
 
             case KeyEvent.KEYCODE_DPAD_LEFT:
             case KeyEvent.KEYCODE_DPAD_RIGHT:
