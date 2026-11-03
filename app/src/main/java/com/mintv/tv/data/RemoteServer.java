@@ -201,7 +201,16 @@ public final class RemoteServer {
         }
 
         // ---- 静态页 ----
-        String name = path.equals("/") ? "index.html" : path.substring(1);
+        // 扫码进来先看到订阅管理 —— 用户扫这个码的目的通常是"把源加进去"，
+        // 不是"拿手机当遥控器"。遥控页放在 /remote。
+        String name;
+        if (path.equals("/") || path.equals("/subs") || path.equals("/subscriptions")) {
+            name = "subscriptions.html";
+        } else if (path.equals("/remote") || path.equals("/control")) {
+            name = "index.html";
+        } else {
+            name = path.substring(1);
+        }
         if (name.contains("..")) { send(out, 403, "text/plain", "forbidden"); return; }
         byte[] data = readAsset(name);
         if (data == null) {

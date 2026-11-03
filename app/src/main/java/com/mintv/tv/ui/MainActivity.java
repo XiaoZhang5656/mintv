@@ -114,6 +114,11 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     // ---- 上一频道 ----
     private int lastChannelNum = -1;
 
+    // 当前节目信息（给 OSD 和手机端共用，避免两套计算）
+    private String epgNowText;
+    private String epgNextText;
+    private float epgProgress = -1f;
+
     // ---- 搜索 ----
     private String searchQuery = "";
 
@@ -145,6 +150,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     private com.mintv.tv.data.RemoteServer remote;
     private int remotePort = -1;
     private LinearLayout helperPage;
+    private LinearLayout infoPageWrap;
     private android.widget.ImageView qrView;
     private TextView helperAddr;
     private TextView helperState;
@@ -244,6 +250,8 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         loadSelections();
         loadHiddenCats();
         Theme.applyPalette(getSharedPreferences(PREF, MODE_PRIVATE).getInt(KEY_UI_THEME, 0));
+
+        purgeLegacyDefaultSub();
 
         errorPanel = ErrorPanel.install(this);
         CatchupProbe.init(this);
@@ -2400,6 +2408,14 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         }
     };
 
+    private final Runnable helperTick = new Runnable() {
+        @Override public void run() {
+            if (helperPage == null || helperPage.getVisibility() != View.VISIBLE) return;
+            rebuildHelperSubs();                 // 手机端改了订阅，盒子这页跟着变
+            ui.postDelayed(this, 2000);
+        }
+    };
+
     private void refreshHelperPage() {
         if (helperPage == null) return;
         String ip = com.mintv.tv.data.LocalIp.get(MainActivity.this);
@@ -2612,6 +2628,29 @@ public class MainActivity extends Activity implements FocusEngine.Host {
 
     // ---------------- 状态 / 命令 JSON ----------------
 
+    /** 给手机遥控页的"最近频道"：只取前 8 个，够点就行。 */
+    private org.json.JSONArray recentChannels() {
+        org.json.JSONArray a = new org.json.JSONArray();
+        try {
+            int n = Math.min(8, channels.size());
+            for (int i = 0; i < n; i++) {
+                PlaylistParser.Channel c = channels.get(i);
+                org.json.JSONObject o = new org.json.JSONObject();
+                o.put("no", num4(c.number));
+                o.put("name", c.name == null ? "" : c.name);
+                o.put("group", c.group == null ? "" : c.group);
+                a.put(o);
+            }
+        } catch (Throwable ignored) { }
+        return a;
+    }
+
+    private static String num4(int n) {
+        String s = String.valueOf(n);
+        while (s.length() < 4) s = "0" + s;
+        return s;
+    }
+
     private String buildStateJson() {
         try {
             org.json.JSONObject o = new org.json.JSONObject();
@@ -2635,6 +2674,12 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             video.put("vcodec", lastVCodec == null ? "" : lastVCodec);
             o.put("video", video);
 
+            org.json.JSONObject prog = new org.json.JSONObject();
+            prog.put("now", epgNowText == null ? "" : epgNowText);
+            prog.put("next", epgNextText == null ? "" : epgNextText);
+            prog.put("progress", epgProgress);
+            o.put("program", prog);
+
             o.put("speed", speedMeter.text());
             o.put("playing", playing);
             o.put("panel", panelVisible);
@@ -2645,10 +2690,107 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             pl.put("name", sub == null ? "" : sub.name);
             pl.put("total", channels == null ? 0 : channels.size());
             o.put("playlist", pl);
+            o.put("recent", recentChannels());
+            o.put("ip", com.mintv.tv.data.LocalIp.get(this));
+            o.put("port", remotePort);
             return o.toString();
         } catch (Throwable t) {
             return "{}";
         }
+    }
+
+    /**
+     * 订阅数据（手机端读取）。
+     *
+     * 不只返回订阅数组：EPG 和全局请求头也在同一份里，
+     * 手机页面一次请求就能渲染全部，不用打三个接口。
+     */
+    /** 当前 EPG 地址（空串表示用户没启用）。 */
+    private static String epgUrlOf(android.content.Context c) {
+        String v = c.getSharedPreferences(PREF, android.content.Context.MODE_PRIVATE)
+                .getString("epg_url", null);
+        return v == null ? "" : v;
+    }
+
+    /** 全局请求头条数（一行一条），手机端直接显示/编辑。 */
+    private String globalHeadersText() {
+        StringBuilder sb = new StringBuilder();
+        if (globalHeaders != null) {
+            for (java.util.Map.Entry<String, String> e : globalHeaders.entrySet()) {
+                if (sb.length() > 0) sb.append('\n');
+                sb.append(e.getKey()).append('=').append(e.getValue());
+            }
+        }
+        return sb.toString();
+    }
+
+    /**
+     * 手机遥控命令分发。
+     *
+     * <p>所有动作都转成对现有方法的调用（moveChannel / handleVolumeKey /
+     * switchSource …），不另写一套播放逻辑 —— 避免手机端和遥控器行为不一致。
+     */
+    private String handleRemoteCommand(String type, String value) {
+        if (type == null) return "未知命令";
+        final String t = type;
+        final String v = value == null ? "" : value;
+        ui.post(new Runnable() {
+            @Override public void run() {
+                try {
+                    if ("CH_UP".equals(t)) moveChannel(+1);
+                    else if ("CH_DOWN".equals(t)) moveChannel(-1);
+                    else if ("VOL_UP".equals(t)) handleVolumeKey(android.view.KeyEvent.KEYCODE_VOLUME_UP);
+                    else if ("VOL_DOWN".equals(t)) handleVolumeKey(android.view.KeyEvent.KEYCODE_VOLUME_DOWN);
+                    else if ("MUTE".equals(t)) handleVolumeKey(android.view.KeyEvent.KEYCODE_VOLUME_MUTE);
+                    else if ("LINE".equals(t)) switchSource(+1);
+                    else if ("MENU".equals(t)) { if (!dialogOpen()) openSettings(); else closeSettings(); }
+                    else if ("BACK".equals(t)) { if (dialogOpen()) closeSettings(); else if (panelVisible) enterFullPlayer(); }
+                    else if ("HOME".equals(t)) { if (dialogOpen()) closeSettings(); setPanelVisible(true); }
+                    else if ("OK".equals(t)) { if (!panelVisible) setPanelVisible(true); }
+                    // 上下键方向跟用户设置保持一致（「上下换台反转」）
+                    else if ("UP".equals(t)) moveChannel(selections[ROW_REVERSE] != 0 ? +1 : -1);
+                    else if ("DOWN".equals(t)) moveChannel(selections[ROW_REVERSE] != 0 ? -1 : +1);
+                    else if ("DIGIT".equals(t)) {
+                        for (int i = 0; i < v.length(); i++) {
+                            char c = v.charAt(i);
+                            if (c >= '0' && c <= '9') appendChannelDigit(c - '0');
+                        }
+                    }
+                } catch (Throwable ignored) { }
+            }
+        });
+        return "OK";
+    }
+
+    private boolean dialogOpen() {
+        return dialogRoot != null && dialogRoot.getVisibility() == View.VISIBLE;
+    }
+
+    /**
+     * 清掉早期版本自动塞进订阅列表的默认源。
+     *
+     * <p>背景：老代码在没配置源时返回硬编码的 guovin 地址，
+     * 迁移逻辑把它当成用户自己的订阅存了下来。结果用户从没添加过订阅，
+     * 列表里却有一条"默认订阅"。这里一次性移除，
+     * 判断条件严格限定在"名字是 默认订阅 且 地址是这个域名 且 从没更新成功过"，
+     * 用户自己加的 guovin 源（有更新时间或频道数）不会被动。
+     */
+    private void purgeLegacyDefaultSub() {
+        try {
+            android.content.SharedPreferences sp =
+                    getSharedPreferences(PREF, MODE_PRIVATE);
+            if (sp.getBoolean("legacy_sub_purged", false)) return;
+            for (com.mintv.tv.data.SubscriptionStore.Sub s :
+                    com.mintv.tv.data.SubscriptionStore.list(this)) {
+                String url = s.url == null ? "" : s.url;
+                if ("默认订阅".equals(s.name) && url.contains("guovin.github.io")
+                        && s.lastUpdate == 0 && s.channelCount == 0) {
+                    com.mintv.tv.data.SubscriptionStore.remove(this, s.id);
+                    android.util.Log.i("MinTV", "已移除遗留的默认订阅");
+                }
+            }
+            sp.edit().putBoolean("legacy_sub_purged", true).apply();
+        } catch (Throwable ignored) { }
     }
 
     private String buildSubsJson() {
@@ -2663,65 +2805,22 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                 o.put("url", s.url);
                 o.put("headers", s.headers == null ? "" : s.headers);
                 o.put("lastUpdate", s.lastUpdate);
+                o.put("count", s.channelCount);
                 o.put("active", s.id != null && s.id.equals(active));
                 arr.put(o);
             }
-            return arr.toString();
+            org.json.JSONObject root = new org.json.JSONObject();
+            root.put("subs", arr);
+            root.put("epgUrl", epgUrlOf(this));
+            root.put("headers", globalHeadersText());
+            root.put("port", remotePort);
+            root.put("ip", com.mintv.tv.data.LocalIp.get(this));
+            return root.toString();
         } catch (Throwable t) {
-            return "[]";
+            return "{\"subs\":[],\"epgUrl\":\"\",\"headers\":\"\"}";
         }
     }
 
-    /** 手机发来的遥控命令。全部转到主线程用现有逻辑执行。 */
-    private String handleRemoteCommand(final String type, final String value) {
-        if (type == null) return "noop";
-        ui.post(new Runnable() {
-            @Override public void run() {
-                try {
-                    if ("VOL_UP".equals(type)) { handleVolumeKey(KeyEvent.KEYCODE_VOLUME_UP); return; }
-                    if ("VOL_DOWN".equals(type)) { handleVolumeKey(KeyEvent.KEYCODE_VOLUME_DOWN); return; }
-                    if ("MUTE".equals(type)) { handleVolumeKey(KeyEvent.KEYCODE_VOLUME_MUTE); return; }
-                    if ("CH_UP".equals(type)) { moveChannel(-1); return; }
-                    if ("CH_DOWN".equals(type)) { moveChannel(1); return; }
-                    if ("SWITCH_SOURCE".equals(type)) { switchSource(1); return; }
-                    if ("EPG".equals(type)) { showEpgPanel(focus.chanIndex()); return; }
-                    if ("DIGIT".equals(type) && value != null && !value.isEmpty()) {
-                        for (int i = 0; i < value.length(); i++) {
-                            char c = value.charAt(i);
-                            if (c >= '0' && c <= '9') appendChannelDigit(c - '0');
-                        }
-                        return;
-                    }
-                    Integer kc = keyOf(type);
-                    if (kc != null) dispatchKey(kc);
-                } catch (Throwable t) {
-                    android.util.Log.w("MinTV", "远程命令失败: " + type + " " + t);
-                }
-            }
-        });
-        return "ok";
-    }
-
-    private static Integer keyOf(String type) {
-        switch (type) {
-            case "UP": return KeyEvent.KEYCODE_DPAD_UP;
-            case "DOWN": return KeyEvent.KEYCODE_DPAD_DOWN;
-            case "LEFT": return KeyEvent.KEYCODE_DPAD_LEFT;
-            case "RIGHT": return KeyEvent.KEYCODE_DPAD_RIGHT;
-            case "OK": return KeyEvent.KEYCODE_DPAD_CENTER;
-            case "BACK": return KeyEvent.KEYCODE_BACK;
-            case "MENU": return KeyEvent.KEYCODE_MENU;
-            case "HOME": return KeyEvent.KEYCODE_HOME;
-            default: return null;
-        }
-    }
-
-    private void dispatchKey(int keyCode) {
-        dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, keyCode));
-        dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, keyCode));
-    }
-
-    /** 手机的订阅增删改切。 */
     private String handleSubsAction(String action, org.json.JSONObject p) {
         try {
             if ("activate".equals(action)) {
@@ -2734,10 +2833,42 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                 });
                 return "{\"ok\":true}";
             }
+            if ("reload".equals(action)) {
+                final String id = p.optString("id");
+                ui.post(new Runnable() {
+                    @Override public void run() {
+                        com.mintv.tv.data.SubscriptionStore.Sub s =
+                                com.mintv.tv.data.SubscriptionStore.find(MainActivity.this, id);
+                        if (s != null) fetchSourceAsync(s.url);
+                    }
+                });
+                return "{\"ok\":true}";
+            }
             if ("remove".equals(action)) {
                 com.mintv.tv.data.SubscriptionStore.remove(this, p.optString("id"));
                 ui.post(new Runnable() {
                     @Override public void run() { rebuildHelperSubs(); }
+                });
+                return "{\"ok\":true}";
+            }
+            if ("epg".equals(action)) {
+                final String epgUrl = p.optString("url", "");
+                getSharedPreferences(PREF, MODE_PRIVATE).edit()
+                        .putString("epg_url", epgUrl).apply();
+                ui.post(new Runnable() {
+                    @Override public void run() {
+                        epg = null;
+                        loadEpgAsync();
+                    }
+                });
+                return "{\"ok\":true}";
+            }
+            if ("headers".equals(action)) {
+                final String h = p.optString("headers", "");
+                getSharedPreferences(PREF, MODE_PRIVATE).edit()
+                        .putString("global_headers", h).apply();
+                ui.post(new Runnable() {
+                    @Override public void run() { loadHeaders(); }
                 });
                 return "{\"ok\":true}";
             }
@@ -2943,7 +3074,11 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     private void refreshPlayInfo() {
         if (epg == null || playingChannel < 0 || playingChannel >= channels.size()) return;
         String id = epgIdOf.get(playingChannel);
-        if (id == null) { osd.setProgram(null, null, -1f); return; }
+        if (id == null) {
+            epgNowText = null; epgNextText = null; epgProgress = -1f;
+            osd.setProgram(null, null, -1f);
+            return;
+        }
         long now = System.currentTimeMillis();
         java.util.List<EpgParser.Program> list = epg.of(id);
         EpgParser.Program live = EpgParser.live(list, now);
@@ -2956,6 +3091,9 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         if (live != null && live.stopMs > live.startMs) {
             prog = (now - live.startMs) / (float) (live.stopMs - live.startMs);
         }
+        epgNowText = nowText;
+        epgNextText = nextText;
+        epgProgress = prog;
         osd.setProgram(nowText, nextText, prog);
     }
 
@@ -3508,7 +3646,18 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         ubLp.topMargin = Theme.px(24);
         infoPage.addView(updateBtn, ubLp);
-        card.addView(infoPage, new LinearLayout.LayoutParams(
+
+        // 内容在整页里垂直居中：外面套一层 LinearLayout，上下各加弹性空白。
+        // 之前是顶部对齐，内容少的时候下面一大片空，看起来像"没居中"。
+        LinearLayout infoWrap = new LinearLayout(this);
+        infoWrap.setOrientation(LinearLayout.VERTICAL);
+        infoWrap.setVisibility(View.GONE);
+        infoWrap.addView(new View(this), new LinearLayout.LayoutParams(1, 0, 1f));
+        infoWrap.addView(infoPage, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        infoWrap.addView(new View(this), new LinearLayout.LayoutParams(1, 0, 1f));
+        infoPageWrap = infoWrap;
+        card.addView(infoWrap, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, rowsLp.height));
 
         // ---------- 手机助手页：左二维码 + 右订阅列表 ----------
@@ -3638,7 +3787,13 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         rowScrollView.setVisibility(isSettings ? View.VISIBLE : View.GONE);
         if (helperPage != null) {
             helperPage.setVisibility(isHelper ? View.VISIBLE : View.GONE);
-            if (isHelper) refreshHelperPage();
+            if (isHelper) {
+                refreshHelperPage();
+                ui.removeCallbacks(helperTick);
+                ui.postDelayed(helperTick, 2000);
+            } else {
+                ui.removeCallbacks(helperTick);
+            }
         }
         if (!isSettings && !isHelper) {
             fillInfoPage(index);
@@ -3646,10 +3801,12 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                 updateBtn.setVisibility(index == TAB_ABOUT ? View.VISIBLE : View.GONE);
             }
             infoPage.setVisibility(View.VISIBLE);
+            if (infoPageWrap != null) infoPageWrap.setVisibility(View.VISIBLE);
         } else if (!isHelper) {
             infoPage.setVisibility(View.GONE);
         } else {
             infoPage.setVisibility(View.GONE);
+            if (infoPageWrap != null) infoPageWrap.setVisibility(View.GONE);
         }
     }
 
@@ -3751,22 +3908,91 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             return;
         }
         final String apkUrl = baseUrl + "apk/app-arm64-v8a-debug.apk";
+        // TV 上没人会去"复制地址"再挪到别处下载 —— 剪贴板在电视上没有意义。
+        // 按钮就叫「更新」和「退出」：更新 = 盒子自己下载并调起安装器，
+        // 退出 = 什么都不做，继续看。
         new android.app.AlertDialog.Builder(this)
                 .setTitle("发现新版本 " + (remoteName == null ? remote : remoteName))
                 .setMessage("当前版本：" + versionName() + "（" + local + "）\n"
                         + "最新版本：" + (remoteName == null ? "" : remoteName)
                         + "（" + remote + "）\n\n"
-                        + "下载地址：\n" + apkUrl)
-                .setPositiveButton("复制地址", new android.content.DialogInterface.OnClickListener() {
+                        + "更新会下载约 46MB，装好后自动重启应用。")
+                .setPositiveButton("更新", new android.content.DialogInterface.OnClickListener() {
                     @Override public void onClick(android.content.DialogInterface d, int w) {
-                        android.content.ClipboardManager cm = (android.content.ClipboardManager)
-                                getSystemService(CLIPBOARD_SERVICE);
-                        cm.setPrimaryClip(android.content.ClipData.newPlainText("mintv", apkUrl));
-                        tip("地址已复制");
+                        downloadAndInstall(apkUrl);
                     }
                 })
-                .setNegativeButton("知道了", null)
+                .setNegativeButton("退出", null)
                 .show();
+    }
+
+    /**
+     * 下载 APK 并调起系统安装器。
+     *
+     * <p>不需要「安装未知应用」权限也能弹安装器：Android 8+ 会跳设置页
+     * 让用户为本应用打开该权限，用户允许后回来再点一次即可。
+     * 文件放 cacheDir，通过 FileProvider 共享 —— 直接传 file:// 在
+     * Android 7+ 会抛 FileUriExposedException。
+     */
+    private void downloadAndInstall(final String url) {
+        tip("开始下载更新…");
+        new Thread(new Runnable() {
+            @Override public void run() {
+                java.io.File out = new java.io.File(getCacheDir(), "update.apk");
+                boolean ok = false;
+                java.net.HttpURLConnection conn = null;
+                java.io.InputStream in = null;
+                java.io.FileOutputStream fo = null;
+                try {
+                    conn = (java.net.HttpURLConnection) new java.net.URL(url).openConnection();
+                    conn.setConnectTimeout(10000);
+                    conn.setReadTimeout(30000);
+                    conn.setRequestProperty("User-Agent", "MinTV/" + versionName());
+                    conn.setInstanceFollowRedirects(true);
+                    if (conn.getResponseCode() == 200) {
+                        in = conn.getInputStream();
+                        fo = new java.io.FileOutputStream(out);
+                        byte[] buf = new byte[16384];
+                        int n;
+                        while ((n = in.read(buf)) > 0) fo.write(buf, 0, n);
+                        fo.flush();
+                        ok = out.length() > 1024 * 1024;   // 小于 1MB 肯定是错的
+                    }
+                } catch (Throwable ignored) {
+                } finally {
+                    try { if (fo != null) fo.close(); } catch (Throwable ignored) { }
+                    try { if (in != null) in.close(); } catch (Throwable ignored) { }
+                    try { if (conn != null) conn.disconnect(); } catch (Throwable ignored) { }
+                }
+                final boolean success = ok;
+                ui.post(new Runnable() {
+                    @Override public void run() {
+                        if (!success) { tip("下载失败，检查网络后重试"); return; }
+                        installApk(new java.io.File(getCacheDir(), "update.apk"));
+                    }
+                });
+            }
+        }, "update-dl").start();
+    }
+
+    private void installApk(java.io.File apk) {
+        try {
+            android.content.Intent i = new android.content.Intent(android.content.Intent.ACTION_VIEW);
+            android.net.Uri uri;
+            if (android.os.Build.VERSION.SDK_INT >= 24) {
+                uri = androidx.core.content.FileProvider.getUriForFile(
+                        this, getPackageName() + ".fileprovider", apk);
+                i.addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            } else {
+                uri = android.net.Uri.fromFile(apk);
+            }
+            i.setDataAndType(uri, "application/vnd.android.package-archive");
+            i.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(i);
+            tip("请按提示完成安装");
+        } catch (Throwable t) {
+            tip("无法调起安装器：" + t.getClass().getSimpleName());
+        }
     }
 
     private String httpGet(String url) {

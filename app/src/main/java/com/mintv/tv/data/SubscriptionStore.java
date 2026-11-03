@@ -192,6 +192,15 @@ public final class SubscriptionStore {
         if (activeId == null && !cache.isEmpty()) activeId = cache.get(0).id;
     }
 
+    /** 按 id 找一条。找不到返回 null。 */
+    public static Sub find(Context c, String id) {
+        if (id == null) return null;
+        for (Sub s : list(c)) {
+            if (id.equals(s.id)) return s;
+        }
+        return null;
+    }
+
     /** 用传入的条目替换同 id 的那条（用于回写频道数、更新时间等）。 */
     public static void update(Context c, Sub sub) {
         if (sub == null || sub.id == null) return;

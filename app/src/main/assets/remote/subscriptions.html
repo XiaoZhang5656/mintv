@@ -3,113 +3,210 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="theme-color" content="#0B0B0C">
 <title>MinTV · 订阅管理</title>
 <link rel="stylesheet" href="app.css">
-
+<style>
+  .sub{display:flex;align-items:center;gap:8px}
+  .tag{font-size:11px;padding:2px 7px;border-radius:5px;background:var(--card2);color:var(--muted)}
+  .tag.on{background:rgba(46,168,90,.16);color:#2EA85A}
+  .u{font-size:12px;color:var(--muted);word-break:break-all;margin-top:6px;font-family:ui-monospace,monospace}
+  .acts{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}
+  .acts button{flex:0 0 auto;padding:9px 16px;border-radius:10px;border:0;font-size:14px;
+    background:var(--card2);color:var(--text)}
+  .acts button.primary{background:var(--blue-dim);color:var(--blue);font-weight:600}
+  .acts button.danger{color:#E5484D}
+  .acts button:active{transform:scale(.96)}
+  .cur{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;
+       font-size:13px;color:var(--muted)}
+  .cur b{color:var(--text);font-weight:600}
+</style>
 </head>
 <body>
 
-<div class="hd">
-  <span class="dot"></span><h1>MinTV 订阅管理</h1>
+<div class="head">
+  <div class="grow">
+    <h1>订阅管理</h1>
+    <div class="sub"><span class="dot" id="dot"></span><span id="conn">连接中…</span></div>
+  </div>
   <button class="themebtn" data-theme-btn onclick="MintvTheme.cycle()">跟随系统</button>
 </div>
-<div class="ip">已连接 · 192.168.1.23 · 开机 3 小时 12 分</div>
 
-<div class="sec">订阅列表 <b>当前：央视+卫视</b></div>
+<p class="sect">
+  <span>订阅列表</span>
+  <span id="curName" style="float:right"></span>
+</p>
+<div id="list"></div>
 
-<div class="sub-item active">
-  <div class="top">
-    <span class="nm">央视+卫视</span>
-    <span class="tag live">使用中</span>
-    <span class="tag">m3u</span>
-  </div>
-  <div class="url">https://guovin.github.io/iptv-api/result.m3u</div>
-  <div class="act">
-    <button class="primary">更新内容</button>
-    <button>编辑</button>
-  </div>
-</div>
-
-<div class="sub-item">
-  <div class="top">
-    <span class="nm">酒店源（备用）</span>
-    <span class="tag">txt</span>
-  </div>
-  <div class="url">http://example.com/hotel.txt</div>
-  <div class="act">
-    <button class="primary">切换到此源</button>
-    <button>编辑</button>
-    <button class="danger">删除</button>
-  </div>
-</div>
-
-<div class="sec">添加订阅</div>
+<p class="sect">添加订阅</p>
 <div class="card">
-  <label>名称</label>
-  <input placeholder="例如：省内源">
-  <label>地址（支持 m3u / m3u8 / txt）</label>
-  <input placeholder="https://… 或 http://…">
-  <div class="row">
-    <div>
-      <label>格式</label>
-      <select><option>自动识别</option><option>m3u</option><option>txt</option></select>
-    </div>
-    <div>
-      <label>请求头（可选）</label>
-      <input placeholder="UA / Referer">
-    </div>
-  </div>
-  <div class="hint">保存后会立刻在盒子上下载并解析，失败会在盒子上提示。</div>
+  <label class="lbl">名称</label>
+  <input id="fName" placeholder="例如：省内源">
+  <label class="lbl">地址（m3u / m3u8 / txt）</label>
+  <input id="fUrl" placeholder="https://…">
+  <label class="lbl">请求头（可选，留空用内核默认 UA）</label>
+  <input id="fHdr" placeholder="可留空">
+  <p class="hint">这个订阅单独填的请求头会覆盖全局设置。</p>
+  <button class="primary big" onclick="addSub()">添加</button>
 </div>
 
-<div class="sec">EPG 节目单</div>
+<p class="sect">EPG 节目单</p>
 <div class="card">
-  <div class="sw"><span>启用 EPG</span><span class="toggle on"></span></div>
-  <label>EPG 地址</label>
-  <input value="https://epg.51zmt.top:8001/e.xml.gz">
-  <div class="hint">留空则关闭。支持 xml / xml.gz。</div>
+  <label class="lbl">EPG 地址（留空关闭）</label>
+  <input id="fEpg" placeholder="https://…/e.xml.gz">
+  <p class="hint">支持 xml 与 xml.gz。</p>
 </div>
 
-<div class="sec">全局请求头</div>
+<p class="sect">全局请求头</p>
 <div class="card">
-  <textarea placeholder="User-Agent=okhttp/3.12.0&#10;Referer=http://example.com/">User-Agent=okhttp/3.12.0</textarea>
-  <div class="hint">一行一条，对所有订阅生效；订阅里单独写的会覆盖这里。</div>
+  <textarea id="fGlob" rows="4" placeholder="一行一条"></textarea>
+  <p class="hint">对所有订阅生效；订阅里单独写的会覆盖这里。</p>
 </div>
 
-<button class="save" id="save">保存并让盒子生效</button>
+<button class="primary big" onclick="saveAll()">保存并让盒子生效</button>
+
 <div class="toast" id="toast"></div>
 
 <script src="theme.js"></script>
 <script>
-(function(){
-  document.querySelectorAll('.toggle').forEach(function(t){
-    t.addEventListener('click', function(){ t.classList.toggle('on'); });
+var data = { subs: [], epgUrl: '', headers: '' };
+
+function toast(s) {
+  var t = document.getElementById('toast');
+  t.textContent = s; t.classList.add('on');
+  clearTimeout(t._h); t._h = setTimeout(function () { t.classList.remove('on'); }, 1800);
+}
+
+function fmt(s) {
+  var u = (s.url || '').toLowerCase().split('?')[0];
+  if (u.endsWith('.m3u8')) return 'm3u8';
+  if (u.endsWith('.m3u')) return 'm3u';
+  if (u.endsWith('.txt')) return 'txt';
+  return 'url';
+}
+
+function esc(s) {
+  return String(s || '').replace(/[&<>"]/g, function (c) {
+    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
   });
-  document.getElementById('save').addEventListener('click', function(){
-    var el = document.getElementById('toast');
-    el.textContent = '已保存，盒子正在重新加载…';
-    el.classList.add('show');
-    setTimeout(function(){
-  var KEY = 'mintv-theme';
-  var btn = document.getElementById('theme');
-  var modes = ['auto','light','dark'];
-  var labels = {auto:'跟随系统', light:'浅色', dark:'深色'};
-  var cur = localStorage.getItem(KEY) || 'auto';
-  function apply(){
-    if (cur === 'auto') document.documentElement.removeAttribute('data-theme');
-    else document.documentElement.setAttribute('data-theme', cur);
-    btn.textContent = labels[cur];
+}
+
+function render() {
+  var box = document.getElementById('list');
+  if (!data.subs.length) {
+    box.innerHTML = '<div class="card empty">还没有订阅。<br>在下面填地址添加第一条。</div>';
+    document.getElementById('curName').textContent = '';
+    return;
   }
-  btn.addEventListener('click', function(){
-    cur = modes[(modes.indexOf(cur) + 1) % modes.length];
-    localStorage.setItem(KEY, cur);
-    apply();
+  box.innerHTML = data.subs.map(function (s) {
+    var on = s.active;
+    var acts = on
+      ? '<button class="primary" onclick="reload(\'' + s.id + '\')">更新内容</button>'
+      : '<button class="primary" onclick="activate(\'' + s.id + '\')">切换到此源</button>';
+    acts += '<button onclick="edit(\'' + s.id + '\')">编辑</button>' +
+            '<button class="danger" onclick="del(\'' + s.id + '\')">删除</button>';
+    return '<div class="card' + (on ? ' active' : '') + '">' +
+      '<div class="row" style="align-items:baseline;gap:8px">' +
+        '<b style="font-size:16px">' + esc(s.name || '未命名') + '</b>' +
+        '<span class="tag' + (on ? ' on' : '') + '">' + (on ? '使用中' : '备用') + '</span>' +
+        '<span class="tag">' + fmt(s) + '</span>' +
+        '<span class="grow"></span>' +
+        '<span class="tag">' + (s.count || 0) + ' 个频道</span>' +
+      '</div>' +
+      '<div class="u">' + esc(s.url) + '</div>' +
+      '<div class="acts">' + acts + '</div>' +
+    '</div>';
+  }).join('');
+
+  var act = data.subs.filter(function (s) { return s.active; })[0];
+  document.getElementById('curName').innerHTML = act
+      ? '当前：<b>' + esc(act.name) + '</b>' : '';
+}
+
+function load() {
+  MintvApi.subs().then(function (d) {
+    if (!d) return;
+    data = d;
+    render();
+    document.getElementById('dot').className = 'dot ok';
+    document.getElementById('conn').textContent =
+        '已连接 · ' + (d.ip || '') + (d.port ? ':' + d.port : '');
+    var ae = document.activeElement;
+    if (!ae || (ae.tagName !== 'INPUT' && ae.tagName !== 'TEXTAREA')) {
+      document.getElementById('fEpg').value = d.epgUrl || '';
+      document.getElementById('fGlob').value = d.headers || '';
+    }
+  }).catch(function () {
+    document.getElementById('dot').className = 'dot';
+    document.getElementById('conn').textContent = '连接断开';
   });
-  apply();
- el.classList.remove('show'); }, 1800);
+}
+
+function addSub() {
+  var name = document.getElementById('fName').value.trim();
+  var url = document.getElementById('fUrl').value.trim();
+  var hdr = document.getElementById('fHdr').value.trim();
+  if (!url) { toast('地址不能为空'); return; }
+  MintvApi.subsAction('save', { name: name || '未命名', url: url, headers: hdr })
+    .then(function (r) {
+      if (r && r.ok) {
+        toast('已添加');
+        document.getElementById('fName').value = '';
+        document.getElementById('fUrl').value = '';
+        document.getElementById('fHdr').value = '';
+        load();
+      } else toast((r && r.msg) || '添加失败');
+    });
+}
+
+function activate(id) {
+  MintvApi.subsAction('activate', { id: id }).then(function (r) {
+    toast(r && r.ok ? '已切换，盒子正在重载' : '切换失败');
+    setTimeout(load, 800);
   });
-})();
+}
+
+function reload(id) {
+  toast('正在让盒子重新拉取…');
+  MintvApi.subsAction('reload', { id: id }).then(function (r) {
+    toast(r && r.ok ? '已开始更新' : '更新失败');
+    setTimeout(load, 1500);
+  });
+}
+
+function del(id) {
+  if (!confirm('删除这条订阅？')) return;
+  MintvApi.subsAction('remove', { id: id }).then(function () {
+    toast('已删除'); load();
+  });
+}
+
+function edit(id) {
+  var s = data.subs.filter(function (x) { return x.id === id; })[0];
+  if (!s) return;
+  var n = prompt('名称', s.name || '');
+  if (n === null) return;
+  var u = prompt('地址', s.url || '');
+  if (u === null) return;
+  var h = prompt('请求头（可留空）', s.headers || '');
+  if (h === null) h = '';
+  MintvApi.subsAction('save', { id: id, name: n, url: u, headers: h })
+    .then(function () { toast('已保存'); load(); });
+}
+
+function saveAll() {
+  var epg = document.getElementById('fEpg').value.trim();
+  var glob = document.getElementById('fGlob').value;
+  Promise.all([
+    MintvApi.subsAction('epg', { url: epg }),
+    MintvApi.subsAction('headers', { headers: glob })
+  ]).then(function () {
+    toast('已保存，盒子已应用');
+    load();
+  }).catch(function () { toast('保存失败'); });
+}
+
+load();
+MintvPoll(load, 5000);
 </script>
 </body>
 </html>

@@ -14,8 +14,8 @@ android {
         // 两个一起用，卡在 19。要到 4.2.2(17) 就必须砍掉 media3。
         minSdk 19
         targetSdk 34
-        versionCode 94
-        versionName "2.9.0"
+        versionCode 95
+        versionName "2.9.1"
 
         // 注意：这里不能再写 ndk { abiFilters ... }。
         // AGP 会直接报 "Conflicting configuration : 'arm64-v8a,armeabi-v7a'
@@ -84,6 +84,7 @@ dependencies {
 
     // 二维码生成：只有 core，纯算法、无 Android UI 依赖（约 600KB）
     implementation 'com.google.zxing:core:3.5.3'
+    implementation 'androidx.core:core:1.12.0'
 
     // VLC：最后的兜底，格式覆盖最广。
     //
