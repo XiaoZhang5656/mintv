@@ -457,6 +457,56 @@ public class OsdView extends View {
         }
     }
 
+    /**
+     * 画播放器通用图标。
+     *
+     * <p>0 = 上一集（◀◀ 双三角 + 竖线），1 = 暂停/播放，2 = 下一集。
+     * 全部用 Path 画，不依赖字体里的三角符号 —— 不同设备上
+     * "▶" 这类字符宽度和基线与中文差别很大，对不齐。
+     */
+    private void drawPlayIcon(Canvas c, int which, float cx, float cy, int color) {
+        float s = Theme.px(11);          // 单个三角形的高度一半
+        float w = s * 0.9f;              // 三角形宽度
+        float g = Theme.px(4);           // 双三角间距
+        android.graphics.Path path = new android.graphics.Path();
+        fill.setColor(color);
+        fill.setStyle(Paint.Style.FILL);
+
+        if (which == 1) {
+            if (paused) {
+                // 播放：一个右向三角
+                path.reset();
+                path.moveTo(cx - w * 0.5f, cy - s);
+                path.lineTo(cx + w * 1.1f, cy);
+                path.lineTo(cx - w * 0.5f, cy + s);
+                path.close();
+                c.drawPath(path, fill);
+            } else {
+                // 暂停：两条竖条
+                float bw2 = Theme.px(5), bh2 = s * 1.7f;
+                r.set(cx - Theme.px(7), cy - bh2 / 2f, cx - Theme.px(7) + bw2, cy + bh2 / 2f);
+                c.drawRoundRect(r, Theme.px(2), Theme.px(2), fill);
+                r.set(cx + Theme.px(2), cy - bh2 / 2f, cx + Theme.px(2) + bw2, cy + bh2 / 2f);
+                c.drawRoundRect(r, Theme.px(2), Theme.px(2), fill);
+            }
+            return;
+        }
+
+        // 上一集 / 下一集：双三角 + 一条竖线
+        float dir = (which == 0) ? -1f : 1f;
+        for (int k = 0; k < 2; k++) {
+            float ox = cx + dir * (k * (w + g) - (w + g) / 2f) - dir * Theme.px(4);
+            path.reset();
+            path.moveTo(ox + dir * w * 0.5f, cy - s);
+            path.lineTo(ox - dir * w * 0.5f, cy);
+            path.lineTo(ox + dir * w * 0.5f, cy + s);
+            path.close();
+            c.drawPath(path, fill);
+        }
+        r.set(cx + dir * Theme.px(16), cy - s, cx + dir * Theme.px(16) + Theme.px(4), cy + s);
+        c.drawRoundRect(r, Theme.px(2), Theme.px(2), fill);
+    }
+
     private long pctToMs(float x) {
         float left = barRect.left, right = barRect.right;
         if (right <= left) return 0;
@@ -486,11 +536,16 @@ public class OsdView extends View {
         float chipH = Theme.px(26);
         float gap = Theme.px(10);
 
+        float ctlH = Theme.px(46);
+        // 进度条现在常驻（直播画灰槽），控制条也常驻 ——
+        // 两行都必须算进高度，否则内容会画到卡片外面，
+        // 出现"文字叠在另一行上"的重叠（实测截图就是这么糊的）。
         float contentH = padH
                 + lineTitle + gap
                 + (nowText != null ? lineSub + gap : 0)
-                + (progress >= 0 ? barH + gap : 0)
+                + barH + gap
                 + (nextText != null ? lineSub + gap : 0)
+                + ctlH + gap
                 + chipH + padH;
         float cardH = contentH;
         // 底部居中，但要让开左侧面板：剩下的那块区域里居中。
@@ -594,22 +649,19 @@ public class OsdView extends View {
 
         // ---- 第 4 行：播放控制按钮（上一台 / 暂停·播放 / 下一台）----
         {
-            float bw = Theme.px(120), bh = Theme.px(46);
-            float gapB = Theme.px(14);
+            // 通用播放器图标：◀◀ 上一集 / ⏸·▶ 暂停继续 / ▶▶ 下一集。
+            // 用文字"上一台/下一台"既不合播放器惯例，又占地方。
+            float bw = Theme.px(104), bh = Theme.px(46);
+            float gapB = Theme.px(12);
             float totalW = bw * 3 + gapB * 2;
             float bx = rowX;
-            String[] labels = {"上一台", paused ? "播放" : "暂停", "下一台"};
             for (int i = 0; i < 3; i++) {
                 float l = bx + i * (bw + gapB);
-                int ctl = i;
+                boolean primary = (i == 1);
                 r.set(l, y, l + bw, y + bh);
-                fill.setColor(ctl == 1 ? 0xFF2F7BFF : 0x33FFFFFF);
+                fill.setColor(primary ? 0xFF2F7BFF : 0x33FFFFFF);
                 c.drawRoundRect(r, bh / 2f, bh / 2f, fill);
-                p.setColor(0xFFFFFFFF);
-                p.setTextSize(Theme.sp(17));
-                p.setTextAlign(Paint.Align.CENTER);
-                c.drawText(labels[i], l + bw / 2f, y + bh / 2f - (p.ascent() + p.descent()) / 2f, p);
-                p.setTextAlign(Paint.Align.LEFT);
+                drawPlayIcon(c, i, l + bw / 2f, y + bh / 2f, primary ? 0xFFFFFFFF : 0xFFE6E6E6);
             }
             ctlRect.set(bx, y - Theme.px(8), bx + totalW, y + bh + Theme.px(8));
             ctlShown = true;

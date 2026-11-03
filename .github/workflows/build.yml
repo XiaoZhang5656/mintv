@@ -23,14 +23,8 @@ jobs:
       - name: Show Android SDK
         run: ls "$ANDROID_HOME/platforms" || true
 
-      # runner 自带 debug.keystore 每次都是新的，固定一份保证可覆盖升级
-      - name: Stable debug keystore
-        run: |
-          rm -f app/debug.keystore
-          keytool -genkeypair -v -keystore app/debug.keystore \
-            -storepass android -keypass android \
-            -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 \
-            -dname "CN=Android Debug,O=Android,C=US"
+      # 签名用仓库里的 app/mintv.keystore（固定），不再每次现场生成。
+      # 现场生成的后果：每次 SHA256 不同 → 必须卸载才能装新版。
 
       - uses: gradle/actions/setup-gradle@v3
         with:

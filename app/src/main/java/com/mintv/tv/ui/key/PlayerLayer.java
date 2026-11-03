@@ -68,6 +68,14 @@ public final class PlayerLayer implements KeyLayer {
                 host.showPanel();
                 return true;
 
+            case KeyEvent.KEYCODE_DPAD_CENTER:
+            case KeyEvent.KEYCODE_ENTER:
+                // 纯播放态按 OK：唤回面板。
+                // 以前没处理，事件一路漏到 Activity 的默认行为，
+                // 表现就是"黑屏时按确认没有任何反应"。
+                host.showPanel();
+                return true;
+
             default:
                 if (code >= KeyEvent.KEYCODE_0 && code <= KeyEvent.KEYCODE_9) {
                     host.appendDigit(code - KeyEvent.KEYCODE_0);
