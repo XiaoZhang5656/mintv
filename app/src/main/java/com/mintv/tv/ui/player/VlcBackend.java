@@ -96,11 +96,33 @@ public final class VlcBackend implements PlaybackBackend {
     private long speedLastWall = 0;
     private float speedEma = 1f;      // 指数滑动平均，压掉瞬时抖动
 
+    /**
+     * 最近一次 EncounteredError 的时刻，0 = 当前没报错。
+     *
+     * <p>为什么单独记：源断了以后，VLC 缓冲区里剩下的内容还会继续播几秒，
+     * getTime() 照常递增 —— 实时倍率算出来还是 1.00x，位置判据和速度判据
+     * 都不会动。用户看到的是「画面卡在最后一帧、右上角写着源失效」，
+     * 而程序觉得一切正常。必须把"报错"这个信号单独接进判据。
+     */
+    private long errorAt = 0;
+
     private final Runnable tick = new Runnable() {
         @Override public void run() {
             if (released || player == null) return;
             long t = 0;
             try { t = player.getTime(); } catch (Throwable ignored) { }
+            // 源报错时强制按"速度 0"上报。
+            //
+            // 这段时间缓冲还在播（getTime 递增），正常采样会算出 1.00x，
+            // 两条判据都不会动。强制 0 之后，速度判据的计时会正常推进，
+            // 到达「超时换源」秒数就自动换下一条。重连成功收到 Playing
+            // 时 errorAt 归零，恢复正常采样。
+            if (errorAt > 0) {
+                if (cb != null) cb.onRealtimeSpeed(0f);
+                if (cb != null) cb.onTimeline(t, duration, 0);
+                main.postDelayed(this, 500);
+                return;
+            }
             if (cb != null && t > 0) {
                 long wall = android.os.SystemClock.uptimeMillis();
                 if (speedLastTime > 0 && wall > speedLastWall) {
@@ -447,6 +469,7 @@ public final class VlcBackend implements PlaybackBackend {
         pausedByUser = false;
         tracksSig = null;
         speedLastTime = -1;
+        errorAt = 0;
         speedLastWall = 0;
         speedEma = 1f;
         this.mode = m;
@@ -467,6 +490,9 @@ public final class VlcBackend implements PlaybackBackend {
             @Override public void onEvent(MediaPlayer.Event event) {
                 switch (event.type) {
                     case MediaPlayer.Event.Playing:
+                        // VLC 带 --http-reconnect，断流会自动重连，
+                        // 重连成功会重新收到 Playing —— 这时清掉报错标记。
+                        errorAt = 0;
                         emit(State.READY);
                         break;
                     case MediaPlayer.Event.Buffering:
@@ -481,6 +507,7 @@ public final class VlcBackend implements PlaybackBackend {
                         }
                         break;
                     case MediaPlayer.Event.EncounteredError:
+                        errorAt = android.os.SystemClock.uptimeMillis();
                         emit(State.ERROR);
                         if (cb != null) cb.onError("VLC 播放失败");
                         break;
