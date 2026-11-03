@@ -21,6 +21,15 @@ import java.util.Map;
  * 否则用户在设置里点死 VLC，一黑屏又被改回 Exo，等于设置不生效。
  */
 public final class PlayerManager implements PlaybackBackend {
+    /** 引擎切换完成后的回调（由调用方设置，用来接着发起播放）。 */
+    private Runnable onSwapped;
+
+    /** 设置切换完成回调。为空表示不需要。 */
+    public void setOnSwapped(Runnable r) { this.onSwapped = r; }
+
+    private final android.os.Handler mainThread = new android.os.Handler(
+            android.os.Looper.getMainLooper());
+
 
     private static final String TAG = "PlayerManager";
 
@@ -73,18 +82,69 @@ public final class PlayerManager implements PlaybackBackend {
         }
     }
 
+    /**
+     * 切换内核。
+     *
+     * <p><b>为什么不能同步做</b>：libVLC 的 detachViews / stop / release
+     * 三个调用都会去抢它的内部 mutex（实测主线程 native 栈：
+     * {@code NonPI::MutexLockWithTimeout} → {@code libvlc 内部}，
+     * utm 到 450ms、累计 5.3 秒），在解复用线程还没退出时能等好几秒。
+     * 放在主线程就是 ANR；而表面看着像"闪退"，因为系统会杀进程。
+     *
+     * <p>所以拆成两阶段：
+     * <ol>
+     *   <li>主线程：把回调摘掉，避免旧实例再往 UI 发消息；</li>
+     *   <li>后台线程：detachViews → stop → release（全部阻塞都在这）；</li>
+     *   <li>回主线程：建新实例、绑画面。</li>
+     * </ol>
+     * 旧实例在后台释放期间，Surface 已经先被 detach 掉，不会再出现
+     * use-after-free（Surface 回调打到已释放对象上）。
+     */
     private void rebuild() {
-        if (impl != null) {
-            impl.setCallback(null);
-            impl.release();
-            impl = null;
+        final PlaybackBackend old = impl;
+        impl = null;
+        if (old != null) old.setCallback(null);
+
+        final Runnable buildNew = new Runnable() {
+            @Override public void run() {
+                switch (engine) {
+                    case VLC: impl = new VlcBackend(); break;
+                    default: impl = new Media3Backend(); break;
+                }
+                impl.setCallback(cb);
+                bindSurface();
+            }
+        };
+
+        if (old == null) {
+            buildNew.run();
+            return;
         }
-        switch (engine) {
-            case VLC: impl = new VlcBackend(); break;
-            default: impl = new Media3Backend(); break;
+
+        // 主线程先把画面从旧实例上摘下来（这一步只是清引用，不碰 native）
+        if (old instanceof VlcBackend) {
+            ((VlcBackend) old).detachViewsSafe();
         }
-        impl.setCallback(cb);
-        bindSurface();
+
+        new Thread(new Runnable() {
+            @Override public void run() {
+                // 阻塞调用全在这里：detach / stop / release
+                try { old.release(); } catch (Throwable ignored) { }
+                Runnable done = new Runnable() {
+                    @Override public void run() {
+                        buildNew.run();
+                        // 切换是异步的，调用方不能紧接着 play()（那时 impl 还是 null）。
+                        // 用回调通知"新内核已就绪"，由调用方在这里发起播放。
+                        if (onSwapped != null) {
+                            Runnable r = onSwapped;
+                            onSwapped = null;
+                            r.run();
+                        }
+                    }
+                };
+                if (mainThread != null) mainThread.post(done); else done.run();
+            }
+        }, "engine-swap").start();
     }
 
     private void bindSurface() {

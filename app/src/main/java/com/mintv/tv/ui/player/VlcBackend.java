@@ -283,6 +283,44 @@ public final class VlcBackend implements PlaybackBackend {
         } catch (Throwable ignored) { }
     }
 
+    /**
+     * 当前是否在播。
+     *
+     * <p>以前没实现这个，接口给了 default { return true; } ——
+     * 于是"暂停/继续"永远走"正在播→暂停"分支，点了暂停就再也恢复不了。
+     *
+     * <p>libVLC 的 isPlaying() 在暂停后返回 false，正好符合语义。
+     */
+    @Override public boolean isPlaying() {
+        if (player == null) return false;
+        try { return player.isPlaying(); } catch (Throwable t) { return false; }
+    }
+
+    @Override public void pause() {
+        if (player == null) return;
+        try { player.pause(); } catch (Throwable ignored) { }
+    }
+
+    @Override public void resume() {
+        if (player == null) return;
+        try { player.play(); } catch (Throwable ignored) { }
+    }
+
+    /**
+     * 只摘画面，不做任何释放动作。
+     *
+     * <p>由 PlayerManager 在换内核时于主线程调用 —— 因为 Surface 相关操作
+     * 最好留在主线程，而 stop/release 那些会抢 mutex 的调用在后台做。
+     * detachViews 本身如果也卡（VLC 内部要等 vout 线程），会被 surfaceDestroyed
+     * 自然兜住，不会死锁。
+     */
+    public void detachViewsSafe() {
+        final org.videolan.libvlc.MediaPlayer p = player;
+        if (p == null || !viewsAttached) return;
+        viewsAttached = false;
+        try { p.getVLCVout().detachViews(); } catch (Throwable ignored) { }
+    }
+
     @Override public boolean supportsHeaders() { return true; }
 
     /**
@@ -356,9 +394,11 @@ public final class VlcBackend implements PlaybackBackend {
         // native 侧把 LibVLC 销毁后，Surface 的尺寸/销毁回调仍会打到
         // 已经释放的对象上 —— use-after-free，进程直接 SIGSEGV。
         // 这就是"切内核必闪退"的根因。
+        // detach 已由 detachViewsSafe() 在换内核时于主线程做过；
+        // 这里兜底一次（比如 release 被单独调用），但不在主线程做重活。
         if (viewsAttached && p != null) {
-            try { p.getVLCVout().detachViews(); } catch (Throwable ignored) { }
             viewsAttached = false;
+            try { p.getVLCVout().detachViews(); } catch (Throwable ignored) { }
         }
 
         // 释放同样走后台：LibVLC.release() 会等内部回放线程收尾

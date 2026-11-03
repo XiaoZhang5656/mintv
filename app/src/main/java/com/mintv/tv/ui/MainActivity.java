@@ -379,6 +379,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                 retryDone = true;
                 if (playerManager != null && playerManager.degrade()) {
                     osd.setStatus("切换解码器…");
+                    // 用独立入口：保留线路 + 不清 retryDone（防止来回切）
                     playChannelInternal(playingChannel, true);   // 保留线路
                 } else {
                     // 没有下一张牌了：按普通错误处理
@@ -4852,8 +4853,17 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             }
             resetNoVideoStage();
             markEngineAttempt(e);
+            // rebuildEngine 是异步的（要等旧实例在后台释放完）。
+            // 直接 play() 会因为 impl 还是 null 而什么都不做 ——
+            // 这就是"切了内核但不生效"的原因。改成等就绪再播。
+            if (playerManager != null) {
+                playerManager.setOnSwapped(new Runnable() {
+                    @Override public void run() {
+                        playChannel(playingChannel);
+                    }
+                });
+            }
             rebuildEngine(e, true);
-            playChannel(playingChannel);
         } else if (row == ROW_HEADERS) {
             openHeaderEditor();
         } else if (row == ROW_AUTOPLAY) {
