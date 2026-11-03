@@ -29,6 +29,9 @@ public final class PlayerManager implements PlaybackBackend {
     private SurfaceView surfaceView;
     private TextureView textureView;
     private Callback cb;
+    /** 解码方式要存住：release() 后 impl 会重建，新实例不记得旧值。 */
+    private int decodeMode = 0;
+    private int aspectMode = 0;
 
     public PlayerManager(Context ctx) {
         impl = new VlcBackend();
@@ -41,6 +44,7 @@ public final class PlayerManager implements PlaybackBackend {
 
     public void setSurfaceView(SurfaceView sv) {
         this.surfaceView = sv;
+        if (sv != null) this.textureView = null;   // 互斥，避免 play() 里两个都补绑
         if (impl != null) impl.setSurfaceView(sv);
     }
 
@@ -58,11 +62,13 @@ public final class PlayerManager implements PlaybackBackend {
      */
     @Override public void setTextureView(TextureView tv) {
         this.textureView = tv;
+        if (tv != null) this.surfaceView = null;   // 互斥
         if (impl != null) impl.setTextureView(tv);
     }
 
     /** 解码方式：0=自动 1=内置硬解 2=软件解码。 */
     public void setDecoderMode(int mode) {
+        this.decodeMode = mode;
         if (impl != null) impl.setHwMode(mode);
     }
 
@@ -77,6 +83,7 @@ public final class PlayerManager implements PlaybackBackend {
 
     /** 画面比例。0=自动适应 1=16:9 2=4:3 3=原始 4=铺满 */
     public void setAspectMode(int mode) {
+        this.aspectMode = mode;
         if (impl != null) impl.setAspectMode(mode);
     }
 
@@ -86,7 +93,15 @@ public final class PlayerManager implements PlaybackBackend {
 
     /** 带请求头的播放入口（不属于接口，调用方直接用）。 */
     public void play(Context appCtx, String url, Map<String, String> headers, Mode mode) {
-        if (impl == null) impl = new VlcBackend();
+        if (impl == null) {
+            // 重建内核（比如切换画面输出 / release 之后）：
+            // 回调、解码方式、画面比例全部要补回去，否则新实例是"失忆"的
+            // —— 播放事件没人收，OSD 不更新、首帧回调不到、卡顿检测失灵。
+            impl = new VlcBackend();
+            impl.setHwMode(decodeMode);
+            impl.setAspectMode(aspectMode);
+            if (cb != null) impl.setCallback(cb);
+        }
         if (headers == null) headers = java.util.Collections.emptyMap();
         // 两个都补一遍：VLC 实例重建后 attachedTarget 已清空，
         // 必须有人重新把当前生效的那个视图递进去，否则同样不出画面。

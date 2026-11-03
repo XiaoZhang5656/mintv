@@ -128,8 +128,33 @@ public final class VlcBackend implements PlaybackBackend {
 
     /** VLC 只认 SurfaceView（内部走 IVLCVout.attachViews）。TextureView 出不了图。 */
     public void setSurfaceView(SurfaceView sv) {
+        if (sv == null) {
+            // 明确解绑：切到 TextureView 时调用
+            if (attachedTarget == surfaceView) detachOutput();
+            surfaceView = null;
+            return;
+        }
+        textureView = null;      // 互斥：同一时刻只能有一个渲染目标
         this.surfaceView = sv;
-        if (player != null && sv != null) attach();
+        if (player != null) attach();
+    }
+
+    /**
+     * 解绑当前渲染目标（后台线程）。
+     *
+     * <p>必须在被解绑的 view 变成 GONE 之前完成，否则 VLC 会继续往
+     * 一个已经不可见的 surface 上刷帧 —— 用户看到的就是黑屏。
+     */
+    private void detachOutput() {
+        final org.videolan.libvlc.MediaPlayer p = player;
+        viewsAttached = false;
+        attachedTarget = null;
+        if (p == null) return;
+        opQueue.execute(new Runnable() {
+            @Override public void run() {
+                try { p.getVLCVout().detachViews(); } catch (Throwable ignored) { }
+            }
+        });
     }
 
     @Override public void setSurface(Surface s) {
@@ -137,10 +162,15 @@ public final class VlcBackend implements PlaybackBackend {
     }
 
     @Override public void setTextureView(android.view.TextureView tv) {
-        this.textureView = tv;
-        if (player != null && tv != null) {
-            attach();
+        if (tv == null) {
+            // 明确解绑：切到 SurfaceView 时调用
+            if (attachedTarget == textureView) detachOutput();
+            textureView = null;
+            return;
         }
+        surfaceView = null;      // 互斥：同一时刻只能有一个渲染目标
+        this.textureView = tv;
+        if (player != null) attach();
     }
 
     private void ensureLibVlc(Context ctx) {

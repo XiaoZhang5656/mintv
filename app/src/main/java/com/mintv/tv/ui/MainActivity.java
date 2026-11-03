@@ -486,12 +486,13 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         surfaceView.setVisibility(tex ? View.GONE : View.VISIBLE);
         if (playerManager == null) return;
         if (tex) {
+            // 必须用组件而不是裸 Surface：VLC 的 IVLCVout 只认 SurfaceView。
+            // 之前这里调 setSurface(裸 Surface)，而 VlcBackend.setSurface
+            // 是空实现 —— 切到 SurfaceView 后根本没绑上，黑屏有声音。
             playerManager.setTextureView(textureView);
         } else {
-            playerManager.setTextureView(null);
-            if (surfaceView.getHolder().getSurface() != null) {
-                playerManager.setSurface(surfaceView.getHolder().getSurface());
-            }
+            playerManager.setTextureView(null);   // 真正解绑 TextureView
+            playerManager.setSurfaceView(surfaceView);
         }
     }
 
@@ -4839,8 +4840,12 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             // 整套界面按新配色重建。只换颜色不动布局，所以重建是安全的。
             recreate();
         } else if (row == ROW_OUTPUT) {
+            // 换渲染目标等于换输出管线：直接重建播放器最干净。
+            // 不重建的话旧实例可能还持有已隐藏的 surface，
+            // 表现为切过去黑屏、切回来也不恢复。
+            if (playerManager != null) playerManager.release();
             applyOutputMode();
-            playChannel(playingChannel);
+            playChannelInternal(playingChannel, true);
         } else if (row == ROW_SPEED) {
             updateSpeedLabel();
             refreshOsdTags();
@@ -5616,10 +5621,9 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         if (selections[ROW_OUTPUT] == OUTPUT_TEXTURE) {
             playerManager.setTextureView(textureView);
         } else {
+            // 同样：VLC 只认 SurfaceView 组件，裸 Surface 绑不上
             playerManager.setTextureView(null);
-            if (surfaceView != null && surfaceView.getHolder().getSurface() != null) {
-                playerManager.setSurface(surfaceView.getHolder().getSurface());
-            }
+            if (surfaceView != null) playerManager.setSurfaceView(surfaceView);
         }
         playerManager.setCallback(playerCallback);
         // 只有"已经播过一次"才自动恢复，冷启动交给 surfaceCreated

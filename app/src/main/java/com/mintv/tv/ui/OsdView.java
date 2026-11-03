@@ -436,11 +436,16 @@ public class OsdView extends View {
             switch (ev.getActionMasked()) {
                 case android.view.MotionEvent.ACTION_DOWN: {
                     ctlDown = true;
-                    float bw = ctlRect.width() / 3f;
-                    int idx = (int) ((x - ctlRect.left) / bw);
-                    if (idx < 0) idx = 0;
-                    if (idx > 2) idx = 2;
-                    if (ctlListener != null) {
+                    // 按**实际按钮矩形**判断，不是把整段三等分。
+                    // 间距 30px 之后三等分会导致：点在按钮之间的空隙
+                    // 也会命中相邻按钮（例如点暂停右边 8px 的空白触发暂停）。
+                    float bw = Theme.px(96), gapB = Theme.px(30);
+                    int idx = -1;
+                    for (int i = 0; i < 3; i++) {
+                        float l = ctlRect.left + i * (bw + gapB);
+                        if (x >= l && x <= l + bw) { idx = i; break; }
+                    }
+                    if (idx >= 0 && ctlListener != null) {
                         if (idx == 0) ctlListener.onPrevChannel();
                         // 不在 UI 里猜状态：交给 Activity 按后端真实状态决定，
                         // 然后回调 setPaused() 同步图标。
@@ -608,6 +613,7 @@ public class OsdView extends View {
                 + noH + gap1                 // 第一行
                 + (nowText != null ? fsProg + gap2 : 0)
                 + barH + gap3                // 进度条（常驻）
+                + (nextText != null ? fsProg + gap2 : 0)   // 接下来（进度条下方）
                 + ctlH + gap4                // 控制条（常驻）
                 + chipH + padV;              // 技术标签
         float bottom = h - Theme.px(56);
@@ -735,9 +741,33 @@ public class OsdView extends View {
             y += barH + gap3;
         }
 
+        // ═══════════ 第 3.5 行：接下来 ═══════════
+        //
+        // 版式按「正在播 → 进度条 → 接下来」：
+        //   正在播  21:50 大先生
+        //   ━━━━━━━━━━━━━━━━━━ 63%
+        //   接下来  22:40 新闻联播
+        //
+        // 原来 nextText 一直在 setProgram() 里传进来，但 draw 里只画了
+        // nowText，这条数据等于白传 —— 用户看不到下一个节目是什么。
+        if (nextText != null) {
+            p.setTextSize(fsLabel);
+            p.setColor(Theme.TEXT_SUB);
+            c.drawText("接下来", x, y + fsProg * 0.8f, p);
+            float labelW = p.measureText("接下来");
+            p.setTextSize(fsProg);
+            // 比"正在播"暗一档：它是未来内容，不该抢当前节目的视觉权重
+            p.setColor((Theme.OSD_PROG_TXT & 0x00FFFFFF) | 0xB3000000);  // 同色 70% 不透明，弱一档
+            c.drawText(fit(nextText, cardW - padH * 2 - labelW - Theme.px(12), fsProg),
+                    x + labelW + Theme.px(12), y + fsProg * 0.8f, p);
+            y += fsProg + gap2;
+        }
+
         // ═══════════ 第 4 行：播放控制（居中）═══════════
         {
-            float bw = Theme.px(96), gapB = Theme.px(10);
+            // 键间距 30：暂停是主操作，两侧留白把它和切台键分开。
+            // 原来 10 三个键糊成一条，遥控器按左右也不容易判断焦点在哪。
+            float bw = Theme.px(96), gapB = Theme.px(30);
             float totalW = bw * 3 + gapB * 2;
             float bx = left + (cardW - totalW) / 2f;
             for (int i = 0; i < 3; i++) {
