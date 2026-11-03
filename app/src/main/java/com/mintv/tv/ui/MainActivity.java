@@ -553,7 +553,11 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             @Override public void onNextChannel() { moveChannel(+1); }
             @Override public void onTogglePause() {
                 if (player == null) return;
-                if (player.isPlaying()) player.pause(); else player.resume();
+                boolean wasPlaying = player.isPlaying();
+                if (wasPlaying) player.pause(); else player.resume();
+                // OSD 跟着暂停状态走：暂停→常驻，继续→恢复正常 4 秒淡出
+                osd.setPaused(wasPlaying);
+                osd.reshow();
             }
         });
         // 进度条拖动：能不能 seek 由播放内核说了算（直播 = false）
@@ -1436,6 +1440,8 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         // 但"降级后重播同一台"这条路径传 keepLine=true 且引擎已变，
         // 不能再无条件清零，否则会 Exo→VLC→Exo 死循环。
         if (!keepLine) retryDone = false;
+        // 换台必然重新起播，暂停态要清掉；否则新频道一进来 OSD 就常驻了
+        if (osd != null) osd.setPaused(false);
         if (index != playingChannel && playingChannel >= 0 && playingChannel < channels.size()) {
             lastChannelNum = channels.get(playingChannel).number;
         }

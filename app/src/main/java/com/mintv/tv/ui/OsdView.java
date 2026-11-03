@@ -263,7 +263,21 @@ public class OsdView extends View {
                 + " name=" + name + " tagOn0=" + tagOn[0];
     }
 
+    /**
+     * 暂停时 OSD 常驻。
+     *
+     * <p>理由：暂停意味着用户要"操作"，这时候界面自己消失等于把人甩在
+     * 一个黑着的画面上。主流播放器（YouTube / Netflix / 机顶盒）都是
+     * 暂停时常显控件，只有播放态才自动隐藏。
+     */
     private void kick() {
+        if (paused) {
+            removeCallbacks(fadeTask);
+            osdAlpha = 1f;
+            osdUntil = Long.MAX_VALUE;
+            invalidate();
+            return;
+        }
         android.util.Log.d("TVUI", "kick name=" + name + " no=" + no);
         osdAlpha = 1f;
         osdUntil = SystemClock.uptimeMillis() + OSD_MS;
@@ -416,7 +430,9 @@ public class OsdView extends View {
             int idx = (int) ((x - ctlRect.left) / bw);
             if (ctlListener != null) {
                 if (idx == 0) ctlListener.onPrevChannel();
-                else if (idx == 1) { paused = !paused; invalidate(); ctlListener.onTogglePause(); }
+                // 不在 UI 里猜状态：交给 Activity 按后端真实状态决定，
+                // 然后回调 setPaused() 同步图标。否则会和实际播放状态脱节。
+                else if (idx == 1) { ctlListener.onTogglePause(); }
                 else ctlListener.onNextChannel();
             }
             holdOsd();
@@ -543,7 +559,7 @@ public class OsdView extends View {
      */
     private void drawOsd(Canvas c, float h) {
         final float padH = Theme.px(24);
-        final float cardW = Theme.px(900);
+        final float cardW = Theme.px(1040);
         final float LEFT_BAR = Theme.px(4);
 
         // ---- 字号 ----
