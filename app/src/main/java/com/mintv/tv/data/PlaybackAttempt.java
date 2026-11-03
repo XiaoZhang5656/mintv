@@ -36,7 +36,7 @@ public final class PlaybackAttempt {
     }
 
     private final int baseDecoder;
-    private final long timeoutMs;
+    private long timeoutMs;
     private final int sourceCount;
     private final boolean autoSwitch;
 
@@ -55,6 +55,20 @@ public final class PlaybackAttempt {
 
     /** 用户按了暂停。暂停时位置本来就不动，不能算卡住。 */
     private boolean paused;
+
+    /**
+     * 实时倍率低于这个值就认为「跟不上」。
+     *
+     * <p>0.9 意味着每 10 分钟落后 1 分钟 —— 这是用户能察觉的边界。
+     * 定 0.8 太宽松了：那时每 5 分钟就落后 1 分钟，看半小时能差 6 分钟，
+     * 但程序还觉得"正常"。
+     */
+    private static final float MIN_SPEED = 0.90f;
+
+    /** 低速开始的时间戳，-1 表示当前速度正常。 */
+    private long lowSpeedSince = -1;
+    /** 低速已经报过一次（单线路时防止每 8 秒刷一次提示）。 */
+    private boolean lowSpeedReported;
 
     private long stallLastPos = -1;
     /** 最后一次「位置变化」的时刻。**-1 表示还没有有效样本**（不能用 0：
@@ -188,9 +202,53 @@ public final class PlaybackAttempt {
     public void onRestart() {
         firstFrame = false;
         paused = false;
+        lowSpeedSince = -1;
+        lowSpeedReported = false;
         stallLastPos = -1;
         stallSince = -1;
     }
+
+    /**
+     * 实时倍率（Δ播放时间 / Δ墙钟时间）。
+     *
+     * <p>位置判据只能抓"完全冻住"，抓不到"还在播但越来越慢"：
+     * 播放位置一直在涨，只是涨得比墙钟慢，8 秒不动那条规则永远不触发。
+     * 用户看到的是画面越来越落后于直播，而程序认为一切正常。
+     *
+     * @param speed 1.0 = 实时
+     * @param now   单调时钟
+     */
+    public Action onSpeed(float speed, long now) {
+        if (paused || !autoSwitch || !firstFrame) return Action.NONE;
+
+        if (speed >= MIN_SPEED) {
+            lowSpeedSince = -1;
+            lowSpeedReported = false;
+            return Action.NONE;
+        }
+        if (lowSpeedSince < 0) {
+            lowSpeedSince = now;
+            return Action.NONE;
+        }
+        // 用用户设置里的「超时换源」秒数，和位置判据保持一致。
+        // 原来这里写死 8000，导致设置成 5 秒/12 秒/20 秒都不生效。
+        if (now - lowSpeedSince < timeoutMs) return Action.NONE;
+
+        // 持续低速：该换线路了
+        lowSpeedSince = -1;
+        if (sourceCount > 1) return Action.SWITCH_SOURCE;
+        if (lowSpeedReported) return Action.NONE;
+        lowSpeedReported = true;
+        return Action.GIVE_UP;
+    }
+
+    /**
+     * 用户在设置里改了「超时换源」秒数时同步过来。
+     *
+     * <p>不重建 attempt：那样会丢掉本次的降级进度（已经试过软解、
+     * 已经换过几条线路），改个超时值不该让这些白费。
+     */
+    public void setTimeoutMs(long ms) { this.timeoutMs = ms; }
 
     /** 解码能力错误。 */
     public Action onErrorRetryable() {

@@ -389,6 +389,18 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             @Override public void onBitrate(String bitrate) {
                 if (bitrate != null) lastBitrate = bitrate;
             }
+
+            @Override public void onRealtimeSpeed(float speed) {
+                // Δ播放时间 / Δ墙钟时间。1.0 = 实时，<0.9 = 跟不上直播。
+                if (osd != null) osd.setRealtimeSpeed(speed);
+                // 低速持续 8 秒 → 换线路。
+                // 这条能抓到"还在播但越来越慢"，位置判据抓不到那种。
+                com.mintv.tv.data.PlaybackAttempt.Action act =
+                        attempt().onSpeed(speed, SystemClock.uptimeMillis());
+                if (act != com.mintv.tv.data.PlaybackAttempt.Action.NONE) {
+                    handleDegrade(act, "播放跟不上，切换线路", "播放跟不上直播");
+                }
+            }
         };
         playerManager.setCallback(playerCallback);
         // 解码方式直接交给 VLC：它是启动参数，不需要重建播放器
@@ -2419,23 +2431,35 @@ public class MainActivity extends Activity implements FocusEngine.Host {
      * <p>位置不动的原因可能是网络断流、也可能是服务端切片 404，
      * 这两种都该换源，所以不细分。
      */
+    /**
+     * 降级动作的公共出口：换线路 / 放弃。
+     *
+     * <p>位置判据（完全冻住）和速度判据（越来越慢）走同一个出口，
+     * 免得两处各写一遍换源逻辑。
+     */
+    private void handleDegrade(com.mintv.tv.data.PlaybackAttempt.Action act,
+                               String switchMsg, String giveMsg) {
+        PlaylistParser.Channel ch = (playingChannel >= 0 && playingChannel < channels.size())
+                ? channels.get(playingChannel) : null;
+        if (act == com.mintv.tv.data.PlaybackAttempt.Action.SWITCH_SOURCE
+                && ch != null && ch.sources.size() > 1) {
+            currentLine = (currentLine + 1) % ch.sources.size();
+            osd.toast(switchMsg + " " + (currentLine + 1) + "/" + ch.sources.size());
+            playChannelInternal(playingChannel, true);
+        } else if (act == com.mintv.tv.data.PlaybackAttempt.Action.GIVE_UP) {
+            osd.toast(giveMsg);
+        }
+    }
+
     private void checkStall(long pos) {
         long limit = switchTimeoutMs();
         com.mintv.tv.data.PlaybackAttempt.Action act =
                 attempt().onPosition(pos, SystemClock.uptimeMillis());
         if (act == com.mintv.tv.data.PlaybackAttempt.Action.NONE) return;
 
-        PlaylistParser.Channel ch = (playingChannel >= 0 && playingChannel < channels.size())
-                ? channels.get(playingChannel) : null;
-        if (act == com.mintv.tv.data.PlaybackAttempt.Action.SWITCH_SOURCE
-                && ch != null && ch.sources.size() > 1) {
-            currentLine = (currentLine + 1) % ch.sources.size();
-            osd.toast("播放卡住 " + (limit / 1000) + " 秒，切换线路 "
-                    + (currentLine + 1) + "/" + ch.sources.size());
-            playChannelInternal(playingChannel, true);
-        } else {
-            osd.toast("播放卡住，该频道只有一条线路");
-        }
+        handleDegrade(act,
+                "播放卡住 " + (limit / 1000) + " 秒，切换线路",
+                "播放卡住，该频道只有一条线路");
     }
 
     /** 起播后调用：8 秒没出画面就自愈。 */
@@ -4803,6 +4827,9 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         selections[row] = value;
         saveSelections();
         if (row == ROW_TIMEOUT) {
+            // 新秒数要同步进当前这次播放尝试，否则位置判据和速度判据
+            // 还在按旧值计时（改设置等于没改）。
+            if (attempt != null) attempt.setTimeoutMs(switchTimeoutMs());
             armWatchdog();     // 立即按新策略重新计时
         } else if (row == ROW_DECODER) {
             // 解码方式是 VLC 的启动参数，改了要重建 LibVLC 实例。

@@ -65,6 +65,18 @@ public interface PlaybackBackend {
         /** 码率单独一条，OSD 一行放不下时可以只更新这一格。 */
         default void onBitrate(String bitrate) { }
 
+        /**
+         * 实时倍率：Δ播放时间 / Δ墙钟时间。
+         *
+         * <p>约等于 ffmpeg -progress 里的 {@code speed=}。1.0 表示正好实时；
+         * 小于 0.9 说明解码或网络跟不上，画面在持续落后于直播；
+         * 接近 0 说明完全冻住。
+         *
+         * <p>比"掉帧率"更直观：掉帧但速度还能到 1.0 说明只是丢了无关紧要的
+         * 帧，播放进度没问题；而速度掉到 0.8 是用户真能感觉到的"越看越晚"。
+         */
+        default void onRealtimeSpeed(float speed) { }
+
         /** 时长 / 位置变化（毫秒）。live 模式下 durationMs 为 -1。 */
         void onTimeline(long positionMs, long durationMs, long bufferedMs);
     }

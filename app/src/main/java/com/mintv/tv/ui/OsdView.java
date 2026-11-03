@@ -45,6 +45,8 @@ public class OsdView extends View {
     private final boolean[] tagOn = new boolean[9];
 
     private String clockText;
+    /** 实时倍率（Δ播放时间/Δ墙钟），<0 表示还没数据。 */
+    private float realtimeSpeed = -1f;
 
     // ---- 音量 OSD ----
     private int volumePercent = -1;      // <0 表示不显示
@@ -801,6 +803,20 @@ public class OsdView extends View {
                         chipTop + chipH / 2f - (p.ascent() + p.descent()) / 2f, p);
                 cx += tw + Theme.px(8);
             }
+            // 实时倍率：只在不正常时显眼，正常时低调
+            if (realtimeSpeed >= 0f && !paused) {
+                String sp = String.format(java.util.Locale.US, "%.2fx", realtimeSpeed);
+                p.setTextSize(fsChip);
+                float sw = p.measureText(sp);
+                float sx = left + cardW - padH - Theme.px(78) - sw;
+                int col;
+                if (realtimeSpeed >= 0.95f)      col = 0xFF7ED9A8;   // 跟得上
+                else if (realtimeSpeed >= 0.90f) col = 0xFFE0A863;   // 略滞后
+                else                             col = 0xFFE0605E;   // 明显落后
+                p.setColor(col);
+                c.drawText(sp, sx,
+                        chipTop + chipH / 2f - (p.ascent() + p.descent()) / 2f, p);
+            }
             // 时钟右下
             if (clockText != null) {
                 p.setColor(Theme.OSD_CLOCK_TXT);
@@ -829,6 +845,13 @@ public class OsdView extends View {
     private String nowClock() {
         return new java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.CHINA)
                 .format(new java.util.Date());
+    }
+
+    /** 实时倍率。传负数表示暂无数据（不显示）。 */
+    public void setRealtimeSpeed(float x) {
+        if (Math.abs(x - realtimeSpeed) < 0.01f) return;   // 变化太小不重绘
+        realtimeSpeed = x;
+        invalidate();
     }
 
     public void setClock(String s) {

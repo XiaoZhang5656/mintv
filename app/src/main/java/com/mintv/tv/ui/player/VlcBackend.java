@@ -91,11 +91,29 @@ public final class VlcBackend implements PlaybackBackend {
     private String currentUrl;
     private long duration = -1;
 
+    // ---- 实时倍率采样（Δ播放时间 / Δ墙钟时间）----
+    private long speedLastTime = -1;
+    private long speedLastWall = 0;
+    private float speedEma = 1f;      // 指数滑动平均，压掉瞬时抖动
+
     private final Runnable tick = new Runnable() {
         @Override public void run() {
             if (released || player == null) return;
             long t = 0;
             try { t = player.getTime(); } catch (Throwable ignored) { }
+            if (cb != null && t > 0) {
+                long wall = android.os.SystemClock.uptimeMillis();
+                if (speedLastTime > 0 && wall > speedLastWall) {
+                    float inst = (t - speedLastTime) / (float) (wall - speedLastWall);
+                    if (inst < 0f) inst = 0f;
+                    if (inst > 3f) inst = 3f;      // 换源/seek 之后的跳变，掐掉
+                    // 0.3 的平滑系数：约 2 秒收敛，不会一直跳
+                    speedEma = speedEma * 0.7f + inst * 0.3f;
+                    cb.onRealtimeSpeed(speedEma);
+                }
+                speedLastTime = t;
+                speedLastWall = wall;
+            }
             if (cb != null) {
                 // ⚠ 直播也要把真实播放位置传上去。
                 //
@@ -428,6 +446,9 @@ public final class VlcBackend implements PlaybackBackend {
         released = false;
         pausedByUser = false;
         tracksSig = null;
+        speedLastTime = -1;
+        speedLastWall = 0;
+        speedEma = 1f;
         this.mode = m;
         this.currentUrl = url;
         this.firstFrame = false;
