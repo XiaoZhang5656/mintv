@@ -248,6 +248,9 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         android.util.Log.i("MinTV", "screen realMetrics=" + dm.widthPixels + "x" + dm.heightPixels + " base=" + base);
         Theme.init(base);
         loadSelections();
+        // HTTP 服务在 UI 之前就起：手机端要能在任何时候连进来，
+        // 不能等到用户去点"手机助手"那一页才有服务。
+        startRemoteServer();
         loadHiddenCats();
         Theme.applyPalette(getSharedPreferences(PREF, MODE_PRIVATE).getInt(KEY_UI_THEME, 0));
 
@@ -370,7 +373,6 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             ((Media3Backend) player).setPreferSoftwareDecoder(selections[ROW_DECODER] == 1);
         }
 
-        startRemoteServer();
         ui.post(clockTick);
         ui.post(speedTick);
         loadEpgAsync();

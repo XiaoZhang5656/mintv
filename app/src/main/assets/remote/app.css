@@ -96,3 +96,9 @@
     color:var(--sub);border-radius:999px;padding:6px 12px;font-size:11.5px;
     font-family:inherit}
   .themebtn:active{filter:brightness(.94)}
+
+/* 页面顶部导航：订阅 / 遥控 */
+.navtabs{display:flex;gap:8px;padding:10px 16px 0}
+.navtabs a{flex:1;text-align:center;padding:9px 0;border-radius:10px;font-size:14px;
+  color:var(--muted);text-decoration:none;background:var(--card)}
+.navtabs a.on{background:var(--blue-dim);color:var(--blue);font-weight:600}
