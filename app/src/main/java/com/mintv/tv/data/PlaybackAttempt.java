@@ -53,6 +53,9 @@ public final class PlaybackAttempt {
     /** 本次尝试临时覆盖的解码方式，-1 表示没覆盖。 */
     private int decodeOverride = -1;
 
+    /** 用户按了暂停。暂停时位置本来就不动，不能算卡住。 */
+    private boolean paused;
+
     private long stallLastPos = -1;
     /** 最后一次「位置变化」的时刻。**-1 表示还没有有效样本**（不能用 0：
      *  uptimeMillis 在开机瞬间确实可能为 0，会和哨兵值撞上）。 */
@@ -83,6 +86,25 @@ public final class PlaybackAttempt {
     public boolean hasDecoderOverride() { return decodeOverride >= 0; }
 
     // ================= 转换 =================
+
+    /**
+     * 同步暂停状态。
+     *
+     * <p>⚠ 暂停时 {@code positionMs()} 是不动的 —— 如果还照常做卡顿检测，
+     * 用户暂停十几秒就会看到「播放卡住，切换线路」。这不是卡住，是用户
+     * 自己按的。所以暂停期间必须整段跳过检测。
+     *
+     * <p>恢复播放时清空采样点：否则「暂停前的最后时间戳」还留着，
+     * 一恢复就立刻满足 {@code now - stallSince >= timeout}，直接误判。
+     */
+    public void setPaused(boolean p) {
+        if (paused == p) return;
+        paused = p;
+        stallLastPos = -1;
+        stallSince = -1;
+    }
+
+    public boolean isPaused() { return paused; }
 
     /** 出首帧。 */
     public void onFirstFrame() {
@@ -136,7 +158,8 @@ public final class PlaybackAttempt {
      * @param now 单调时钟（uptimeMillis）
      */
     public Action onPosition(long pos, long now) {
-        if (!autoSwitch || !firstFrame || timeoutMs <= 0) return Action.NONE;
+        // 暂停中不判卡顿（位置本来就不动）；没出帧时不判（起播交给看门狗）
+        if (paused || !autoSwitch || !firstFrame || timeoutMs <= 0) return Action.NONE;
 
         if (pos != stallLastPos) {
             stallLastPos = pos;
@@ -161,6 +184,7 @@ public final class PlaybackAttempt {
      */
     public void onRestart() {
         firstFrame = false;
+        paused = false;
         stallLastPos = -1;
         stallSince = -1;
     }

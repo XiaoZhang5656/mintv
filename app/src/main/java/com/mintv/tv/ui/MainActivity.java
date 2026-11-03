@@ -546,6 +546,9 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                 // 用它会永远走 resume 分支 —— 表现就是"点暂停毫无反应"。
                 boolean nowPaused = !player.isPaused();
                 if (nowPaused) player.pause(); else player.resume();
+                // 暂停期间播放位置不动，必须让卡顿检测停手，
+                // 否则暂停十几秒就会弹「播放卡住，切换线路」
+                attempt().setPaused(nowPaused);
                 osd.setPaused(nowPaused);
                 osd.reshow();
             }
@@ -1485,6 +1488,10 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         PlaylistParser.Source src = ch.sources.get(currentLine);
         currentPlayUrl = PlaylistParser.cleanUrl(src.url);
         armWatchdog();
+        // 立刻告诉用户"已经在换了"。
+        // 原来要等播放器的 Buffering 回调才显示状态，中间一两秒屏幕
+        // 一动不动，手感就是"按了没反应"。
+        osd.setStatus("加载中…");
         playUrl(PlaylistParser.cleanUrl(src.url), src.headers, PlaybackBackend.Mode.LIVE);
     }
 
@@ -5042,11 +5049,18 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     }
 
     private void moveChannel(int step) {
+        if (channels.isEmpty()) return;
         clearRestorePending();
         resetNoVideoStage();
         int n = focus.chanIndex() + step;
-        if (n < 0) n = 0;
-        if (n > channels.size() - 1) n = channels.size() - 1;
+        // 首尾循环，不是顶到边界就停。
+        //
+        // 原来写的是 n<0→0、n>size-1→size-1：看到最后一个台再按"下一个"，
+        // 界面一动不动 —— 用户的第一反应是"按键坏了 / 卡住了"。
+        // 电视遥控的 CH+/- 一直是循环的，这里对齐。
+        int size = channels.size();
+        if (n < 0) n = size - 1;
+        if (n >= size) n = 0;
         focusOnChannel(n);
         playChannel(n);
     }
@@ -5458,13 +5472,38 @@ public class MainActivity extends Activity implements FocusEngine.Host {
 
     // ================= 数字键换台 =================
 
-    /** 数字键累计输入，1.2 秒不按就跳台。 */
+    /**
+     * 数字键累计输入。
+     *
+     * <p>原来的策略是"每次按键都重置 1.2 秒计时器，到点才跳台"。
+     * 问题很明显：按一个「5」想看 5 台，得干等 1.2 秒；按「123」
+     * 已经按满三位了，还要再等 1.2 秒。手感就是"按键没反应"。
+     *
+     * <p>现在改成：按完立刻判断「还有没有更长的台号能匹配上」。
+     * <ul>
+     *   <li>没有 → 输入已经唯一确定，立即切台（0 延迟）</li>
+     *   <li>有（比如按了 5，还存在 50/51/52）→ 等 700ms 让用户按第二位</li>
+     * </ul>
+     */
     private void appendChannelDigit(int digit) {
         if (numBuf.length() >= 4) numBuf.setLength(0);
         numBuf.append((char) ('0' + digit));
         osd.showNumberInput(numBuf.toString());
         ui.removeCallbacks(numCommit);
-        ui.postDelayed(numCommit, 1200);
+        if (!hasLongerNumberMatch(numBuf.toString())) {
+            commitChannelNumber();     // 唯一确定，立即执行
+            return;
+        }
+        ui.postDelayed(numCommit, 700);
+    }
+
+    /** 当前输入是否还可能被更长的台号匹配上（决定要不要等下一键）。 */
+    private boolean hasLongerNumberMatch(String prefix) {
+        for (int i = 0; i < channels.size(); i++) {
+            String n = String.valueOf(channels.get(i).number);
+            if (n.length() > prefix.length() && n.startsWith(prefix)) return true;
+        }
+        return false;
     }
 
     private void commitChannelNumber() {
@@ -5546,6 +5585,17 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     @Override
     protected void onPause() {
         super.onPause();
+        // ⚠ 顺序很重要：先摘掉 VLC 挂在 TextureView 上的回调，再停播。
+        //
+        // 只调 stop() 是不够的：TextureView 真正销毁时（返回键退出、
+        // 配置变更、被系统回收），VLC 的 AWindow 回调还在上面，会在主线程
+        // 同步执行 setVideoTrack → 等内核锁。实测卡 5.9 秒直接 ANR：
+        //   libvlc_video_set_track+28 / nativeSetVideoTrack
+        //   AWindow.onSurfaceDestroyed ← TextureView 销毁触发
+        //
+        // detachForBackground 内部先换安全 listener（主线程、不碰 native），
+        // 再把 detachViews 丢到后台线程。
+        if (playerManager != null) playerManager.detachForBackground();
         // 只停播，不销毁 —— 回来时接着播当前台，不用重新拉流
         if (player != null) player.stop();
     }

@@ -55,6 +55,26 @@ public final class VlcBackend implements PlaybackBackend {
     private Callback cb;
     private Mode mode = Mode.LIVE;
     private boolean released = false;
+
+    /**
+     * 播放器操作队列。
+     *
+     * <p>libvlc 的 pause/resume 是 JNI 同步调用，内部要等解码线程让出
+     * 控制权。解码线程正忙时（刚换台、高码率），主线程被阻塞几十到几百
+     * 毫秒 —— 表现就是"点暂停，图标过一会儿才变"。
+     *
+     * <p>单线程队列：既离开主线程，又保证 pause 后立刻 resume 不会乱序。
+     * UI 状态由 pausedByUser 维护，不等 native 返回。
+     */
+    private final java.util.concurrent.ExecutorService opQueue =
+            java.util.concurrent.Executors.newSingleThreadExecutor(
+                    new java.util.concurrent.ThreadFactory() {
+                        @Override public Thread newThread(Runnable r) {
+                            Thread t = new Thread(r, "vlc-op");
+                            t.setDaemon(true);
+                            return t;
+                        }
+                    });
     /**
      * 用户按了暂停。
      *
@@ -153,6 +173,64 @@ public final class VlcBackend implements PlaybackBackend {
 
     /** 上一次 attach 的目标视图，用于幂等判断。 */
     private Object attachedTarget;
+
+    /**
+     * 安全回调：TextureView 销毁时只交还 SurfaceTexture，**不碰 libvlc**。
+     *
+     * <p>为什么必须有：
+     * <pre>
+     * TextureView.onSurfaceTextureDestroyed (主线程)
+     *   → AWindow.SurfaceHelper.onSurfaceTextureDestroyed
+     *   → AWindow.detachViews
+     *   → MediaPlayer.setVideoTrackEnabled(false)
+     *   → libvlc_video_set_track   ← 在这里等内核锁
+     *   → NonPI::MutexLockWithTimeout  ← 卡 5.9 秒
+     * </pre>
+     * 实测抓到的 ANR：
+     * <pre>
+     *   ANR in com.mintv.tvui/com.mintv.tv.ui.MainActivity
+     *   Input dispatching timed out, 主线程卡 5909ms
+     *   libvlc_video_set_track+28 / nativeSetVideoTrack
+     * </pre>
+     *
+     * <p>换掉 listener 之后，销毁走系统默认路径（返回 true 由框架释放
+     * SurfaceTexture），libvlc 那条同步回调链根本不会触发。
+     */
+    private static final android.view.TextureView.SurfaceTextureListener SAFE_LISTENER =
+            new android.view.TextureView.SurfaceTextureListener() {
+                @Override public void onSurfaceTextureAvailable(
+                        android.graphics.SurfaceTexture st, int w, int h) { }
+                @Override public void onSurfaceTextureSizeChanged(
+                        android.graphics.SurfaceTexture st, int w, int h) { }
+                @Override public boolean onSurfaceTextureDestroyed(
+                        android.graphics.SurfaceTexture st) { return true; }
+                @Override public void onSurfaceTextureUpdated(
+                        android.graphics.SurfaceTexture st) { }
+            };
+
+    /**
+     * 进后台：先摘掉 VLC 的 TextureView 回调，再异步解绑视频输出。
+     *
+     * <p>顺序不能反。先解绑再摘 listener 的话，中间那段 TextureView
+     * 还挂着 VLC 的回调，一旦此刻被销毁，照样在主线程卡锁。
+     */
+    public void detachForBackground() {
+        final org.videolan.libvlc.MediaPlayer p = player;
+        final android.view.TextureView tv = textureView;
+        if (tv != null) {
+            // 换成安全回调（主线程，极快，不碰 native）
+            tv.setSurfaceTextureListener(SAFE_LISTENER);
+        }
+        if (p == null || !viewsAttached) return;
+        viewsAttached = false;
+        attachedTarget = null;
+        // detachViews 会走 libvlc，可能等解码线程，必须离开主线程
+        new Thread(new Runnable() {
+            @Override public void run() {
+                try { p.getVLCVout().detachViews(); } catch (Throwable ignored) { }
+            }
+        }, "vlc-detach").start();
+    }
 
     /**
      * 把视频/音频轨道信息报给 UI（OSD 底栏的分辨率、编码、帧率、码率）。
@@ -426,9 +504,14 @@ public final class VlcBackend implements PlaybackBackend {
     }
 
     @Override public void pause() {
-        if (player == null) return;
-        pausedByUser = true;
-        try { player.pause(); } catch (Throwable ignored) { }
+        final org.videolan.libvlc.MediaPlayer p = player;
+        if (p == null) return;
+        pausedByUser = true;          // UI 立即拿到新状态
+        opQueue.execute(new Runnable() {
+            @Override public void run() {
+                try { p.pause(); } catch (Throwable ignored) { }
+            }
+        });
     }
 
     /** 当前是否处于「用户暂停」状态（不看缓冲态）。 */
@@ -437,9 +520,14 @@ public final class VlcBackend implements PlaybackBackend {
     }
 
     @Override public void resume() {
-        if (player == null) return;
+        final org.videolan.libvlc.MediaPlayer p = player;
+        if (p == null) return;
         pausedByUser = false;
-        try { player.play(); } catch (Throwable ignored) { }
+        opQueue.execute(new Runnable() {
+            @Override public void run() {
+                try { p.play(); } catch (Throwable ignored) { }
+            }
+        });
     }
 
     /**
@@ -535,7 +623,13 @@ public final class VlcBackend implements PlaybackBackend {
         // 这里兜底一次（比如 release 被单独调用），但不在主线程做重活。
         if (viewsAttached && p != null) {
             viewsAttached = false;
-            try { p.getVLCVout().detachViews(); } catch (Throwable ignored) { }
+            // 同样不能在主线程 detach：libvlc 的 detachViews 会等内核线程
+            final org.videolan.libvlc.MediaPlayer dp = p;
+            new Thread(new Runnable() {
+                @Override public void run() {
+                    try { dp.getVLCVout().detachViews(); } catch (Throwable ignored) { }
+                }
+            }, "vlc-detach-rel").start();
         }
 
         // 释放同样走后台：LibVLC.release() 会等内部回放线程收尾

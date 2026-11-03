@@ -50,7 +50,16 @@ public final class PlayerLayer implements KeyLayer {
         switch (code) {
             case KeyEvent.KEYCODE_DPAD_UP:
             case KeyEvent.KEYCODE_DPAD_DOWN:
-                host.showPanel();
+                // 纯播放态直接切台，不弹面板。
+                //
+                // 原来这里是 showPanel()：按上下只把左侧面板叫出来，
+                // 画面一动不动，也不换台 —— 手感就是"按了没反应"，
+                // 而且想看下一个台得按三次（弹面板→移到列表→再按）。
+                //
+                // 电视的通用交互是上下键=上一个/下一个频道。面板入口
+                // 仍然有：OK 键 / MENU 键 / BACK 键都能唤回。
+                if (code == KeyEvent.KEYCODE_DPAD_UP) host.channelUp();
+                else host.channelDown();
                 return true;
 
             case KeyEvent.KEYCODE_DPAD_LEFT:

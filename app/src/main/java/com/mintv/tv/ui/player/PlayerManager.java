@@ -66,6 +66,11 @@ public final class PlayerManager implements PlaybackBackend {
         if (impl != null) impl.setHwMode(mode);
     }
 
+    /** 进后台：摘掉渲染回调并异步解绑，避免销毁时主线程卡在 libvlc。 */
+    public void detachForBackground() {
+        if (impl != null) impl.detachForBackground();
+    }
+
     public void updateWindowSize(int w, int h) {
         if (impl != null) impl.updateWindowSize(w, h);
     }
