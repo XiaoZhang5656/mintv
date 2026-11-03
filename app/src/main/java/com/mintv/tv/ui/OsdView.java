@@ -100,6 +100,8 @@ public class OsdView extends View {
     private final android.graphics.RectF ctlRect = new android.graphics.RectF();
     private boolean ctlShown;
     private boolean paused;
+    /** 控制条按下中：保证整段手势都被消费，不漏给下层。 */
+    private boolean ctlDown;
     /** 左侧被面板挡住时，卡片要往右让，否则会盖在频道列表上。 */
     private float leftInset = 0f;
 
@@ -424,19 +426,39 @@ public class OsdView extends View {
         float x = ev.getX(), y = ev.getY();
 
         // ---- 播放控制条（上一台 / 暂停 / 下一台）----
-        if (ctlShown && ctlRect.contains(x, y)
-                && ev.getActionMasked() == android.view.MotionEvent.ACTION_DOWN) {
-            float bw = (ctlRect.width()) / 3f;
-            int idx = (int) ((x - ctlRect.left) / bw);
-            if (ctlListener != null) {
-                if (idx == 0) ctlListener.onPrevChannel();
-                // 不在 UI 里猜状态：交给 Activity 按后端真实状态决定，
-                // 然后回调 setPaused() 同步图标。否则会和实际播放状态脱节。
-                else if (idx == 1) { ctlListener.onTogglePause(); }
-                else ctlListener.onNextChannel();
+        //
+        // ⚠ 必须整段手势都吃掉（DOWN/MOVE/UP 全部 return true）。
+        // 以前只在 ACTION_DOWN 分支里处理并 return，ACTION_UP 会落到
+        // 下面的进度条逻辑、最终 return false —— 事件穿透到铺满全屏的
+        // videoTap，触发"点视频区"，把 OSD 收掉。
+        // 表现就是"点暂停，按钮没反应反而整个 OSD 消失"。
+        if (ctlShown && ctlRect.contains(x, y)) {
+            switch (ev.getActionMasked()) {
+                case android.view.MotionEvent.ACTION_DOWN: {
+                    ctlDown = true;
+                    float bw = ctlRect.width() / 3f;
+                    int idx = (int) ((x - ctlRect.left) / bw);
+                    if (idx < 0) idx = 0;
+                    if (idx > 2) idx = 2;
+                    if (ctlListener != null) {
+                        if (idx == 0) ctlListener.onPrevChannel();
+                        // 不在 UI 里猜状态：交给 Activity 按后端真实状态决定，
+                        // 然后回调 setPaused() 同步图标。
+                        else if (idx == 1) ctlListener.onTogglePause();
+                        else ctlListener.onNextChannel();
+                    }
+                    holdOsd();
+                    return true;
+                }
+                case android.view.MotionEvent.ACTION_UP:
+                case android.view.MotionEvent.ACTION_CANCEL:
+                    ctlDown = false;
+                    return true;
+                default:
+                    // MOVE 等：落在按钮上就继续吃掉
+                    if (ctlDown) return true;
+                    break;
             }
-            holdOsd();
-            return true;
         }
 
         if (!barShown || seekListener == null) return false;

@@ -26,9 +26,7 @@ import com.mintv.tv.data.LogoLoader;
 import com.mintv.tv.data.PlaylistParser;
 import com.mintv.tv.data.SourceStore;
 import com.mintv.tv.ui.focus.FocusEngine;
-import com.mintv.tv.ui.player.Media3Backend;
 import com.mintv.tv.ui.player.PlaybackBackend;
-import com.mintv.tv.ui.player.PlaybackEngine;
 import com.mintv.tv.ui.player.PlayerManager;
 import com.mintv.tv.ui.player.HttpHeaderProfile;
 import com.mintv.tv.ui.widget.ChannelView;
@@ -308,7 +306,6 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         loadLinePrefs();
         loadFavorites();
         applyOutputMode();
-        recoverFromEngineCrash();
         focus.setNavCount(categories.size());
         focus.setChannelCount(channels.size());
         bindChannels();
@@ -377,14 +374,9 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                 // 表现为"画面一直闪、日志刷屏"。
                 if (retryDone) { onError(msg); return; }
                 retryDone = true;
-                if (playerManager != null && playerManager.degrade()) {
-                    osd.setStatus("切换解码器…");
-                    // 用独立入口：保留线路 + 不清 retryDone（防止来回切）
-                    playChannelInternal(playingChannel, true);   // 保留线路
-                } else {
-                    // 没有下一张牌了：按普通错误处理
-                    onError(msg);
-                }
+                // 只剩一个内核，没有"降级"可走 —— 直接按错误处理，
+                // 由 onNoVideo / 看门狗去换线路。
+                onError(msg);
             }
 
             @Override public void onVideoFormat(String res, String vc, String ac, String ch, String fps) {
@@ -400,10 +392,8 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             }
         };
         playerManager.setCallback(playerCallback);
-        // 读的是 ROW_ENGINE（播放内核：0 Exo / 1 VLC），不是 ROW_DECODER。
-        // 以前写成 ROW_DECODER，「软解=1」会被当成下一个内核，悄悄换引擎。
-        playerManager.setEngine(engineOf(selections[ROW_ENGINE]), true);
-        if (selections[ROW_ENGINE] != 0) markEngineAttempt(engineOf(selections[ROW_ENGINE]));
+        // 解码方式直接交给 VLC：它是启动参数，不需要重建播放器
+        playerManager.setDecoderMode(selections[ROW_DECODER]);
 
         // Surface 一就绪就开播，避免先黑屏再起播
         surfaceView.getHolder().addCallback(new SurfaceHolder.Callback() {
@@ -427,9 +417,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         });
 
         // 「解码方式」设置项：0 = 硬件，1 = 软件
-        if (player instanceof Media3Backend) {
-            ((Media3Backend) player).setPreferSoftwareDecoder(selections[ROW_DECODER] == 1);
-        }
+
 
         ui.post(clockTick);
         ui.post(speedTick);
@@ -1518,7 +1506,6 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     /** 超时换源：0=关闭，1=5s，2=8s，3=12s，4=20s。开关和秒数合成一项了。 */
     private static final int ROW_TIMEOUT  = com.mintv.tv.ui.setting.Settings.IDX_TIMEOUT;
     private static final int ROW_HEADERS  = com.mintv.tv.ui.setting.Settings.IDX_HEADERS;
-    private static final int ROW_ENGINE   = com.mintv.tv.ui.setting.Settings.IDX_ENGINE;
     private static final int ROW_CLOCK    = com.mintv.tv.ui.setting.Settings.IDX_CLOCK;
     private static final int ROW_OUTPUT   = com.mintv.tv.ui.setting.Settings.IDX_OUTPUT;
     private static final int ROW_THEME    = com.mintv.tv.ui.setting.Settings.IDX_THEME;
@@ -1541,7 +1528,6 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     private int noVideoStage = 0;
 
     /** 是否已切到软解。Exo 的硬解在低端盒子上「初始化成功但不出帧」很常见。 */
-    private boolean softPref = false;
 
     /**
      * 有声音没画面 / 解码失败时的自愈。
@@ -1560,44 +1546,30 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         watchdogFired = true;
         ui.removeCallbacks(playbackWatchdog);
 
-        // ① 硬解 → 软解（只对 Exo 有意义）
-        if (noVideoStage == 0
-                && playerManager != null
-                && playerManager.engine() == PlaybackEngine.EXO
-                && !softPref) {
+        // ① 自动 → 软件解码（VLC 的 mediacodec 在某些源上会出不来画面）
+        if (noVideoStage == 0 && playerManager != null && selections[ROW_DECODER] == 0) {
             noVideoStage = 1;
-            softPref = true;
-            selections[ROW_DECODER] = 1;
-            if (rowViews.size() > ROW_DECODER) rowViews.get(ROW_DECODER).setSelected(1);
-            rebuildEngine(PlaybackEngine.EXO, false);
-            osd.toast("无画面，切换软解重试");
+            selections[ROW_DECODER] = 2;
+            if (rowViews.size() > ROW_DECODER) rowViews.get(ROW_DECODER).setSelected(2);
+            saveSelections();
+            playerManager.setDecoderMode(2);
+            osd.toast("无画面，切换软件解码重试");
             playChannel(playingChannel);
             return;
         }
-        // ② 换内核：Exo → VLC
-        if ((noVideoStage <= 1 || !softPref) && playerManager != null && !playerManager.isPinned()) {
-            PlaybackEngine cur = playerManager.engine();
-            PlaybackEngine next = cur.next();
-            if (next != cur && PlayerManager.available(next)) {
-                noVideoStage = 2;
-                rebuildEngine(next, false);
-                osd.toast("无画面，换 " + next.label + " 内核重试");
-                playChannel(playingChannel);
-                return;
-            }
-        }
-        // ③ 换线路
+
+        // ② 换线路
         PlaylistParser.Channel ch = (playingChannel >= 0 && playingChannel < channels.size())
                 ? channels.get(playingChannel) : null;
-        if (noVideoStage <= 2 && ch != null && ch.sources.size() > 1 && autoSwitchSource()) {
-            noVideoStage = 3;
+        if (noVideoStage <= 1 && ch != null && ch.sources.size() > 1 && autoSwitchSource()) {
+            noVideoStage = 2;
             currentLine = (currentLine + 1) % ch.sources.size();
             osd.toast("该线路无画面，切换线路 " + (currentLine + 1) + "/" + ch.sources.size());
             playChannelInternal(playingChannel, true);
             return;
         }
-        // ④ 没得换，明说，不再黑着播
-        noVideoStage = 4;
+        // ③ 没得换，明说，不再黑着播
+        noVideoStage = 3;
         osd.setStatus("无画面：" + reason);
     }
 
@@ -1619,10 +1591,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
      * <p>这是 native 崩溃唯一可行的"拦截"方式：事后识别 + 自动回退，
      * 而不是当场捕获。
      */
-    private void markEngineAttempt(PlaybackEngine e) {
-        getSharedPreferences(PREF, MODE_PRIVATE).edit()
-                .putString(KEY_ENGINE_TRY, e.name()).apply();
-    }
+
 
     /** 首帧出来了 → 内核稳定，把标记清掉。 */
     private void clearEngineAttempt() {
@@ -1630,37 +1599,6 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                 .remove(KEY_ENGINE_TRY).apply();
     }
 
-    /**
-     * 启动时检查上个会话是不是崩在内核上。
-     * 是的话把引擎退回 ExoPlayer，并明确告诉用户发生了什么。
-     */
-    private void recoverFromEngineCrash() {
-        String tried = getSharedPreferences(PREF, MODE_PRIVATE)
-                .getString(KEY_ENGINE_TRY, null);
-        if (tried == null) return;
-        getSharedPreferences(PREF, MODE_PRIVATE).edit().remove(KEY_ENGINE_TRY).apply();
-
-        PlaybackEngine bad;
-        try {
-            bad = PlaybackEngine.valueOf(tried);
-        } catch (Throwable t) {
-            return;
-        }
-        if (bad == PlaybackEngine.EXO) return;   // Exo 挂了不是内核兼容问题
-
-        selections[ROW_ENGINE] = 0;             // 退回 Exo
-        if (rowViews.size() > ROW_ENGINE) rowViews.get(ROW_ENGINE).setSelected(0);
-
-        final String msg = "上次切到 " + bad.label + " 内核后进程被原生库杀死"
-                + "（native SIGSEGV，Java 层拦不住），已自动切回 ExoPlayer。\n\n"
-                + "这不是脚本错误，是 " + bad.label + " 的 .so 与当前系统不兼容。";
-        ui.post(new Runnable() {
-            @Override public void run() {
-                osd.toast("上次 " + bad.label + " 内核崩溃，已回退 ExoPlayer");
-                CrashActivity.launch(MainActivity.this, "内核崩溃已回退", msg);
-            }
-        });
-    }
 
     // ---- 每个频道上次能播的线路 ----
     private static final String KEY_LINE_PREFS = "line_prefs";
@@ -2338,17 +2276,6 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     }
 
     /** 切换内核并立刻重开当前源。 */
-    private void rebuildEngine(PlaybackEngine e, boolean pinned) {
-        if (playerManager == null) return;
-        playerManager.setEngine(e, pinned);
-        playerManager.setSurfaceView(surfaceView);
-        playerManager.setCallback(playerCallback);
-        // 新内核是全新实例，画面比例要重新下发一次 ——
-        // VLC 的比例存在它自己的 MediaPlayer 里，换了实例就丢了。
-        if (player != null) player.setAspectMode(selections[ROW_RATIO]);
-    }
-
-    private PlaybackEngine engineOf(int decoderOption) { return PlaybackEngine.of(decoderOption); }
 
     /**
      * 唯一的播放入口。所有内核、所有模式都从这里走，
@@ -2384,17 +2311,9 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         if (url == null || url.isEmpty()) return;
         if (playerManager == null) return;
 
-        // 组播/单播电视源（udp/rtp/rtsp）自动走 VLC，播放完切台也不会跳回去，
-        // 避免每条都重建引擎。
-        if (needsVlc(url) && playerManager.engine() != PlaybackEngine.VLC) {
-            osd.toast("组播/RTSP 源，自动切换到 VLC 内核");
-            playerManager.setEngine(PlaybackEngine.VLC, false);
-            playerManager.setTextureView(textureView);
-            playerManager.setCallback(playerCallback);
-        }
+        // 现在只有一个内核，udp/rtp/rtsp 天然支持，不需要再切。
         java.util.Map<String, String> merged = HttpHeaderProfile.merge(globalHeaders, headers);
-        if (!merged.isEmpty()
-                && playerManager.engine() == PlaybackEngine.VLC) {
+        if (!merged.isEmpty()) {
             String lost = HttpHeaderProfile.vlcUnsupported(merged);
             if (!lost.isEmpty()) osd.toast("VLC 不支持请求头 " + lost + "，可能影响播放");
         }
@@ -2507,7 +2426,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         sb.append("当前地址: ").append(currentPlayUrl).append('\n');
         sb.append("播放器: ").append(player == null ? "null" : player.getClass().getSimpleName()).append('\n');
         if (playerManager != null) {
-            sb.append("状态: ").append(playerManager.diagnostics()).append('\n');
+            sb.append("状态: ").append(playerManager.tag()).append('\n');
         }
         boolean surfaceOk = surfaceView != null
                 && surfaceView.getHolder().getSurface() != null
@@ -4749,7 +4668,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                     + "设备      " + brand + " " + model + "\n"
                     + "系统      Android " + android.os.Build.VERSION.RELEASE
                     + "（API " + android.os.Build.VERSION.SDK_INT + "）\n"
-                    + "播放内核  libVLC 3.5.1 + ExoPlayer 1.3.1\n"
+                    + "播放内核  libVLC 3.7.7\n"
                     + "界面      全部自绘，零第三方 UI 控件\n\n"
                     + "本应用不收集任何数据，不做联网统计。\n"
                     + "直播源由你自行配置，播放内容与本应用无关。";
@@ -4838,32 +4757,12 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         if (row == ROW_TIMEOUT) {
             armWatchdog();     // 立即按新策略重新计时
         } else if (row == ROW_DECODER) {
-            // 软硬解：只对 Exo 有意义。改了就重建播放器（渲染器在 build 时固定）。
-            if (playerManager != null && playerManager.engine() == PlaybackEngine.EXO) {
-                softPref = (value == 1);
-                rebuildEngine(PlaybackEngine.EXO, true);
+            // 解码方式是 VLC 的启动参数，改了要重建 LibVLC 实例。
+            // setDecoderMode 内部会 release 掉旧的，下次 play 时按新参数重建。
+            if (playerManager != null) {
+                playerManager.setDecoderMode(value);
                 playChannel(playingChannel);
             }
-        } else if (row == ROW_ENGINE) {
-            // 用户手选内核 → 锁定，不再自动降级，否则设置等于没设
-            PlaybackEngine e = PlaybackEngine.of(value);
-            if (!PlayerManager.available(e)) {
-                osd.toast(e.label + " 内核在本机不可用（ABI 不匹配）");
-                return;
-            }
-            resetNoVideoStage();
-            markEngineAttempt(e);
-            // rebuildEngine 是异步的（要等旧实例在后台释放完）。
-            // 直接 play() 会因为 impl 还是 null 而什么都不做 ——
-            // 这就是"切了内核但不生效"的原因。改成等就绪再播。
-            if (playerManager != null) {
-                playerManager.setOnSwapped(new Runnable() {
-                    @Override public void run() {
-                        playChannel(playingChannel);
-                    }
-                });
-            }
-            rebuildEngine(e, true);
         } else if (row == ROW_HEADERS) {
             openHeaderEditor();
         } else if (row == ROW_AUTOPLAY) {

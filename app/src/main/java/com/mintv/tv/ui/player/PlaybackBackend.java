@@ -140,5 +140,5 @@ public interface PlaybackBackend {
     Mode mode();
 
     /** 内核标识，写日志和诊断面板用。 */
-    default String tag() { return PlaybackEngine.EXO.name(); }
+    default String tag() { return "player"; }
 }

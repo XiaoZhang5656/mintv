@@ -33,11 +33,10 @@ public final class Settings {
     public static final int IDX_DECODER     = 8;
     public static final int IDX_TIMEOUT     = 9;
     public static final int IDX_HEADERS     = 10;
-    public static final int IDX_ENGINE      = 11;
-    public static final int IDX_CLOCK       = 12;
-    public static final int IDX_OUTPUT      = 13;
-    public static final int IDX_THEME       = 14;
-    public static final int IDX_GROUP_MGR   = 15;
+    public static final int IDX_CLOCK       = 11;
+    public static final int IDX_OUTPUT      = 12;
+    public static final int IDX_THEME       = 13;
+    public static final int IDX_GROUP_MGR   = 14;
 
     /** 总表。下标即行号。 */
     public static final SettingDef[] ALL = {
@@ -62,16 +61,13 @@ public final class Settings {
                     "开机后自动拉起本应用",
                     new String[]{"开启", "关闭"}, 0),
             SettingDef.value("decoder", "解码方式",
-                    "低性能盒子软解会掉帧，仅在花屏时切换",
-                    new String[]{"硬件", "软件"}, 0),
+                    "自动最稳（硬解失败自动转软解）；花屏/绿屏时手动切软解",
+                    new String[]{"自动", "内置硬解码", "软件解码"}, 0),
             SettingDef.value("timeout", "超时换源",
                     "起播无画面 / 播放中卡住超过该秒数，自动切下一条线路",
                     new String[]{"关闭", "5 秒", "8 秒", "12 秒", "20 秒"}, 2),
             SettingDef.action("headers", "请求头",
                     "该源需要特定 UA/Referer 时才填，全局生效", "编辑…"),
-            SettingDef.value("engine", "播放内核",
-                    "Exo 起播快 / VLC 格式覆盖最广",
-                    new String[]{"ExoPlayer", "VLC"}, 0),
             SettingDef.value("clock", "时钟显示",
                     "面板收起看片时是否保留右上角日期时间",
                     new String[]{"随面板隐藏", "始终显示"}, 0),

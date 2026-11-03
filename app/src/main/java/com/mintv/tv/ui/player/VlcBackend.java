@@ -31,6 +31,16 @@ public final class VlcBackend implements PlaybackBackend {
     private MediaPlayer player;
     /** 后台收尾线程（stop/release）。libVLC 的 join 可能要几秒，不能在主线程等。 */
     private Thread ioThread;
+    /** 0=自动 1=内置硬解 2=软件解码（来自设置项） */
+    private int hwMode = 0;
+
+    /** 设置解码方式。下次创建 LibVLC 时生效。 */
+    public void setHwMode(int mode) {
+        if (mode == hwMode) return;
+        hwMode = mode;
+        // 已经建好的 LibVLC 不会重读参数，需要重建
+        release();
+    }
     private SurfaceView surfaceView;
     private android.view.TextureView textureView;
     private Callback cb;
@@ -107,7 +117,16 @@ public final class VlcBackend implements PlaybackBackend {
         args.add("--network-caching=800");
         args.add("--live-caching=800");
         args.add("--file-caching=800");
-        args.add("--avcodec-hw=any");
+        // 解码方式：0=自动 1=内置硬解 2=软件解码
+        //
+        // libVLC 的 --avcodec-hw 取值：
+        //   any / mediacodec  优先硬件（Android 走 MediaCodec），失败自动转软解
+        //   none              强制软解
+        // 实测你这台机器 mediacodec 可用；花屏时切「软件解码」即可。
+        int decMode = hwMode;
+        if (decMode == 2) args.add("--avcodec-hw=none");
+        else args.add("--avcodec-hw=mediacodec");
+        args.add("--no-mediacodec-dr");
         args.add("--no-sub-autodetect-file");
         args.add("--no-osd");
         args.add("--no-video-title-show");
@@ -415,7 +434,7 @@ public final class VlcBackend implements PlaybackBackend {
         }, "vlc-release").start();
     }
 
-    @Override public String tag() { return PlaybackEngine.VLC.name(); }
+    @Override public String tag() { return "VLC"; }
 
     @Override public Mode mode() { return mode; }
 
