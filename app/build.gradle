@@ -29,8 +29,8 @@ android {
         // 方法数已超 64K（media3 + libvlc + zxing + androidx.core）
         multiDexEnabled true
         targetSdk 34
-        versionCode 106
-        versionName "2.15.0"
+        versionCode 107
+        versionName "2.15.1"
 
         // 注意：这里不能再写 ndk { abiFilters ... }。
         // AGP 会直接报 "Conflicting configuration : 'arm64-v8a,armeabi-v7a'
@@ -53,12 +53,18 @@ android {
     }
 
     buildTypes {
+        // CI 构建的是 debug 变体，所以 debug 也必须指定固定签名。
+        // 之前只给 release 配了 stable，debug 走了 AGP 默认的随机密钥 ——
+        // 这才是"每次签名都不一样"的真正原因。
+        debug {
+            signingConfig signingConfigs.stable
+        }
         release {
             minifyEnabled true
             shrinkResources true
             // native 库大量走 JNI 反射，混淆必然崩
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
-            // 用 CI 生成的固定调试签名（口令 android/android），保证版本可覆盖升级
+            // 固定签名，保证可以就地覆盖升级
             signingConfig signingConfigs.stable
         }
     }
