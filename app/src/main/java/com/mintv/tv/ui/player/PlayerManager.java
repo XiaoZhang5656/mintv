@@ -126,6 +126,7 @@ public final class PlayerManager implements PlaybackBackend {
             ((VlcBackend) old).detachViewsSafe();
         }
 
+        swapping = true;
         new Thread(new Runnable() {
             @Override public void run() {
                 // 阻塞调用全在这里：detach / stop / release
@@ -133,8 +134,14 @@ public final class PlayerManager implements PlaybackBackend {
                 Runnable done = new Runnable() {
                     @Override public void run() {
                         buildNew.run();
-                        // 切换是异步的，调用方不能紧接着 play()（那时 impl 还是 null）。
-                        // 用回调通知"新内核已就绪"，由调用方在这里发起播放。
+                        swapping = false;
+                        // 先执行挂起的播放请求（换内核期间用户按了换台）
+                        if (pendingPlay != null) {
+                            Runnable r = pendingPlay;
+                            pendingPlay = null;
+                            r.run();
+                        }
+                        // 再执行显式的"切换完成"回调
                         if (onSwapped != null) {
                             Runnable r = onSwapped;
                             onSwapped = null;
@@ -189,9 +196,36 @@ public final class PlayerManager implements PlaybackBackend {
     @Override
     public void play(Context appCtx, String url, Mode mode) { play(appCtx, url, null, mode); }
 
-    public void play(Context appCtx, String url, Map<String, String> headers, Mode mode) {
-        if (headers == null) headers = java.util.Collections.emptyMap();
-        if (impl == null) rebuild();
+    /** 换内核期间挂起的播放请求。 */
+    private Runnable pendingPlay;
+    /** 是否正在换内核（后台释放旧实例中）。 */
+    private volatile boolean swapping;
+
+    public void play(final Context appCtx, final String url,
+                     final Map<String, String> headersIn, final Mode mode) {
+        final Map<String, String> headers = headersIn == null
+                ? java.util.Collections.<String, String>emptyMap() : headersIn;
+
+        if (impl == null) {
+            if (swapping) {
+                // ⚠ 关键：换内核进行中，**绝不能**在这里 rebuild()。
+                //
+                // 以前这里写的是 if (impl == null) rebuild()，于是：
+                //   后台线程正在 release 旧实例（VLC，可能几百毫秒）
+                //   主线程这句又建了一个新实例并开始播放
+                // → 两个播放器同时活着，音频混在一起 ——
+                //   用户听到的就是"换个台还能听见上一个台的声音"。
+                //
+                // 现在改成排队：把这次播放请求记下来，等 swap 完成后执行。
+                pendingPlay = new Runnable() {
+                    @Override public void run() { play(appCtx, url, headers, mode); }
+                };
+                return;
+            }
+            rebuild();
+            if (impl == null) return;
+        }
+
         bindSurface();
         if (impl instanceof Media3Backend) {
             ((Media3Backend) impl).play(appCtx, url, headers, mode);

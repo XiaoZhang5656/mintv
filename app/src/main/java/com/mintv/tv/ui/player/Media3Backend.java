@@ -453,8 +453,17 @@ public final class Media3Backend implements PlaybackBackend {
         });
     }
 
+    /**
+     * 当前是否真的在播。
+     *
+     * <p><b>不能用 getPlayWhenReady()</b>：那个是"是否允许播放"的标志，
+     * pause() 之后它仍然是 true —— 于是"暂停/继续"永远判定成"正在播"，
+     * 点了暂停就再也恢复不了（Exo 侧同一个 bug）。
+     *
+     * <p>isPlaying() 才是"有画面在走"的意思，暂停后返回 false。
+     */
     @Override public boolean isPlaying() {
-        return player != null && player.getPlayWhenReady();
+        return player != null && player.isPlaying();
     }
 
     @Override

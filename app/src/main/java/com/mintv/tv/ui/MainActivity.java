@@ -4875,8 +4875,22 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             getSharedPreferences(PREF, MODE_PRIVATE).edit()
                     .putInt(KEY_UI_THEME, value).apply();
             Theme.applyPalette(value);
-            // 整套界面按新配色重建。只换颜色不动布局，所以重建是安全的，
-            // 玩家设置、播放状态都会在 recreate 后由各自的持久化恢复。
+            // ⚠ 必须在 recreate 之前主动停播放器。
+            //
+            // recreate 的顺序是「新 Activity onCreate → 旧 Activity onDestroy」，
+            // 而新界面在 onCreate 里就会开始播放。如果等旧 Activity 的
+            // onDestroy 才 release，会有一段时间两个实例同时出声 ——
+            // 这就是"换主题后黑屏但有声音"、"换台还听见上一个台"的来源。
+            if (player != null) {
+                player.stop();
+                player.release();
+                player = null;
+            }
+            if (playerManager != null) {
+                playerManager.release();
+                playerManager = null;
+            }
+            // 整套界面按新配色重建。只换颜色不动布局，所以重建是安全的。
             recreate();
         } else if (row == ROW_OUTPUT) {
             applyOutputMode();
