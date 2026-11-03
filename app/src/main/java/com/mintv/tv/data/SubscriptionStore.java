@@ -38,6 +38,8 @@ public final class SubscriptionStore {
         public String headers = "";
         /** 上次更新成功的时间戳，0 表示没更新过 */
         public long lastUpdate;
+        /** 上次解析出的频道数，只用于界面展示（"839 个频道"）。 */
+        public int channelCount;
 
         public Sub() { }
 
@@ -165,6 +167,7 @@ public final class SubscriptionStore {
                         s.url = o.optString("url", "");
                         s.headers = o.optString("headers", "");
                         s.lastUpdate = o.optLong("lastUpdate", 0L);
+            s.channelCount = o.optInt("channelCount", 0);
                         if (!s.url.isEmpty()) cache.add(s);
                     }
                 }
@@ -174,9 +177,11 @@ public final class SubscriptionStore {
             }
         }
 
-        // 迁移：老版本只有一个 source_url，转成第一条订阅
+        // 迁移：老版本只有一个 source_url，转成第一条订阅。
+        // 注意只在用户**真的存过**地址时迁移 —— SourceStore.url() 现在
+        // 没配置会返回空串，不会再把内置的默认源当成用户的订阅带进来。
         if (cache.isEmpty()) {
-            String url = SourceStore.url(c);
+            String url = SourceStore.hasUserUrl(c) ? SourceStore.url(c) : "";
             if (url != null && !url.isEmpty()) {
                 Sub s = new Sub(newId(), "默认订阅", url);
                 cache.add(s);
@@ -185,6 +190,20 @@ public final class SubscriptionStore {
             }
         }
         if (activeId == null && !cache.isEmpty()) activeId = cache.get(0).id;
+    }
+
+    /** 用传入的条目替换同 id 的那条（用于回写频道数、更新时间等）。 */
+    public static void update(Context c, Sub sub) {
+        if (sub == null || sub.id == null) return;
+        List<Sub> list = list(c);
+        for (int i = 0; i < list.size(); i++) {
+            if (sub.id.equals(list.get(i).id)) {
+                list.set(i, sub);
+                cache = list;
+                save(c);
+                return;
+            }
+        }
     }
 
     private static void save(Context c) {
@@ -198,6 +217,7 @@ public final class SubscriptionStore {
                 o.put("url", s.url);
                 o.put("headers", s.headers == null ? "" : s.headers);
                 o.put("lastUpdate", s.lastUpdate);
+            o.put("channelCount", s.channelCount);
                 arr.put(o);
             }
             JSONObject root = new JSONObject();

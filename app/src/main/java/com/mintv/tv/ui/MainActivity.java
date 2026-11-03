@@ -850,6 +850,14 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                 ui.post(new Runnable() {
                     @Override public void run() {
                         applyPlaylist(result);
+                        // 记下这个订阅解析出多少频道，手机助手页要显示"839 个频道"。
+                        // applyPlaylist 之后 playlist 已经是新解析的结果。
+                        com.mintv.tv.data.SubscriptionStore.Sub act =
+                                com.mintv.tv.data.SubscriptionStore.active(MainActivity.this);
+                        if (act != null && playlist != null && playlist.all != null) {
+                            act.channelCount = playlist.all.size();
+                            com.mintv.tv.data.SubscriptionStore.update(MainActivity.this, act);
+                        }
                         rebuildCategoryColumn();
                         bindChannels();
                         updateChannelFocus(0);
@@ -1356,6 +1364,8 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     private static final int ROW_CLOCK          = 12;
     private static final int ROW_OUTPUT         = 13;
     private static final int ROW_THEME          = 14;
+    private static final int ROW_GROUPMGR       = 15;
+    private static final int ROW_CHECKUPDATE    = 16;
     private static final String KEY_UI_THEME    = "ui_theme";
     private static final String KEY_SELECTIONS  = "selections";
     private static final String KEY_HIDDEN_CATS = "hidden_cats";
@@ -2373,7 +2383,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         if (remotePort < 0) {
             osd.toast("手机助手启动失败：18899/18900 端口都被占用");
         } else {
-            android.util.Log.i("MinTV", "手机助手 http://" + com.mintv.tv.data.LocalIp.get()
+            android.util.Log.i("MinTV", "手机助手 http://" + com.mintv.tv.data.LocalIp.get(MainActivity.this)
                     + ":" + remotePort + "/");
         }
         ui.post(helperTicker);
@@ -2392,7 +2402,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
 
     private void refreshHelperPage() {
         if (helperPage == null) return;
-        String ip = com.mintv.tv.data.LocalIp.get();
+        String ip = com.mintv.tv.data.LocalIp.get(MainActivity.this);
         int port = remotePort > 0 ? remotePort : com.mintv.tv.data.RemoteServer.PORT_MAIN;
         String url = "http://" + ip + ":" + port + "/";
         helperAddr.setText(ip + ":" + port);
@@ -2415,6 +2425,13 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         helperState.setTextColor(on ? Theme.SEL_GREEN : 0xFFFFA53D);
     }
 
+    /**
+     * 重建订阅列表。
+     *
+     * <p>照 HTML 原型做成卡片：圆角、当前项带蓝框和「使用中」绿标、
+     * 右侧显示频道数，别的行给「按 OK 切换」提示。
+     * 之前是一整条平铺的 TextView，既没卡片感也没有操作提示。
+     */
     private void rebuildHelperSubs() {
         if (helperSubs == null) return;
         helperSubs.removeAllViews();
@@ -2423,32 +2440,150 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         String active = com.mintv.tv.data.SubscriptionStore.activeId(this);
 
         for (final com.mintv.tv.data.SubscriptionStore.Sub sub : subs) {
-            boolean on = sub.id != null && sub.id.equals(active);
-            TextView row = new TextView(this);
-            String host = hostOfUrl(sub.url);
-            row.setText(sub.name + "   " + (host == null ? "" : host)
-                    + (on ? "    [使用中]" : ""));
-            row.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, Theme.sp(19));
-            row.setTextColor(on ? Theme.FOCUS_BLUE : Theme.TEXT);
-            row.setBackgroundColor(on ? Theme.PANEL_ACTIVE : Theme.PANEL_ITEM);
-            row.setPadding(Theme.px(16), Theme.px(14), Theme.px(16), Theme.px(14));
+            final boolean on = sub.id != null && sub.id.equals(active);
+
+            LinearLayout row = new LinearLayout(this);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            row.setGravity(Gravity.CENTER_VERTICAL);
+            row.setPadding(Theme.px(20), 0, Theme.px(20), 0);
+            row.setBackground(new SubCardBg(on));
             row.setFocusable(true);
             row.setClickable(true);
             row.setOnClickListener(new View.OnClickListener() {
-                @Override public void onClick(View v) { switchSubscription(sub.id); }
+                @Override public void onClick(View v) {
+                    if (!on) switchSubscription(sub.id);
+                }
             });
+            row.setOnFocusChangeListener(new View.OnFocusChangeListener() {
+                @Override public void onFocusChange(View v, boolean has) {
+                    v.setBackground(new SubCardBg(on, has));
+                }
+            });
+
+            // 名称
+            TextView name = new TextView(this);
+            name.setText(sub.name == null || sub.name.isEmpty() ? "未命名" : sub.name);
+            name.setTextColor(Theme.TEXT);
+            name.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, Theme.sp(21));
+            name.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+            name.setSingleLine(true);
+            row.addView(name, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+            // 使用中 / 格式标
+            if (on) {
+                TextView badge = new TextView(this);
+                badge.setText("使用中");
+                badge.setTextColor(0xFF2EA85A);
+                badge.setBackgroundColor(0x2A2EA85A);
+                badge.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, Theme.sp(14));
+                badge.setPadding(Theme.px(10), Theme.px(4), Theme.px(10), Theme.px(4));
+                LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+                blp.leftMargin = Theme.px(14);
+                row.addView(badge, blp);
+            }
+
+            String fmt = SubFmt.of(sub.url);
+            if (fmt != null) {
+                TextView tag = new TextView(this);
+                tag.setText(fmt);
+                tag.setTextColor(Theme.TEXT_DIM);
+                tag.setBackgroundColor(Theme.PANEL_ITEM);
+                tag.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, Theme.sp(13));
+                tag.setPadding(Theme.px(10), Theme.px(3), Theme.px(10), Theme.px(3));
+                LinearLayout.LayoutParams tlp = new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+                tlp.leftMargin = Theme.px(10);
+                row.addView(tag, tlp);
+            }
+
+            // 右侧：频道数 / 按 OK 切换
+            TextView rightTxt = new TextView(this);
+            rightTxt.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, Theme.sp(15));
+            if (on) {
+                rightTxt.setText(sub.channelCount > 0 ? sub.channelCount + " 个频道" : "当前使用");
+                rightTxt.setTextColor(Theme.TEXT_SUB);
+            } else {
+                rightTxt.setText("按 OK 切换");
+                rightTxt.setTextColor(Theme.FOCUS_BLUE);
+            }
+            rightTxt.setGravity(Gravity.END);
+            LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(
+                    0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+            rlp.leftMargin = Theme.px(16);
+            row.addView(rightTxt, rlp);
+
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-            lp.bottomMargin = Theme.px(8);
+                    ViewGroup.LayoutParams.MATCH_PARENT, Theme.px(76));
+            lp.bottomMargin = Theme.px(10);
             helperSubs.addView(row, lp);
         }
 
         if (subs.isEmpty()) {
             TextView empty = new TextView(this);
-            empty.setText("还没有订阅。用手机扫码添加，或者在本页「请求头」上方手动填源地址。");
+            empty.setText("还没有订阅。\n用手机扫码添加 m3u / txt 源，或在本页手动填地址。");
             empty.setTextColor(Theme.TEXT_SUB);
             empty.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, Theme.sp(17));
+            empty.setLineSpacing(Theme.px(8), 1f);
             helperSubs.addView(empty);
+        }
+    }
+
+    /** 订阅卡片的圆角底：当前项加蓝描边，焦点项加亮底。 */
+    private static final class SubCardBg extends android.graphics.drawable.Drawable {
+        private final android.graphics.Paint fill = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+        private final android.graphics.Paint stroke = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+        private final android.graphics.RectF r = new android.graphics.RectF();
+        private final boolean active;
+        private final boolean focused;
+
+        SubCardBg(boolean active) { this(active, false); }
+
+        SubCardBg(boolean active, boolean focused) {
+            this.active = active;
+            this.focused = focused;
+            stroke.setStyle(android.graphics.Paint.Style.STROKE);
+            stroke.setStrokeWidth(Theme.px(2));
+        }
+
+        @Override public void draw(android.graphics.Canvas c) {
+            r.set(0, 0, getBounds().width(), getBounds().height());
+            float rad = Theme.px(10);
+            if (active) {
+                fill.setColor(Theme.FOCUS_BG);
+                c.drawRoundRect(r, rad, rad, fill);
+                stroke.setColor(Theme.FOCUS_BLUE);
+                r.inset(Theme.px(1), Theme.px(1));
+                c.drawRoundRect(r, rad, rad, stroke);
+            } else {
+                fill.setColor(focused ? Theme.PANEL_ACTIVE : Theme.PANEL_ITEM);
+                c.drawRoundRect(r, rad, rad, fill);
+                if (focused) {
+                    stroke.setColor(0x66FFFFFF);
+                    r.inset(Theme.px(1), Theme.px(1));
+                    c.drawRoundRect(r, rad, rad, stroke);
+                }
+            }
+        }
+
+        @Override public void setAlpha(int a) { fill.setAlpha(a); stroke.setAlpha(a); }
+        @Override public void setColorFilter(android.graphics.ColorFilter f) { fill.setColorFilter(f); }
+        @SuppressWarnings("deprecation")
+        @Override public int getOpacity() { return android.graphics.PixelFormat.TRANSLUCENT; }
+    }
+
+    /** 从 URL 猜格式标：只做展示用。 */
+    private static final class SubFmt {
+        static String of(String url) {
+            if (url == null) return null;
+            String u = url.toLowerCase(java.util.Locale.US);
+            int q = u.indexOf('?');
+            if (q > 0) u = u.substring(0, q);
+            if (u.endsWith(".m3u8")) return "m3u8";
+            if (u.endsWith(".m3u")) return "m3u";
+            if (u.endsWith(".txt")) return "txt";
+            return null;
         }
     }
 
@@ -3234,8 +3369,10 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         int w = Theme.px(Theme.DLG_W);
         FrameLayout.LayoutParams cardLp = new FrameLayout.LayoutParams(
                 w, FrameLayout.LayoutParams.WRAP_CONTENT);
-        cardLp.gravity = Gravity.TOP | Gravity.CENTER_HORIZONTAL;
-        cardLp.topMargin = Theme.px(50);
+        // 屏幕正中：之前是 TOP + topMargin 50，弹窗粘在屏幕上方，
+        // 内容少的时候下面一大片空，看起来就是"不居中"。
+        cardLp.gravity = Gravity.CENTER;
+        cardLp.topMargin = 0;
 
         // 标题栏
         LinearLayout bar = new LinearLayout(this);
@@ -3365,7 +3502,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         updateBtn.setClickable(true);
         updateBtn.setVisibility(View.GONE);
         updateBtn.setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View v) { checkUpdate(); }
+            @Override public void onClick(View v) { checkUpdate(false); }
         });
         LinearLayout.LayoutParams ubLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
@@ -3375,58 +3512,75 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                 ViewGroup.LayoutParams.MATCH_PARENT, rowsLp.height));
 
         // ---------- 手机助手页：左二维码 + 右订阅列表 ----------
+        //
+        // 布局照 HTML 原型走：左边 QR 340px + 地址 + 说明，
+        // 中间一条竖线，右边标题 + 状态 + 订阅卡片。
+        // 之前只是把元素堆上去，比例和层次都没对上，看着像半成品。
         helperPage = new LinearLayout(this);
         helperPage.setOrientation(LinearLayout.HORIZONTAL);
         helperPage.setVisibility(View.GONE);
+        helperPage.setPadding(Theme.px(28), Theme.px(10), Theme.px(28), 0);
 
-        // 左：二维码 + 地址
+        // ---- 左：二维码 + 地址 ----
         LinearLayout left = new LinearLayout(this);
         left.setOrientation(LinearLayout.VERTICAL);
         left.setGravity(Gravity.CENTER_HORIZONTAL);
-        left.setPadding(0, Theme.px(10), Theme.px(20), 0);
+        left.setPadding(0, Theme.px(30), 0, 0);
 
         qrView = new android.widget.ImageView(this);
         qrView.setBackgroundColor(0xFFF7F7F7);
-        int qrSize = Theme.px(260);
-        left.addView(qrView, new LinearLayout.LayoutParams(qrSize, qrSize));
+        qrView.setScaleType(android.widget.ImageView.ScaleType.FIT_CENTER);
+        int qrSize = Theme.px(300);
+        LinearLayout.LayoutParams qrLp =
+                new LinearLayout.LayoutParams(qrSize, qrSize);
+        left.addView(qrView, qrLp);
 
+        // 地址：QR 正下方，等宽字体、主题蓝
         helperAddr = new TextView(this);
         helperAddr.setTextColor(Theme.FOCUS_BLUE);
-        helperAddr.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, Theme.sp(26));
+        helperAddr.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, Theme.sp(28));
         helperAddr.setTypeface(android.graphics.Typeface.MONOSPACE);
         helperAddr.setGravity(Gravity.CENTER);
-        helperAddr.setPadding(0, Theme.px(14), 0, 0);
-        left.addView(helperAddr, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        helperAddr.setPadding(0, Theme.px(22), 0, 0);
+        left.addView(helperAddr);
 
         helperState = new TextView(this);
         helperState.setTextColor(Theme.TEXT_SUB);
-        helperState.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, Theme.sp(17));
+        helperState.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, Theme.sp(16));
         helperState.setGravity(Gravity.CENTER);
-        helperState.setPadding(0, Theme.px(6), 0, 0);
-        left.addView(helperState, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        helperState.setPadding(0, Theme.px(10), 0, 0);
+        left.addView(helperState);
 
         helperPage.addView(left, new LinearLayout.LayoutParams(
-                Theme.px(340), ViewGroup.LayoutParams.MATCH_PARENT));
+                Theme.px(380), ViewGroup.LayoutParams.MATCH_PARENT));
 
-        // 右：订阅列表
+        // ---- 竖分隔线 ----
+        View divider = new View(this);
+        divider.setBackgroundColor(Theme.LINE);
+        LinearLayout.LayoutParams dLp = new LinearLayout.LayoutParams(
+                Math.max(1, Theme.px(1)), ViewGroup.LayoutParams.MATCH_PARENT);
+        dLp.leftMargin = Theme.px(22);
+        dLp.rightMargin = Theme.px(34);
+        dLp.bottomMargin = Theme.px(70);
+        helperPage.addView(divider, dLp);
+
+        // ---- 右：标题 + 状态 + 订阅列表 ----
         LinearLayout right = new LinearLayout(this);
         right.setOrientation(LinearLayout.VERTICAL);
-        right.setPadding(Theme.px(8), 0, 0, 0);
+        right.setPadding(0, Theme.px(24), 0, Theme.px(10));
 
         TextView title = new TextView(this);
         title.setText("切换订阅");
         title.setTextColor(Theme.TEXT);
-        title.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, Theme.sp(24));
+        title.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, Theme.sp(27));
         title.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
         right.addView(title);
 
         TextView tip = new TextView(this);
         tip.setText("手机扫码可导入 m3u / txt 源、改 EPG 和请求头");
         tip.setTextColor(Theme.TEXT_SUB);
-        tip.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, Theme.sp(16));
-        tip.setPadding(0, Theme.px(6), 0, Theme.px(14));
+        tip.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, Theme.sp(15));
+        tip.setPadding(0, Theme.px(8), 0, Theme.px(16));
         right.addView(tip);
 
         helperSubs = new LinearLayout(this);
@@ -3436,6 +3590,13 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         subsScroll.addView(helperSubs);
         right.addView(subsScroll, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+
+        TextView rf = new TextView(this);
+        rf.setText("用遥控器  ↑ ↓  选择，OK 切换订阅");
+        rf.setTextColor(Theme.TEXT_SUB);
+        rf.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, Theme.sp(15));
+        rf.setPadding(0, Theme.px(14), 0, 0);
+        right.addView(rf);
 
         helperPage.addView(right, new LinearLayout.LayoutParams(
                 0, ViewGroup.LayoutParams.MATCH_PARENT, 1f));
@@ -3533,8 +3694,23 @@ public class MainActivity extends Activity implements FocusEngine.Host {
      * jsDelivr 作为镜像通常能通。两个都不通就直接说"检查失败"，
      * 不假装成功、也不弹一堆技术细节给用户。
      */
-    private void checkUpdate() {
-        osd.toast("正在检查更新…");
+    /**
+     * 检测更新的提示。
+     *
+     * <p>不能用 osd.toast：OSD 为了给频道列表让位已经沉到弹窗下层，
+     * 在设置页里调用等于把结果写到看不见的地方。
+     * 系统 Toast 是最上层覆盖窗口，永远可见。
+     */
+    private void tip(String msg) {
+        try {
+            android.widget.Toast.makeText(this, msg, android.widget.Toast.LENGTH_SHORT).show();
+        } catch (Throwable t) {
+            if (osd != null) osd.toast(msg);
+        }
+    }
+
+    private void checkUpdate(boolean silent) {
+        tip("正在检查更新…");
         final String[] urls = {
                 "https://raw.githubusercontent.com/XiaoZhang5656/mintv/main/public/version.json",
                 "https://cdn.jsdelivr.net/gh/XiaoZhang5656/mintv@main/public/version.json",
@@ -3562,16 +3738,16 @@ public class MainActivity extends Activity implements FocusEngine.Host {
 
     private void onUpdateChecked(String json, String baseUrl) {
         if (json == null) {
-            osd.toast("检查更新失败：网络不可达");
+            tip("检查更新失败：网络不可达");
             return;
         }
         int remote = parseIntField(json, "versionCode", -1);
         String remoteName = parseStrField(json, "versionName");
-        if (remote <= 0) { osd.toast("检查更新失败：版本信息解析异常"); return; }
+        if (remote <= 0) { tip("检查更新失败：版本信息解析异常"); return; }
 
         int local = versionCode();
         if (remote <= local) {
-            osd.toast("已是最新版本（" + versionName() + "）");
+            tip("已是最新版本（" + versionName() + "）");
             return;
         }
         final String apkUrl = baseUrl + "apk/app-arm64-v8a-debug.apk";
@@ -3586,7 +3762,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                         android.content.ClipboardManager cm = (android.content.ClipboardManager)
                                 getSystemService(CLIPBOARD_SERVICE);
                         cm.setPrimaryClip(android.content.ClipData.newPlainText("mintv", apkUrl));
-                        osd.toast("地址已复制");
+                        tip("地址已复制");
                     }
                 })
                 .setNegativeButton("知道了", null)
@@ -3763,6 +3939,8 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             if (value == 0) showAutoStartGuide();
         } else if (row == ROW_GROUP_MGR) {
             openGroupManager();
+        } else if (row == ROW_CHECKUPDATE) {
+            checkUpdate(selections[ROW_CHECKUPDATE] == 0);
         } else if (row == ROW_THEME) {
             getSharedPreferences(PREF, MODE_PRIVATE).edit()
                     .putInt(KEY_UI_THEME, value).apply();

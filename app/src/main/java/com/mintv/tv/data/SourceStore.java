@@ -32,20 +32,31 @@ public final class SourceStore {
 
     private static final String FILE_NAME = "source.m3u";
 
-    /**
-     * 默认源取自 Guovin/iptv-api 的 GitHub Pages 输出（每日自动更新 + 测速）。
-     * 换成自己的源：改这里，或在应用里长按左侧「频道列表」标题输入。
-     * 置空则使用内置示范数据。
-     */
-    public static final String DEFAULT_URL = "https://guovin.github.io/iptv-api/result.m3u";
-
-    /** 备用源：同一份数据的 txt 版本，没有台标，用来验证「无图标」渲染路径。 */
-    public static final String BACKUP_URL = "https://guovin.github.io/iptv-api/result.txt";
+    // 这里刻意**不内置任何直播源地址**。
+    // 早期版本写死过一个 guovin.github.io 的地址，结果是：
+    //   · 用户从没配过源，却被当成"默认订阅"塞进订阅列表；
+    //   · 那个地址哪天挂了，所有人打开都是空的，还以为是 App 坏了。
+    // 现在语义是：没配置 = 空字符串，界面用内置示范数据兜底，
+    // 真正的源由用户自己在手机上添加。
 
     private SourceStore() {}
 
+    /**
+     * 用户是否**真的**填过源地址。
+     *
+     * <p>迁移到订阅列表时必须先问这个：早期版本的 url() 在没配置时
+     * 会返回硬编码的默认地址，直接迁移会把那个内置源当成
+     * 用户自己的订阅塞进列表 —— 表现就是"我从来没添加过订阅，
+     * 列表里却有一条默认订阅"。
+     */
+    public static boolean hasUserUrl(Context c) {
+        return sp(c).contains(K_URL);
+    }
+
     public static String url(Context c) {
-        return sp(c).getString(K_URL, DEFAULT_URL);
+        // 没设置过就返回空串，由调用方决定用示范数据
+        String v = sp(c).getString(K_URL, "");
+        return v == null ? "" : v;
     }
 
     public static void setUrl(Context c, String url) {
