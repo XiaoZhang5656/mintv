@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0B0B0C">
+<title>更新订阅 · MinTV</title>
+<link rel="stylesheet" href="app.css">
+<style>
+  .back{display:inline-flex;align-items:center;gap:6px;color:var(--sub);
+    font-size:13.5px;margin-bottom:14px;text-decoration:none}
+  .back span{font-size:17px;line-height:1}
+  .hd2{font-size:20px;font-weight:600;margin:0 0 3px}
+  .hd2 + .ip{margin-left:0}
+
+  .state{display:flex;align-items:center;gap:11px;padding:16px 17px;
+    border-radius:14px;background:var(--card);border:1px solid var(--line)}
+  .state .ic{width:34px;height:34px;border-radius:50%;display:flex;
+    align-items:center;justify-content:center;font-size:17px;flex:0 0 auto}
+  .state.ok .ic{background:var(--tag-live);color:var(--tag-live-fg)}
+  .state.bad .ic{background:rgba(192,57,43,.14);color:var(--red)}
+  .state .t{font-size:15px;font-weight:600}
+  .state .s{font-size:12px;color:var(--sub);margin-top:2px}
+
+  .bar{height:6px;border-radius:3px;background:var(--line);overflow:hidden;margin:14px 0 6px}
+  .bar i{display:block;height:100%;background:var(--blue);width:100%}
+  .pct{display:flex;justify-content:space-between;font-size:11.5px;color:var(--sub)}
+
+  .kv{display:flex;justify-content:space-between;padding:11px 0;
+    border-bottom:1px solid var(--line);font-size:14px}
+  .kv:last-child{border-bottom:0}
+  .kv b{font-weight:600}
+  .kv .u{color:var(--sub);font-size:12.5px}
+
+  .warn{background:rgba(178,106,0,.12);border:1px solid rgba(178,106,0,.3);
+    color:var(--amber);border-radius:12px;padding:12px 14px;font-size:13px;
+    margin-top:12px;line-height:1.6}
+  .tip{font-size:12px;color:var(--sub);margin-top:10px;line-height:1.65}
+
+  .actions{display:flex;gap:10px;margin-top:18px}
+  .actions button{flex:1;border-radius:12px;padding:13px;font-size:14.5px;
+    font-family:inherit;border:1px solid var(--line);background:var(--card2);color:var(--text)}
+  .actions button.main{background:var(--blue);color:var(--save-fg);border:0;font-weight:600}
+</style>
+</head>
+<body>
+
+<a class="back" href="subscriptions.html"><span>‹</span>返回订阅列表</a>
+<h1 class="hd2">更新订阅内容</h1>
+<div class="ip">央视+卫视 · https://guovin.github.io/iptv-api/result.m3u</div>
+
+<!-- 成功态 -->
+<div class="state ok">
+  <div class="ic">✓</div>
+  <div>
+    <div class="t">更新成功</div>
+    <div class="s">用时 1.4 秒 · 208 KB</div>
+  </div>
+</div>
+
+<div class="bar"><i></i></div>
+<div class="pct"><span>下载并解析完成</span><span>100%</span></div>
+
+<div class="sec">结果</div>
+<div class="card">
+  <div class="kv"><span>频道总数</span><b>839</b></div>
+  <div class="kv"><span>分类</span><b>21 个</b></div>
+  <div class="kv"><span>含台标</span><b>612 个</b></div>
+  <div class="kv"><span>支持回看</span><b>0 个</b><span class="u">源未声明时移</span></div>
+  <div class="kv"><span>盒子缓存</span><span class="u">已更新（下次更新 6 小时后）</span></div>
+</div>
+
+<div class="actions">
+  <button class="main">让盒子立即刷新</button>
+</div>
+
+<div class="sec">失败时显示的样子</div>
+
+<div class="state bad">
+  <div class="ic">!</div>
+  <div>
+    <div class="t">更新失败</div>
+    <div class="s">HTTP 404 · 用时 0.6 秒</div>
+  </div>
+</div>
+
+<div class="warn">
+  服务器返回 404，说明这个地址已经失效。<br>
+  常见原因：源站换了路径、或者这条链接本身带时效参数已经过期。
+</div>
+
+<div class="tip">
+  建议在电脑或手机浏览器里打开这个地址确认一下：
+  能下载到 .m3u / .txt 才算有效。
+</div>
+
+<div class="actions">
+  <button>重新尝试</button>
+  <button class="main">编辑地址</button>
+</div>
+
+<script src="theme.js"></script>
+</body>
+</html>

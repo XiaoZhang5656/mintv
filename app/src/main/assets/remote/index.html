@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0B0B0C">
+<title>MinTV 遥控</title>
+<link rel="stylesheet" href="app.css">
+<style>
+  body{padding:0 0 calc(24px + env(safe-area-inset-bottom))}
+
+  /* ---------- 顶栏 ---------- */
+  .bar{display:flex;align-items:center;gap:10px;padding:14px 18px 10px}
+  .bar .nm{font-size:15px;font-weight:600}
+  .bar .st{display:flex;align-items:center;gap:5px;font-size:11.5px;color:var(--sub)}
+  .bar .dot{width:6px;height:6px;border-radius:50%;background:var(--green)}
+  .bar .theme{margin-left:auto;background:var(--card2);border:1px solid var(--line);
+    color:var(--sub);border-radius:999px;padding:6px 12px;font-size:11.5px;font-family:inherit}
+
+  /* ---------- 正在播放卡片 ---------- */
+  .now{margin:4px 16px 18px;background:var(--card);border:1px solid var(--line);
+    border-radius:18px;padding:15px 17px;box-shadow:var(--shadow)}
+  .now .l1{display:flex;align-items:baseline;gap:9px}
+  .now .no{font-size:12px;font-weight:700;letter-spacing:.5px;color:var(--blue);
+    background:var(--blue-dim);padding:2px 8px;border-radius:6px}
+  .now .cn{font-size:19px;font-weight:600}
+  .now .meta{display:flex;gap:12px;margin-top:7px;font-size:11.5px;color:var(--sub)}
+  .now .meta b{color:var(--text);font-weight:500}
+  .now .bar2{height:4px;border-radius:2px;background:var(--line);margin-top:11px;overflow:hidden}
+  .now .bar2 i{display:block;height:100%;background:var(--blue);width:47%}
+
+  /* ---------- 圆形按钮通用 ---------- */
+  .circle{background:var(--card);border:1px solid var(--line);border-radius:50%;
+    display:flex;align-items:center;justify-content:center;color:var(--text);
+    box-shadow:var(--shadow);transition:transform .09s ease, background .12s;
+    -webkit-tap-highlight-color:transparent;padding:0}
+  .circle:active{transform:scale(.93);background:var(--card2)}
+  .circle svg{width:46%;height:46%;stroke:currentColor;fill:none;
+    stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
+
+  /* 快捷行 */
+  .quick{display:flex;gap:14px;justify-content:center;padding:2px 16px 6px}
+  .quick .circle{width:52px;height:52px}
+
+  /* ---------- 方向键 ---------- */
+  .padwrap{display:flex;justify-content:center;margin:22px 0 10px}
+  .pad{position:relative;width:250px;height:250px;border-radius:50%;
+    background:var(--card);border:1px solid var(--line);box-shadow:var(--shadow)}
+  .pad .dir{position:absolute;width:74px;height:74px;border:0;background:transparent;
+    color:var(--text);display:flex;align-items:center;justify-content:center;padding:0;
+    -webkit-tap-highlight-color:transparent;border-radius:22px}
+  .pad .dir svg{width:22px;height:22px;stroke:currentColor;fill:none;
+    stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}
+  .pad .dir:active{background:var(--card2)}
+  .pad .up{top:6px;left:50%;transform:translateX(-50%)}
+  .pad .down{bottom:6px;left:50%;transform:translateX(-50%)}
+  .pad .left{left:6px;top:50%;transform:translateY(-50%)}
+  .pad .right{right:6px;top:50%;transform:translateY(-50%)}
+  .pad .ok{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
+    width:104px;height:104px;border-radius:50%;border:1px solid var(--line);
+    background:var(--card2);color:var(--text);font-size:15px;font-weight:600;
+    letter-spacing:1px;font-family:inherit;-webkit-tap-highlight-color:transparent}
+  .pad .ok:active{transform:translate(-50%,-50%) scale(.95);background:var(--active)}
+
+  /* ---------- CH / VOL 长条 ---------- */
+  .rockers{display:flex;justify-content:space-between;align-items:flex-end;
+    padding:6px 30px 0}
+  .rocker{width:64px;border-radius:34px;background:var(--card);
+    border:1px solid var(--line);box-shadow:var(--shadow);overflow:hidden}
+  .rocker button{width:100%;height:56px;border:0;background:transparent;color:var(--text);
+    font-size:20px;font-family:inherit;-webkit-tap-highlight-color:transparent;
+    display:flex;align-items:center;justify-content:center}
+  .rocker button:active{background:var(--card2)}
+  .rocker .lab{height:26px;display:flex;align-items:center;justify-content:center;
+    font-size:10.5px;letter-spacing:1.2px;color:var(--sub);
+    border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
+
+  /* ---------- 频道列表 ---------- */
+  .list{display:flex;flex-direction:column;gap:8px;padding:0 16px;margin-top:6px}
+  .row2{display:flex;align-items:center;gap:12px;background:var(--card);
+    border:1px solid var(--line);border-radius:14px;padding:12px 15px;font-size:14.5px}
+  .row2.on{border-color:var(--active-line);background:var(--active)}
+  .row2 .n{font-size:11.5px;color:var(--sub);min-width:34px;font-family:ui-monospace,Menlo,monospace}
+  .row2 .g{margin-left:auto;font-size:11px;color:var(--sub)}
+</style>
+</head>
+<body>
+
+<div class="bar">
+  <div>
+    <div class="nm">客厅盒子</div>
+    <div class="st"><span class="dot"></span>已连接 · 192.168.1.23</div>
+  </div>
+  <button class="theme" data-theme-btn onclick="MintvTheme.cycle()">跟随系统</button>
+</div>
+
+<div class="now">
+  <div class="l1">
+    <span class="no">0004</span>
+    <span class="cn">CCTV-4</span>
+  </div>
+  <div class="meta">
+    <span>线路 <b>1/5</b></span>
+    <span><b>1280×720</b></span>
+    <span><b>213 KB/s</b></span>
+  </div>
+  <div class="bar2"><i></i></div>
+</div>
+
+<div class="quick">
+  <button class="circle" data-k="POWER" aria-label="电源">
+    <svg viewBox="0 0 24 24"><path d="M12 4v8"/><path d="M7.5 6.8a8 8 0 1 0 9 0"/></svg>
+  </button>
+  <button class="circle" data-k="BACK" aria-label="返回">
+    <svg viewBox="0 0 24 24"><path d="M20 12H5"/><path d="M11 6l-6 6 6 6"/></svg>
+  </button>
+  <button class="circle" data-k="MENU" aria-label="菜单">
+    <svg viewBox="0 0 24 24"><path d="M4 7h16"/><path d="M4 12h16"/><path d="M4 17h16"/></svg>
+  </button>
+  <button class="circle" data-k="MUTE" aria-label="静音">
+    <svg viewBox="0 0 24 24"><path d="M4 9h3l4-4v14l-4-4H4z"/><path d="M16 9l4 6"/><path d="M20 9l-4 6"/></svg>
+  </button>
+</div>
+
+<div class="padwrap">
+  <div class="pad">
+    <button class="dir up" data-k="UP" aria-label="上">
+      <svg viewBox="0 0 24 24"><path d="M6 15l6-6 6 6"/></svg>
+    </button>
+    <button class="dir left" data-k="LEFT" aria-label="左">
+      <svg viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg>
+    </button>
+    <button class="ok" data-k="OK">OK</button>
+    <button class="dir right" data-k="RIGHT" aria-label="右">
+      <svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg>
+    </button>
+    <button class="dir down" data-k="DOWN" aria-label="下">
+      <svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>
+    </button>
+  </div>
+</div>
+
+<div class="rockers">
+  <div class="rocker">
+    <button data-k="CH_UP">+</button>
+    <div class="lab">CH</div>
+    <button data-k="CH_DOWN">−</button>
+  </div>
+  <div class="rocker">
+    <button data-k="VOL_UP">+</button>
+    <div class="lab">VOL</div>
+    <button data-k="VOL_DOWN">−</button>
+  </div>
+</div>
+
+<div class="sec" style="padding:0 18px;margin-top:24px">频道</div>
+<div class="list">
+  <div class="row2 on"><span class="n">0004</span>CCTV-4<span class="g">央视频道</span></div>
+  <div class="row2"><span class="n">0003</span>CCTV-3<span class="g">央视频道</span></div>
+  <div class="row2"><span class="n">0037</span>湖南卫视<span class="g">卫视频道</span></div>
+  <div class="row2"><span class="n">0034</span>广东卫视<span class="g">卫视频道</span></div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script src="theme.js"></script>
+<script>
+(function(){
+  // 按键反馈
+  var toast=document.getElementById('toast'), tid;
+  document.querySelectorAll('[data-k]').forEach(function(el){
+    el.addEventListener('click',function(){
+      toast.textContent=el.dataset.k;
+      toast.classList.add('show');
+      clearTimeout(tid);
+      tid=setTimeout(function(){toast.classList.remove('show');},1200);
+    });
+  });
+})();
+</script>
+</body>
+</html>

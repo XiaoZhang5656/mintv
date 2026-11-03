@@ -1,0 +1,320 @@
+package com.mintv.tv.data;
+
+import android.content.Context;
+import android.content.res.AssetManager;
+import android.util.Log;
+
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.InetSocketAddress;
+import java.net.ServerSocket;
+import java.net.Socket;
+import java.net.URLDecoder;
+import java.util.HashMap;
+import java.util.Map;
+
+/**
+ * 手机遥控 / 订阅管理用的极简 HTTP 服务。
+ *
+ * <p>为什么手写而不是引 NanoHTTPD：整个项目零第三方依赖，
+ * 而这里只需要「读一行请求 + 回一段字节」，200 行够了。
+ *
+ * <p>端口：先试 {@link #PORT_MAIN}（18899），被占用再试 {@link #PORT_ALT}（18900）。
+ * 不用 8080/8899 是因为这类端口在各种开发工具里太常见，撞上就起不来。
+ *
+ * <p>每次请求处理完就关闭连接（Connection: close）——
+ * 手机端每秒轮询一次状态，重新建连的开销在局域网里可以忽略，
+ * 换来的是完全不用管长连接的半关闭、超时、连接泄漏。
+ */
+public final class RemoteServer {
+
+    public static final int PORT_MAIN = 18899;
+    public static final int PORT_ALT  = 18900;
+
+    private static final String TAG = "RemoteServer";
+    private static final String ASSET_DIR = "remote/";
+
+    /** 业务回调，由 Activity 实现。 */
+    public interface Host {
+        /** 当前播放状态 JSON */
+        String stateJson();
+        /** 执行一条遥控命令，返回给手机的一句话结果 */
+        String onCommand(String type, String value);
+        /** 订阅列表 JSON */
+        String subsJson();
+        /** 订阅增删改切，返回 {"ok":true} 或 {"ok":false,"msg":"..."} */
+        String onSubsAction(String action, org.json.JSONObject payload);
+    }
+
+    private final Context appCtx;
+    private final Host host;
+    private ServerSocket server;
+    private int port = -1;
+    private volatile boolean running = false;
+    /** 最后一次收到请求的时间，用来判断「手机是否已连接」。 */
+    private volatile long lastHit = 0L;
+    private Thread acceptThread;
+
+    public RemoteServer(Context ctx, Host host) {
+        this.appCtx = ctx.getApplicationContext();
+        this.host = host;
+    }
+
+    public int port() { return port; }
+
+    /** 距上次收到请求多少毫秒；从没收到过返回 Long.MAX_VALUE。 */
+    public long idleMs() {
+        return lastHit == 0 ? Long.MAX_VALUE : System.currentTimeMillis() - lastHit;
+    }
+    public boolean running() { return running; }
+
+    /** 启动。成功返回端口号，两个端口都被占用返回 -1。 */
+    public int start() {
+        if (running) return port;
+        int[] candidates = {PORT_MAIN, PORT_ALT};
+        for (int p : candidates) {
+            try {
+                server = new ServerSocket();
+                server.setReuseAddress(true);
+                server.bind(new InetSocketAddress(p), 8);
+                port = p;
+                break;
+            } catch (Throwable t) {
+                Log.w(TAG, "端口 " + p + " 不可用: " + t);
+                closeQuietly();
+            }
+        }
+        if (port < 0) return -1;
+
+        running = true;
+        acceptThread = new Thread(new Runnable() {
+            @Override public void run() { acceptLoop(); }
+        }, "remote-http");
+        acceptThread.start();
+        Log.i(TAG, "HTTP 服务已启动，端口 " + port);
+        return port;
+    }
+
+    public void stop() {
+        running = false;
+        closeQuietly();
+        if (acceptThread != null) {
+            acceptThread.interrupt();
+            acceptThread = null;
+        }
+        port = -1;
+    }
+
+    private void closeQuietly() {
+        try { if (server != null) server.close(); } catch (Throwable ignored) { }
+        server = null;
+    }
+
+    private void acceptLoop() {
+        while (running) {
+            Socket s = null;
+            try {
+                s = server.accept();
+                s.setSoTimeout(8000);
+                handle(s);
+            } catch (Throwable t) {
+                if (!running) break;
+            } finally {
+                if (s != null) try { s.close(); } catch (Throwable ignored) { }
+            }
+        }
+    }
+
+    // ---------------- 单次请求 ----------------
+
+    private void handle(Socket s) {
+        lastHit = System.currentTimeMillis();
+        try {
+            InputStream in = s.getInputStream();
+            OutputStream out = s.getOutputStream();
+
+            String requestLine = readLine(in);
+            if (requestLine == null || requestLine.isEmpty()) return;
+            String[] parts = requestLine.split(" ");
+            if (parts.length < 2) return;
+            String method = parts[0];
+            String path = parts[1];
+            int q = path.indexOf('?');
+            String query = q >= 0 ? path.substring(q + 1) : "";
+            if (q >= 0) path = path.substring(0, q);
+
+            // 读完请求头，拿到 Content-Length
+            int contentLength = 0;
+            String line;
+            while ((line = readLine(in)) != null && !line.isEmpty()) {
+                int c = line.indexOf(':');
+                if (c > 0 && "content-length".equalsIgnoreCase(line.substring(0, c).trim())) {
+                    try { contentLength = Integer.parseInt(line.substring(c + 1).trim()); }
+                    catch (Throwable ignored) { }
+                }
+            }
+            String body = "";
+            if (contentLength > 0) {
+                byte[] buf = new byte[contentLength];
+                int read = 0;
+                while (read < contentLength) {
+                    int n = in.read(buf, read, contentLength - read);
+                    if (n <= 0) break;
+                    read += n;
+                }
+                body = new String(buf, 0, read, "UTF-8");
+            }
+
+            route(method, path, query, body, out);
+            out.flush();
+        } catch (Throwable t) {
+            Log.w(TAG, "请求处理失败: " + t);
+        }
+    }
+
+    private void route(String method, String path, String query, String body, OutputStream out)
+            throws IOException {
+        // ---- API ----
+        if ("/api/state".equals(path)) {
+            send(out, 200, "application/json; charset=utf-8", host.stateJson());
+            return;
+        }
+        if ("/api/cmd".equals(path)) {
+            String type = jsonField(body, "type");
+            String value = jsonField(body, "value");
+            String result = host.onCommand(type, value);
+            send(out, 200, "application/json; charset=utf-8",
+                    "{\"ok\":true,\"msg\":" + quote(result) + "}");
+            return;
+        }
+        if ("/api/subs".equals(path)) {
+            if ("POST".equals(method)) {
+                String resp = host.onSubsAction(jsonField(body, "action"), safeJson(body));
+                send(out, 200, "application/json; charset=utf-8",
+                        resp == null ? "{\"ok\":false}" : resp);
+            } else {
+                send(out, 200, "application/json; charset=utf-8", host.subsJson());
+            }
+            return;
+        }
+
+        // ---- 静态页 ----
+        String name = path.equals("/") ? "index.html" : path.substring(1);
+        if (name.contains("..")) { send(out, 403, "text/plain", "forbidden"); return; }
+        byte[] data = readAsset(name);
+        if (data == null) {
+            send(out, 404, "text/plain; charset=utf-8", "not found");
+            return;
+        }
+        send(out, 200, mimeOf(name), data);
+    }
+
+    private byte[] readAsset(String name) {
+        AssetManager am = appCtx.getAssets();
+        InputStream in = null;
+        try {
+            in = am.open(ASSET_DIR + name);
+            ByteArrayOutputStream bos = new ByteArrayOutputStream(8192);
+            byte[] buf = new byte[8192];
+            int n;
+            while ((n = in.read(buf)) > 0) bos.write(buf, 0, n);
+            return bos.toByteArray();
+        } catch (Throwable t) {
+            return null;
+        } finally {
+            if (in != null) try { in.close(); } catch (Throwable ignored) { }
+        }
+    }
+
+    private static String mimeOf(String name) {
+        if (name.endsWith(".html")) return "text/html; charset=utf-8";
+        if (name.endsWith(".css")) return "text/css; charset=utf-8";
+        if (name.endsWith(".js")) return "application/javascript; charset=utf-8";
+        if (name.endsWith(".json")) return "application/json; charset=utf-8";
+        if (name.endsWith(".png")) return "image/png";
+        if (name.endsWith(".svg")) return "image/svg+xml";
+        return "text/plain; charset=utf-8";
+    }
+
+    private void send(OutputStream out, int code, String mime, String body) throws IOException {
+        send(out, code, mime, body == null ? new byte[0] : body.getBytes("UTF-8"));
+    }
+
+    private void send(OutputStream out, int code, String mime, byte[] body) throws IOException {
+        String head = "HTTP/1.1 " + code + " " + (code == 200 ? "OK" : code == 404 ? "Not Found" : "Error") + "\r\n"
+                + "Content-Type: " + mime + "\r\n"
+                + "Content-Length: " + body.length + "\r\n"
+                + "Cache-Control: no-store\r\n"
+                + "Connection: close\r\n\r\n";
+        out.write(head.getBytes("UTF-8"));
+        out.write(body);
+    }
+
+    // ---------------- 工具 ----------------
+
+    /** 逐字节读一行。用 InputStream 而不是 BufferedReader，避免它把后面的 body 也缓冲走。 */
+    private static String readLine(InputStream in) throws IOException {
+        ByteArrayOutputStream bos = new ByteArrayOutputStream();
+        int c;
+        while ((c = in.read()) != -1) {
+            if (c == '\n') break;
+            if (c == '\r') continue;
+            bos.write(c);
+            if (bos.size() > 8192) break;
+        }
+        if (c == -1 && bos.size() == 0) return null;
+        return new String(bos.toByteArray(), "UTF-8");
+    }
+
+    /** 极简 JSON 取值（够读手机发来的小对象）。 */
+    private static String jsonField(String json, String key) {
+        if (json == null) return null;
+        try {
+            org.json.JSONObject o = new org.json.JSONObject(json);
+            return o.optString(key, null);
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    private static org.json.JSONObject safeJson(String body) {
+        try {
+            return new org.json.JSONObject(body);
+        } catch (Throwable t) {
+            return new org.json.JSONObject();
+        }
+    }
+
+    private static String quote(String s) {
+        if (s == null) return "\"\"";
+        StringBuilder sb = new StringBuilder("\"");
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            switch (c) {
+                case '"': sb.append("\\\""); break;
+                case '\\': sb.append("\\\\"); break;
+                case '\n': sb.append("\\n"); break;
+                case '\r': break;
+                default: sb.append(c);
+            }
+        }
+        return sb.append('"').toString();
+    }
+
+    /** 从表单/查询串取值，够 /api/cmd?type=xx 这种用。 */
+    public static Map<String, String> parseQuery(String query) {
+        Map<String, String> m = new HashMap<>();
+        if (query == null || query.isEmpty()) return m;
+        for (String kv : query.split("&")) {
+            int eq = kv.indexOf('=');
+            if (eq <= 0) continue;
+            try {
+                m.put(URLDecoder.decode(kv.substring(0, eq), "UTF-8"),
+                        URLDecoder.decode(kv.substring(eq + 1), "UTF-8"));
+            } catch (Throwable ignored) { }
+        }
+        return m;
+    }
+}

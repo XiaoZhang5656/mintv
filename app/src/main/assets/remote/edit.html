@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0B0B0C">
+<title>编辑订阅 · MinTV</title>
+<link rel="stylesheet" href="app.css">
+<style>
+  .back{display:inline-flex;align-items:center;gap:6px;color:var(--sub);
+    font-size:13.5px;margin-bottom:14px;text-decoration:none}
+  .back span{font-size:17px;line-height:1}
+  .hd2{font-size:20px;font-weight:600;margin:0 0 3px}
+  .hd2 + .ip{margin-left:0}
+  .del-wrap{margin-top:26px;padding-top:18px;border-top:1px solid var(--line)}
+  .del{width:100%;background:transparent;border:1px solid var(--red);
+    color:var(--red);border-radius:12px;padding:13px;font-size:14.5px;
+    font-family:inherit}
+  .del:active{background:rgba(192,57,43,.08)}
+  .savebar{position:fixed;left:14px;right:14px;
+    bottom:calc(16px + env(safe-area-inset-bottom));display:flex;gap:10px}
+  .savebar button{flex:1;border:0;border-radius:13px;padding:15px;
+    font-size:15.5px;font-weight:600;font-family:inherit}
+  .savebar .ghost{background:var(--card2);color:var(--text);border:1px solid var(--line);flex:0 0 34%}
+  .savebar .main{background:var(--blue);color:var(--save-fg)}
+</style>
+</head>
+<body>
+
+<a class="back" href="subscriptions.html"><span>‹</span>返回订阅列表</a>
+<h1 class="hd2">编辑订阅</h1>
+<div class="ip">正在使用中 · 上次更新 2 小时前</div>
+
+<div class="card">
+  <label>名称</label>
+  <input value="央视+卫视">
+
+  <label>地址（m3u / m3u8 / txt）</label>
+  <input value="https://guovin.github.io/iptv-api/result.m3u">
+
+  <div class="row">
+    <div>
+      <label>格式</label>
+      <select><option>自动识别</option><option>m3u</option><option>txt</option></select>
+    </div>
+    <div>
+      <label>请求头</label>
+      <input placeholder="UA / Referer" value="User-Agent=okhttp/3.12.0">
+    </div>
+  </div>
+
+  <label>备注（只给自己看）</label>
+  <input placeholder="例如：每天 8 点自动更新">
+</div>
+
+<div class="sec">订阅选项</div>
+<div class="card">
+  <div class="sw"><span>使用这个订阅</span><span class="toggle on"></span></div>
+  <div class="sw"><span>启动时自动更新</span><span class="toggle on"></span></div>
+  <div class="sw"><span>隐藏失效频道（需检测）</span><span class="toggle"></span></div>
+</div>
+
+<div class="del-wrap">
+  <button class="del">删除这个订阅</button>
+</div>
+
+<div class="savebar">
+  <button class="ghost">取消</button>
+  <button class="main">保存</button>
+</div>
+
+<script>
+document.querySelectorAll('.toggle').forEach(function(t){
+  t.addEventListener('click', function(){ t.classList.toggle('on'); });
+});
+</script>
+<script src="theme.js"></script>
+</body>
+</html>

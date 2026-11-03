@@ -140,6 +140,15 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     private ScrollView rowScrollView;
     private LinearLayout infoPage;
     private TextView updateBtn;
+
+    // ---- 手机助手（HTTP 服务 + 二维码）----
+    private com.mintv.tv.data.RemoteServer remote;
+    private int remotePort = -1;
+    private LinearLayout helperPage;
+    private android.widget.ImageView qrView;
+    private TextView helperAddr;
+    private TextView helperState;
+    private LinearLayout helperSubs;
     private TextView infoPageText;
     /** 当前设置页的 Tab：0 账户登录 / 1 播放设置 / 2 手机助手 */
     private int currentTab = 1;
@@ -148,6 +157,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     /** Tab 下标：0 账户登录 / 1 播放设置 / 2 关于 / 3 手机助手 */
     private static final int TAB_SETTINGS = 1;
     private static final int TAB_ABOUT    = 2;
+    private static final int TAB_HELPER   = 3;
     private final int[] selections = DemoData.ROW_DEFAULT.clone();
 
     /**
@@ -352,6 +362,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             ((Media3Backend) player).setPreferSoftwareDecoder(selections[ROW_DECODER] == 1);
         }
 
+        startRemoteServer();
         ui.post(clockTick);
         ui.post(speedTick);
         loadEpgAsync();
@@ -2344,6 +2355,277 @@ public class MainActivity extends Activity implements FocusEngine.Host {
      * 「切源」那一行的文字跟着当前线路变：◀ / 源 2/4 / ▶。
      * 不然用户点了以后看不出自己在第几条线上。
      */
+    // ================= 手机助手：HTTP 服务 =================
+
+    private void startRemoteServer() {
+        if (remote != null && remote.running()) return;
+        remote = new com.mintv.tv.data.RemoteServer(this, new com.mintv.tv.data.RemoteServer.Host() {
+            @Override public String stateJson() { return buildStateJson(); }
+            @Override public String onCommand(String type, String value) {
+                return handleRemoteCommand(type, value);
+            }
+            @Override public String subsJson() { return buildSubsJson(); }
+            @Override public String onSubsAction(String action, org.json.JSONObject payload) {
+                return handleSubsAction(action, payload);
+            }
+        });
+        remotePort = remote.start();
+        if (remotePort < 0) {
+            osd.toast("手机助手启动失败：18899/18900 端口都被占用");
+        } else {
+            android.util.Log.i("MinTV", "手机助手 http://" + com.mintv.tv.data.LocalIp.get()
+                    + ":" + remotePort + "/");
+        }
+        ui.post(helperTicker);
+    }
+
+    /** 手机助手页开着时，每 2 秒刷新一次连接状态。 */
+    private final Runnable helperTicker = new Runnable() {
+        @Override public void run() {
+            if (dialogRoot != null && dialogRoot.getVisibility() == View.VISIBLE
+                    && currentTab == TAB_HELPER) {
+                refreshHelperState();
+            }
+            ui.postDelayed(this, 2000);
+        }
+    };
+
+    private void refreshHelperPage() {
+        if (helperPage == null) return;
+        String ip = com.mintv.tv.data.LocalIp.get();
+        int port = remotePort > 0 ? remotePort : com.mintv.tv.data.RemoteServer.PORT_MAIN;
+        String url = "http://" + ip + ":" + port + "/";
+        helperAddr.setText(ip + ":" + port);
+        if (qrView != null) {
+            android.graphics.Bitmap bmp = com.mintv.tv.data.QrUtil.encode(url, Theme.px(240));
+            if (bmp != null) qrView.setImageBitmap(bmp);
+        }
+        refreshHelperState();
+        rebuildHelperSubs();
+    }
+
+    private void refreshHelperState() {
+        if (helperState == null) return;
+        if (remote == null || !remote.running()) {
+            helperState.setText("● 服务未启动");
+            return;
+        }
+        boolean on = remote.idleMs() < 15000;
+        helperState.setText(on ? "● 手机已连接 · 正在浏览" : "● 等待手机扫码");
+        helperState.setTextColor(on ? Theme.SEL_GREEN : 0xFFFFA53D);
+    }
+
+    private void rebuildHelperSubs() {
+        if (helperSubs == null) return;
+        helperSubs.removeAllViews();
+        java.util.List<com.mintv.tv.data.SubscriptionStore.Sub> subs =
+                com.mintv.tv.data.SubscriptionStore.list(this);
+        String active = com.mintv.tv.data.SubscriptionStore.activeId(this);
+
+        for (final com.mintv.tv.data.SubscriptionStore.Sub sub : subs) {
+            boolean on = sub.id != null && sub.id.equals(active);
+            TextView row = new TextView(this);
+            String host = hostOfUrl(sub.url);
+            row.setText(sub.name + "   " + (host == null ? "" : host)
+                    + (on ? "    [使用中]" : ""));
+            row.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, Theme.sp(19));
+            row.setTextColor(on ? Theme.FOCUS_BLUE : Theme.TEXT);
+            row.setBackgroundColor(on ? Theme.PANEL_ACTIVE : Theme.PANEL_ITEM);
+            row.setPadding(Theme.px(16), Theme.px(14), Theme.px(16), Theme.px(14));
+            row.setFocusable(true);
+            row.setClickable(true);
+            row.setOnClickListener(new View.OnClickListener() {
+                @Override public void onClick(View v) { switchSubscription(sub.id); }
+            });
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            lp.bottomMargin = Theme.px(8);
+            helperSubs.addView(row, lp);
+        }
+
+        if (subs.isEmpty()) {
+            TextView empty = new TextView(this);
+            empty.setText("还没有订阅。用手机扫码添加，或者在本页「请求头」上方手动填源地址。");
+            empty.setTextColor(Theme.TEXT_SUB);
+            empty.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, Theme.sp(17));
+            helperSubs.addView(empty);
+        }
+    }
+
+    private static String hostOfUrl(String url) {
+        try {
+            return new java.net.URL(url).getHost();
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    /** 切换订阅：设为当前 + 重拉源。 */
+    private void switchSubscription(String id) {
+        com.mintv.tv.data.SubscriptionStore.setActive(this, id);
+        com.mintv.tv.data.SubscriptionStore.Sub s = com.mintv.tv.data.SubscriptionStore.active(this);
+        if (s == null) return;
+        osd.toast("正在切换到 " + s.name + "…");
+        SourceStore.saveBody(this, "#EXTM3U\n");
+        applyPlaylist("#EXTM3U\n");
+        rebuildCategoryColumn();
+        bindChannels();
+        updateChannelFocus(0);
+        fetchSourceAsync(s.url);
+        rebuildHelperSubs();
+    }
+
+    // ---------------- 状态 / 命令 JSON ----------------
+
+    private String buildStateJson() {
+        try {
+            org.json.JSONObject o = new org.json.JSONObject();
+            PlaylistParser.Channel ch = (playingChannel >= 0 && playingChannel < channels.size())
+                    ? channels.get(playingChannel) : null;
+            if (ch != null) {
+                org.json.JSONObject j = new org.json.JSONObject();
+                j.put("no", String.format(java.util.Locale.US, "%04d", ch.number));
+                j.put("name", ch.name);
+                j.put("group", ch.group == null ? "" : ch.group);
+                o.put("ch", j);
+            }
+            org.json.JSONObject line = new org.json.JSONObject();
+            line.put("cur", currentLine + 1);
+            line.put("total", Math.max(1, lineTotal));
+            o.put("line", line);
+
+            org.json.JSONObject video = new org.json.JSONObject();
+            video.put("res", lastResolution == null ? "" : lastResolution);
+            video.put("fps", lastFps == null ? "" : lastFps);
+            video.put("vcodec", lastVCodec == null ? "" : lastVCodec);
+            o.put("video", video);
+
+            o.put("speed", speedMeter.text());
+            o.put("playing", playing);
+            o.put("panel", panelVisible);
+
+            com.mintv.tv.data.SubscriptionStore.Sub sub =
+                    com.mintv.tv.data.SubscriptionStore.active(this);
+            org.json.JSONObject pl = new org.json.JSONObject();
+            pl.put("name", sub == null ? "" : sub.name);
+            pl.put("total", channels == null ? 0 : channels.size());
+            o.put("playlist", pl);
+            return o.toString();
+        } catch (Throwable t) {
+            return "{}";
+        }
+    }
+
+    private String buildSubsJson() {
+        try {
+            org.json.JSONArray arr = new org.json.JSONArray();
+            String active = com.mintv.tv.data.SubscriptionStore.activeId(this);
+            for (com.mintv.tv.data.SubscriptionStore.Sub s :
+                    com.mintv.tv.data.SubscriptionStore.list(this)) {
+                org.json.JSONObject o = new org.json.JSONObject();
+                o.put("id", s.id);
+                o.put("name", s.name);
+                o.put("url", s.url);
+                o.put("headers", s.headers == null ? "" : s.headers);
+                o.put("lastUpdate", s.lastUpdate);
+                o.put("active", s.id != null && s.id.equals(active));
+                arr.put(o);
+            }
+            return arr.toString();
+        } catch (Throwable t) {
+            return "[]";
+        }
+    }
+
+    /** 手机发来的遥控命令。全部转到主线程用现有逻辑执行。 */
+    private String handleRemoteCommand(final String type, final String value) {
+        if (type == null) return "noop";
+        ui.post(new Runnable() {
+            @Override public void run() {
+                try {
+                    if ("VOL_UP".equals(type)) { handleVolumeKey(KeyEvent.KEYCODE_VOLUME_UP); return; }
+                    if ("VOL_DOWN".equals(type)) { handleVolumeKey(KeyEvent.KEYCODE_VOLUME_DOWN); return; }
+                    if ("MUTE".equals(type)) { handleVolumeKey(KeyEvent.KEYCODE_VOLUME_MUTE); return; }
+                    if ("CH_UP".equals(type)) { moveChannel(-1); return; }
+                    if ("CH_DOWN".equals(type)) { moveChannel(1); return; }
+                    if ("SWITCH_SOURCE".equals(type)) { switchSource(1); return; }
+                    if ("EPG".equals(type)) { showEpgPanel(focus.chanIndex()); return; }
+                    if ("DIGIT".equals(type) && value != null && !value.isEmpty()) {
+                        for (int i = 0; i < value.length(); i++) {
+                            char c = value.charAt(i);
+                            if (c >= '0' && c <= '9') appendChannelDigit(c - '0');
+                        }
+                        return;
+                    }
+                    Integer kc = keyOf(type);
+                    if (kc != null) dispatchKey(kc);
+                } catch (Throwable t) {
+                    android.util.Log.w("MinTV", "远程命令失败: " + type + " " + t);
+                }
+            }
+        });
+        return "ok";
+    }
+
+    private static Integer keyOf(String type) {
+        switch (type) {
+            case "UP": return KeyEvent.KEYCODE_DPAD_UP;
+            case "DOWN": return KeyEvent.KEYCODE_DPAD_DOWN;
+            case "LEFT": return KeyEvent.KEYCODE_DPAD_LEFT;
+            case "RIGHT": return KeyEvent.KEYCODE_DPAD_RIGHT;
+            case "OK": return KeyEvent.KEYCODE_DPAD_CENTER;
+            case "BACK": return KeyEvent.KEYCODE_BACK;
+            case "MENU": return KeyEvent.KEYCODE_MENU;
+            case "HOME": return KeyEvent.KEYCODE_HOME;
+            default: return null;
+        }
+    }
+
+    private void dispatchKey(int keyCode) {
+        dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, keyCode));
+        dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, keyCode));
+    }
+
+    /** 手机的订阅增删改切。 */
+    private String handleSubsAction(String action, org.json.JSONObject p) {
+        try {
+            if ("activate".equals(action)) {
+                com.mintv.tv.data.SubscriptionStore.setActive(this, p.optString("id"));
+                ui.post(new Runnable() {
+                    @Override public void run() {
+                        switchSubscription(com.mintv.tv.data.SubscriptionStore.activeId(
+                                MainActivity.this));
+                    }
+                });
+                return "{\"ok\":true}";
+            }
+            if ("remove".equals(action)) {
+                com.mintv.tv.data.SubscriptionStore.remove(this, p.optString("id"));
+                ui.post(new Runnable() {
+                    @Override public void run() { rebuildHelperSubs(); }
+                });
+                return "{\"ok\":true}";
+            }
+            if ("save".equals(action)) {
+                com.mintv.tv.data.SubscriptionStore.Sub s =
+                        new com.mintv.tv.data.SubscriptionStore.Sub();
+                s.id = p.optString("id", null);
+                s.name = p.optString("name", "未命名");
+                s.url = p.optString("url", "");
+                s.headers = p.optString("headers", "");
+                if (s.url.isEmpty()) return "{\"ok\":false,\"msg\":\"地址不能为空\"}";
+                com.mintv.tv.data.SubscriptionStore.upsert(this, s);
+                ui.post(new Runnable() {
+                    @Override public void run() { rebuildHelperSubs(); }
+                });
+                return "{\"ok\":true}";
+            }
+            return "{\"ok\":false,\"msg\":\"未知操作\"}";
+        } catch (Throwable t) {
+            return "{\"ok\":false}";
+        }
+    }
+
     private void refreshSourceRow() {
         if (rowViews.size() <= ROW_SOURCE) return;
         PlaylistParser.Channel ch = (playingChannel >= 0 && playingChannel < channels.size())
@@ -3092,6 +3374,75 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         card.addView(infoPage, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, rowsLp.height));
 
+        // ---------- 手机助手页：左二维码 + 右订阅列表 ----------
+        helperPage = new LinearLayout(this);
+        helperPage.setOrientation(LinearLayout.HORIZONTAL);
+        helperPage.setVisibility(View.GONE);
+
+        // 左：二维码 + 地址
+        LinearLayout left = new LinearLayout(this);
+        left.setOrientation(LinearLayout.VERTICAL);
+        left.setGravity(Gravity.CENTER_HORIZONTAL);
+        left.setPadding(0, Theme.px(10), Theme.px(20), 0);
+
+        qrView = new android.widget.ImageView(this);
+        qrView.setBackgroundColor(0xFFF7F7F7);
+        int qrSize = Theme.px(260);
+        left.addView(qrView, new LinearLayout.LayoutParams(qrSize, qrSize));
+
+        helperAddr = new TextView(this);
+        helperAddr.setTextColor(Theme.FOCUS_BLUE);
+        helperAddr.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, Theme.sp(26));
+        helperAddr.setTypeface(android.graphics.Typeface.MONOSPACE);
+        helperAddr.setGravity(Gravity.CENTER);
+        helperAddr.setPadding(0, Theme.px(14), 0, 0);
+        left.addView(helperAddr, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        helperState = new TextView(this);
+        helperState.setTextColor(Theme.TEXT_SUB);
+        helperState.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, Theme.sp(17));
+        helperState.setGravity(Gravity.CENTER);
+        helperState.setPadding(0, Theme.px(6), 0, 0);
+        left.addView(helperState, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        helperPage.addView(left, new LinearLayout.LayoutParams(
+                Theme.px(340), ViewGroup.LayoutParams.MATCH_PARENT));
+
+        // 右：订阅列表
+        LinearLayout right = new LinearLayout(this);
+        right.setOrientation(LinearLayout.VERTICAL);
+        right.setPadding(Theme.px(8), 0, 0, 0);
+
+        TextView title = new TextView(this);
+        title.setText("切换订阅");
+        title.setTextColor(Theme.TEXT);
+        title.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, Theme.sp(24));
+        title.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+        right.addView(title);
+
+        TextView tip = new TextView(this);
+        tip.setText("手机扫码可导入 m3u / txt 源、改 EPG 和请求头");
+        tip.setTextColor(Theme.TEXT_SUB);
+        tip.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, Theme.sp(16));
+        tip.setPadding(0, Theme.px(6), 0, Theme.px(14));
+        right.addView(tip);
+
+        helperSubs = new LinearLayout(this);
+        helperSubs.setOrientation(LinearLayout.VERTICAL);
+        ScrollView subsScroll = new ScrollView(this);
+        subsScroll.setVerticalScrollBarEnabled(false);
+        subsScroll.addView(helperSubs);
+        right.addView(subsScroll, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+
+        helperPage.addView(right, new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.MATCH_PARENT, 1f));
+
+        card.addView(helperPage, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, rowsLp.height));
+
         // 底栏
         TextView foot = new TextView(this);
         foot.setText("ⓘ 白框 = 当前焦点；打勾 = 已选中的值        按 OK(Enter) 键修改配置，按 ESC 返回主画面");
@@ -3122,13 +3473,20 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             t.setBackgroundColor(i == index ? 0x0FFFFFFF : Color.TRANSPARENT);
         }
         boolean isSettings = (index == TAB_SETTINGS);
+        boolean isHelper = (index == TAB_HELPER);
         rowScrollView.setVisibility(isSettings ? View.VISIBLE : View.GONE);
-        if (!isSettings) {
+        if (helperPage != null) {
+            helperPage.setVisibility(isHelper ? View.VISIBLE : View.GONE);
+            if (isHelper) refreshHelperPage();
+        }
+        if (!isSettings && !isHelper) {
             fillInfoPage(index);
             if (updateBtn != null) {
                 updateBtn.setVisibility(index == TAB_ABOUT ? View.VISIBLE : View.GONE);
             }
             infoPage.setVisibility(View.VISIBLE);
+        } else if (!isHelper) {
+            infoPage.setVisibility(View.GONE);
         } else {
             infoPage.setVisibility(View.GONE);
         }
@@ -4012,6 +4370,11 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         super.onDestroy();
         ui.removeCallbacks(clockTick);
         ui.removeCallbacks(speedTick);
+        if (remote != null) {
+            remote.stop();
+            remote = null;
+        }
+        ui.removeCallbacks(helperTicker);
         if (player != null) {
             player.release();
             player = null;

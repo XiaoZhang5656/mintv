@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0B0B0C">
+<title>MinTV · 订阅管理</title>
+<link rel="stylesheet" href="app.css">
+
+</head>
+<body>
+
+<div class="hd">
+  <span class="dot"></span><h1>MinTV 订阅管理</h1>
+  <button class="themebtn" data-theme-btn onclick="MintvTheme.cycle()">跟随系统</button>
+</div>
+<div class="ip">已连接 · 192.168.1.23 · 开机 3 小时 12 分</div>
+
+<div class="sec">订阅列表 <b>当前：央视+卫视</b></div>
+
+<div class="sub-item active">
+  <div class="top">
+    <span class="nm">央视+卫视</span>
+    <span class="tag live">使用中</span>
+    <span class="tag">m3u</span>
+  </div>
+  <div class="url">https://guovin.github.io/iptv-api/result.m3u</div>
+  <div class="act">
+    <button class="primary">更新内容</button>
+    <button>编辑</button>
+  </div>
+</div>
+
+<div class="sub-item">
+  <div class="top">
+    <span class="nm">酒店源（备用）</span>
+    <span class="tag">txt</span>
+  </div>
+  <div class="url">http://example.com/hotel.txt</div>
+  <div class="act">
+    <button class="primary">切换到此源</button>
+    <button>编辑</button>
+    <button class="danger">删除</button>
+  </div>
+</div>
+
+<div class="sec">添加订阅</div>
+<div class="card">
+  <label>名称</label>
+  <input placeholder="例如：省内源">
+  <label>地址（支持 m3u / m3u8 / txt）</label>
+  <input placeholder="https://… 或 http://…">
+  <div class="row">
+    <div>
+      <label>格式</label>
+      <select><option>自动识别</option><option>m3u</option><option>txt</option></select>
+    </div>
+    <div>
+      <label>请求头（可选）</label>
+      <input placeholder="UA / Referer">
+    </div>
+  </div>
+  <div class="hint">保存后会立刻在盒子上下载并解析，失败会在盒子上提示。</div>
+</div>
+
+<div class="sec">EPG 节目单</div>
+<div class="card">
+  <div class="sw"><span>启用 EPG</span><span class="toggle on"></span></div>
+  <label>EPG 地址</label>
+  <input value="https://epg.51zmt.top:8001/e.xml.gz">
+  <div class="hint">留空则关闭。支持 xml / xml.gz。</div>
+</div>
+
+<div class="sec">全局请求头</div>
+<div class="card">
+  <textarea placeholder="User-Agent=okhttp/3.12.0&#10;Referer=http://example.com/">User-Agent=okhttp/3.12.0</textarea>
+  <div class="hint">一行一条，对所有订阅生效；订阅里单独写的会覆盖这里。</div>
+</div>
+
+<button class="save" id="save">保存并让盒子生效</button>
+<div class="toast" id="toast"></div>
+
+<script src="theme.js"></script>
+<script>
+(function(){
+  document.querySelectorAll('.toggle').forEach(function(t){
+    t.addEventListener('click', function(){ t.classList.toggle('on'); });
+  });
+  document.getElementById('save').addEventListener('click', function(){
+    var el = document.getElementById('toast');
+    el.textContent = '已保存，盒子正在重新加载…';
+    el.classList.add('show');
+    setTimeout(function(){
+  var KEY = 'mintv-theme';
+  var btn = document.getElementById('theme');
+  var modes = ['auto','light','dark'];
+  var labels = {auto:'跟随系统', light:'浅色', dark:'深色'};
+  var cur = localStorage.getItem(KEY) || 'auto';
+  function apply(){
+    if (cur === 'auto') document.documentElement.removeAttribute('data-theme');
+    else document.documentElement.setAttribute('data-theme', cur);
+    btn.textContent = labels[cur];
+  }
+  btn.addEventListener('click', function(){
+    cur = modes[(modes.indexOf(cur) + 1) % modes.length];
+    localStorage.setItem(KEY, cur);
+    apply();
+  });
+  apply();
+ el.classList.remove('show'); }, 1800);
+  });
+})();
+</script>
+</body>
+</html>
