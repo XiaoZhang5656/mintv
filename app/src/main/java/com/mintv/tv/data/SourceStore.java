@@ -101,8 +101,29 @@ public final class SourceStore {
     }
 
     /** 读取缓存的源正文。文件不存在时返回 null（并尝试从旧的 SP 迁移一次）。 */
+    /**
+     * 源正文的硬上限（字节）。
+     *
+     * <p>为什么必须有：用户填错地址时，服务端可能把一整个 HTML 错误站、
+     * 或者没有换行的几十 MB 文本吐回来。75MB 的字节数组转成 String 就是
+     * 150MB，直接 OutOfMemoryError —— 而且此时堆已耗尽，连 catch 块里的
+     * 日志拼接都分配不出内存，异常兜不住，主线程被直接杀掉。
+     *
+     * <p>16MB 是宽容值：一份 600 频道的 m3u 约 200KB，就算 10 万个频道
+     * 也到不了 16MB。超过必然是坏数据。
+     */
+    public static final int MAX_SOURCE_BYTES = 16 * 1024 * 1024;
+
     public static String cachedBody(Context c) {
         File f = bodyFile(c);
+        if (f.exists() && f.length() > MAX_SOURCE_BYTES) {
+            // 上次留下了坏数据：超过上限就地删掉，不能读进内存
+            android.util.Log.w("SourceStore", "缓存源过大 " + f.length()
+                    + " 字节，超过上限，已丢弃");
+            try { f.delete(); } catch (Throwable ignored) { }
+            clearBad(c);
+            return null;
+        }
         if (f.exists() && f.length() > 0) {
             FileInputStream in = null;
             try {
@@ -147,10 +168,23 @@ public final class SourceStore {
 
     /** 保存正文 + 更新校验信息。etag / lastModified 传空表示服务端没给。 */
     public static void saveBody(Context c, String body, String etag, long lastModified) {
+        if (body == null) return;
+        byte[] bytes;
+        try {
+            bytes = body.getBytes("UTF-8");
+        } catch (Throwable t) {
+            return;
+        }
+        if (bytes.length > MAX_SOURCE_BYTES) {
+            // 不落盘，避免下次启动再被它撑爆；同时清掉旧缓存
+            android.util.Log.w("SourceStore", "源过大 " + bytes.length + " 字节，拒绝缓存");
+            try { bodyFile(c).delete(); } catch (Throwable ignored) { }
+            return;
+        }
         FileOutputStream out = null;
         try {
             out = new FileOutputStream(bodyFile(c));
-            out.write(body.getBytes("UTF-8"));
+            out.write(bytes);
             out.flush();
         } catch (Throwable ignored) {
         } finally {
