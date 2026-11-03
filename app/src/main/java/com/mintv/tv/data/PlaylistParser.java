@@ -121,12 +121,46 @@ public final class PlaylistParser {
         return out.isEmpty() ? DEFAULT_GROUP : out;
     }
 
+    /** 单行最多这么长。正常一行是一百多字符，超过必然是坏数据（HTML 错误页之类）。 */
+    private static final int MAX_LINE_CHARS = 2048;
+    /** 频道名/分类名最多这么长，避免拼 key 时炸内存。 */
+    private static final int MAX_NAME_CHARS = 200;
+
+    /**
+     * 解析源文本。
+     *
+     * <p>**必须做长度上限**：用户填错 URL 时，服务器可能返回一个几十 MB 的
+     * HTML 错误页、或者根本没有换行的一整坨文本。那种情况下整个 body 会变成
+     * 一个超长「行」，再拼进 `name + "|" + group` 就等于把堆撑爆 ——
+     * 之前的 OOM 崩溃就是这么来的（OutOfMemoryError 直接杀主线程）。
+     *
+     * <p>另外整段包在 try 里：解析失败宁可返回空列表，也不能让 App 崩掉。
+     */
     public static Playlist parse(String text) {
         if (text == null) return new Playlist();
-        // 有大写 #EXTM3U 就走 M3U 分支，否则按 TXT 解析
-        boolean isM3u = text.contains("#EXTM3U") || text.contains("#EXTINF");
-        String cleaned = stripBom(text);
-        return isM3u ? parseM3u(cleaned) : parseTxt(cleaned);
+        try {
+            // 有大写 #EXTM3U 就走 M3U 分支，否则按 TXT 解析
+            boolean isM3u = text.contains("#EXTM3U") || text.contains("#EXTINF");
+            String cleaned = stripBom(text);
+            return isM3u ? parseM3u(cleaned) : parseTxt(cleaned);
+        } catch (OutOfMemoryError oom) {
+            android.util.Log.e("PlaylistParser", "解析时内存不足，返回空列表");
+            return new Playlist();
+        } catch (Throwable t) {
+            android.util.Log.e("PlaylistParser", "解析失败：" + t);
+            return new Playlist();
+        }
+    }
+
+    /** 行过长直接截断，避免坏数据把内存撑爆。 */
+    private static String cutLine(String s) {
+        if (s == null) return "";
+        return s.length() <= MAX_LINE_CHARS ? s : s.substring(0, MAX_LINE_CHARS);
+    }
+
+    private static String cutName(String s) {
+        if (s == null) return null;
+        return s.length() <= MAX_NAME_CHARS ? s : s.substring(0, MAX_NAME_CHARS);
     }
 
     private static String stripBom(String s) {
@@ -157,7 +191,8 @@ public final class PlaylistParser {
         java.util.Map<String, String> pendingHeaders = null;
 
         String[] lines = text.split("\r?\n");
-        for (String raw : lines) {
+        for (String raw0 : lines) {
+            String raw = cutLine(raw0);
             String line = raw.trim();
             if (line.isEmpty()) continue;
 
@@ -223,9 +258,9 @@ public final class PlaylistParser {
 
             // 到这里就是地址行
             if (isMetaGroup(pendingGroup)) { pendingName = null; pendingLogo = null; pendingTvgId = null; pendingGroup = DEFAULT_GROUP; continue; }
-            String url = line;
+            String url = cutLine(line);
             String name = pendingName;
-            if (name == null || name.isEmpty()) name = nameFromUrl(url);
+            if (name == null || name.isEmpty()) name = cutName(nameFromUrl(url));
             addSource(pl, byName, name, pendingGroup, pendingLogo, pendingTvgId, url, pendingHeaders);
 
             // 回看属性绑到刚建/命中的频道上
@@ -295,7 +330,8 @@ public final class PlaylistParser {
         String currentGroup = DEFAULT_GROUP;
 
         String[] lines = text.split("\r?\n");
-        for (String raw : lines) {
+        for (String raw0 : lines) {
+            String raw = cutLine(raw0);
             String line = raw.trim();
             if (line.isEmpty() || line.startsWith("#") && !line.contains(",")) continue;
 

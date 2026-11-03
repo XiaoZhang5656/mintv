@@ -40,6 +40,8 @@ public final class SubscriptionStore {
         public long lastUpdate;
         /** 上次解析出的频道数，只用于界面展示（"839 个频道"）。 */
         public int channelCount;
+        /** 这个订阅自己的 EPG 地址。空 = 用全局默认。 */
+        public String epgUrl;
 
         public Sub() { }
 
@@ -168,6 +170,7 @@ public final class SubscriptionStore {
                         s.headers = o.optString("headers", "");
                         s.lastUpdate = o.optLong("lastUpdate", 0L);
             s.channelCount = o.optInt("channelCount", 0);
+            s.epgUrl = o.optString("epgUrl", "");
                         if (!s.url.isEmpty()) cache.add(s);
                     }
                 }
@@ -227,6 +230,7 @@ public final class SubscriptionStore {
                 o.put("headers", s.headers == null ? "" : s.headers);
                 o.put("lastUpdate", s.lastUpdate);
             o.put("channelCount", s.channelCount);
+            o.put("epgUrl", s.epgUrl == null ? "" : s.epgUrl);
                 arr.put(o);
             }
             JSONObject root = new JSONObject();

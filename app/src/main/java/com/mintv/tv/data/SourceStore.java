@@ -49,6 +49,39 @@ public final class SourceStore {
      * 用户自己的订阅塞进列表 —— 表现就是"我从来没添加过订阅，
      * 列表里却有一条默认订阅"。
      */
+    /**
+     * 记住「这一份内容解析不出任何频道」。
+     *
+     * <p>为什么需要：用户填错地址时，服务端可能返回一个 HTML 错误页。
+     * 那份内容会被缓存下来，下次启动再次解析 —— 如果解析过程本身很吃内存，
+     * 就会变成**每次启动都崩一次**的循环，用户只能删数据。
+     *
+     * <p>现在把解析失败的内容指纹记下来，下次直接跳过、不再尝试解析，
+     * 用户换源或更新成功时自动清除。
+     */
+    public static void markBad(Context c, String fingerprint) {
+        sp(c).edit().putString("source_bad_fp", fingerprint == null ? "" : fingerprint)
+                .apply();
+    }
+
+    public static boolean isBad(Context c, String fingerprint) {
+        String bad = sp(c).getString("source_bad_fp", "");
+        return bad != null && !bad.isEmpty() && bad.equals(fingerprint);
+    }
+
+    public static void clearBad(Context c) {
+        sp(c).edit().remove("source_bad_fp").apply();
+    }
+
+    /** 内容的轻量指纹：长度 + 首尾哈希，足够区分不同版本，代价几乎为 0。 */
+    public static String fingerprint(String body) {
+        if (body == null) return "";
+        int h = 17;
+        int n = Math.min(body.length(), 4096);
+        for (int i = 0; i < n; i++) h = h * 31 + body.charAt(i);
+        return body.length() + ":" + Integer.toHexString(h);
+    }
+
     public static boolean hasUserUrl(Context c) {
         return sp(c).contains(K_URL);
     }
