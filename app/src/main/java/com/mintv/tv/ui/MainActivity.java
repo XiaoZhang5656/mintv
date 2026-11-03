@@ -275,7 +275,11 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         if (cleanStart) {
             getSharedPreferences(PREF, MODE_PRIVATE).edit()
                     .remove("restart_clean").apply();
-            android.util.Log.i("MinTV", "崩溃后重启：跳过现场恢复");
+            // 崩溃很可能就是这份源解析时炸的，缓存必须一起清掉，
+            // 否则重启后又读同一份内容、再崩一次 —— 变成死循环。
+            SourceStore.saveBody(this, "");
+            SourceStore.clearBad(this);
+            android.util.Log.i("MinTV", "崩溃后重启：跳过现场恢复并清空源缓存");
         }
 
         purgeLegacyDefaultSub();
@@ -816,6 +820,16 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         }
         if (body == null || body.trim().isEmpty()) {
             body = "#EXTM3U\n";     // 空源：等网络拉回来再渲染
+        } else if (SourceStore.isBad(this, SourceStore.fingerprint(body))) {
+            // 上次这份内容就解析不出频道（多半是填错地址拿到的 HTML 页）。
+            // 直接跳过，不让它再跑一次解析 —— 否则每次启动都崩。
+            android.util.Log.w("MinTV", "跳过已标记为无效的源缓存");
+            body = "#EXTM3U\n";
+            ui.post(new Runnable() {
+                @Override public void run() {
+                    if (osd != null) osd.toast("上次的源无效已忽略，请更新源或换一个订阅");
+                }
+            });
         }
         applyPlaylist(body);
 
@@ -837,6 +851,17 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         playlist = PlaylistParser.parse(body);
         rebuildCategories();
         channels = playlist.all;
+
+        // 解析出 0 个频道，但内容明显不是空源 → 判定这份内容有问题，记下指纹。
+        // 记下来之后下次启动会直接跳过，避免"一次填错地址，之后每次启动都崩"。
+        boolean looksEmpty = body == null || body.trim().isEmpty()
+                || body.trim().equals("#EXTM3U");
+        if (!looksEmpty && (channels == null || channels.isEmpty())) {
+            SourceStore.markBad(this, SourceStore.fingerprint(body));
+            android.util.Log.w("MinTV", "这份源解析不出频道，已标记为无效");
+        } else if (channels != null && !channels.isEmpty()) {
+            SourceStore.clearBad(this);
+        }
     }
 
     /** 后台拉源，成功后重建界面。失败就继续用缓存/示范。 */
@@ -2698,6 +2723,9 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         com.mintv.tv.data.SubscriptionStore.Sub s = com.mintv.tv.data.SubscriptionStore.active(this);
         if (s == null) return;
         osd.toast("正在切换到 " + s.name + "…");
+        // 每个订阅绑自己的 EPG，切源必须重载节目单，否则还是上一家的
+        epg = null;
+        loadEpgAsync();
         SourceStore.saveBody(this, "#EXTM3U\n");
         applyPlaylist("#EXTM3U\n");
         rebuildCategoryColumn();
@@ -2786,8 +2814,19 @@ public class MainActivity extends Activity implements FocusEngine.Host {
      * 不只返回订阅数组：EPG 和全局请求头也在同一份里，
      * 手机页面一次请求就能渲染全部，不用打三个接口。
      */
-    /** 当前 EPG 地址（空串表示用户没启用）。 */
+    /**
+     * 当前生效的 EPG 地址。
+     *
+     * <p>优先用**当前订阅自己绑的** EPG；没绑才回落到全局默认。
+     * 不同源用的 EPG 往往不一样（有的源自带 xml，有的要配 51zmt），
+     * 绑在订阅上才不会切源之后节目单还是上一家的。
+     */
     private static String epgUrlOf(android.content.Context c) {
+        com.mintv.tv.data.SubscriptionStore.Sub sub =
+                com.mintv.tv.data.SubscriptionStore.active(c);
+        if (sub != null && sub.epgUrl != null && !sub.epgUrl.isEmpty()) {
+            return sub.epgUrl;
+        }
         String v = c.getSharedPreferences(PREF, android.content.Context.MODE_PRIVATE)
                 .getString("epg_url", null);
         return v == null ? "" : v;
@@ -3152,6 +3191,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                 o.put("headers", s.headers == null ? "" : s.headers);
                 o.put("lastUpdate", s.lastUpdate);
                 o.put("count", s.channelCount);
+                o.put("epgUrl", s.epgUrl == null ? "" : s.epgUrl);
                 o.put("active", s.id != null && s.id.equals(active));
                 arr.put(o);
             }
@@ -3199,8 +3239,19 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             }
             if ("epg".equals(action)) {
                 final String epgUrl = p.optString("url", "");
-                getSharedPreferences(PREF, MODE_PRIVATE).edit()
-                        .putString("epg_url", epgUrl).apply();
+                final String targetId = p.optString("id", "");
+                com.mintv.tv.data.SubscriptionStore.Sub target =
+                        targetId.isEmpty()
+                                ? com.mintv.tv.data.SubscriptionStore.active(this)
+                                : com.mintv.tv.data.SubscriptionStore.find(this, targetId);
+                if (target != null) {
+                    target.epgUrl = epgUrl;
+                    com.mintv.tv.data.SubscriptionStore.update(this, target);
+                } else {
+                    // 没有任何订阅时退回全局
+                    getSharedPreferences(PREF, MODE_PRIVATE).edit()
+                            .putString("epg_url", epgUrl).apply();
+                }
                 ui.post(new Runnable() {
                     @Override public void run() {
                         epg = null;
@@ -3225,6 +3276,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                 s.name = p.optString("name", "未命名");
                 s.url = p.optString("url", "");
                 s.headers = p.optString("headers", "");
+                s.epgUrl = p.optString("epgUrl", "");
                 if (s.url.isEmpty()) return "{\"ok\":false,\"msg\":\"地址不能为空\"}";
                 com.mintv.tv.data.SubscriptionStore.upsert(this, s);
                 ui.post(new Runnable() {
@@ -4562,6 +4614,9 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     }
 
     private void openSettings() {
+        // 上层优先：设置弹窗要盖住节目单，先把它收掉。
+        // 不然关掉设置后节目单还留着，而焦点已经退回主界面，状态对不上。
+        if (epgPanelOpen) closeEpgPanel();
         tabFocus = false;
         if (tabViews.size() > currentTab) showTab(Math.max(0, currentTab));
         if (gestureLayer != null) gestureLayer.setVisibility(View.GONE);
@@ -4941,10 +4996,26 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                 + " tabFocus=" + tabFocus
                 + " zone=" + focus.zone()
                 + " pageFocus=" + pageFocusIdx + "/" + pageFocus.size());
-        // 系统弹窗开着：按键全部交给它，否则遥控器选不到弹窗按钮
+        // ══════════════════════════════════════════════════════════
+        //  按键路由标准：谁在上层谁优先，逐层下探，绝不穿透
+        // ══════════════════════════════════════════════════════════
+        //  L0  系统弹窗（AlertDialog）   → 交还系统，它自己管焦点
+        //  L1  设置弹窗 dialogRoot        → handleSettingsKey，无条件吞
+        //  L2  节目单面板 epgPanelOpen    → handleEpgKey
+        //  L3  纯播放态（面板已收起）      → OSD / 快进
+        //  L4  主界面三栏                 → 焦点引擎
+        //
+        //  规则：上层可见时，下层一律不响应；上层处理不了的键也返回 true
+        //  吞掉，不允许落到下层 —— 否则就会出现"设置和频道同时响应"。
+        //  ══════════════════════════════════════════════════════════
+
+        // L0
         if (sysDialogOpen) return super.onKeyDown(keyCode, event);
+
+        // L1
         if (dialogRoot != null && dialogRoot.getVisibility() == View.VISIBLE) {
-            return handleSettingsKey(keyCode, event);
+            handleSettingsKey(keyCode, event);
+            return true;          // 无条件吞，绝不 return handleSettingsKey()
         }
 
         // ---- 音量：接管系统音量键，给出 App 内反馈 ----
@@ -4966,26 +5037,26 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             return true;
         }
 
+        // 长按 MENU = 播放诊断，短按 MENU = 设置。
+        // 顺序不能反：原来短按那段写在前面且直接 return，
+        // 长按分支成了永远执行不到的死代码。
         if (keyCode == KeyEvent.KEYCODE_MENU) {
-            openSettings();
-            return true;
-        }
-
-        // 长按 MENU 弹播放诊断（原来短按 INFO 也在这里，
-        // 但 INFO 更该是"看当前节目信息"，已经挪到下面调 OSD）
-        if (keyCode == KeyEvent.KEYCODE_MENU && event.isLongPress()) {
-            showDiagnostics();
-            return true;
-        }
-
-        if (!panelVisible) {
-            // 面板收起时：上下键唤出面板；左右键留给下面的快进/快退。
-            // 原来这里写的是「任意方向键先唤出面板」，把左右键也吃了，
-            // 导致后面那段长按快进永远不会执行。
-            if (keyCode == KeyEvent.KEYCODE_DPAD_UP || keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
-                showPanel();
-                return true;
+            if (event.isLongPress() || event.getRepeatCount() > 0
+                    || (event.getFlags() & KeyEvent.FLAG_LONG_PRESS) != 0) {
+                showDiagnostics();
+            } else {
+                event.startTracking();     // 让系统继续派发长按
+                openSettings();
             }
+            return true;
+        }
+
+        // ---- L2 节目单面板 ----
+        // 必须排在"纯播放态"之前：节目单开着时上下键是选节目，
+        // 不能被外面的"唤出面板"先吃掉。
+        if (epgPanelOpen) {
+            handleEpgKey(keyCode);
+            return true;          // 节目单开着时任何键都不下传
         }
 
         // 信息键：直接调出 OSD 信息条（节目、进度、编码、网速）。
@@ -4995,8 +5066,13 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             return true;
         }
 
-        // 抽屉态：左键 / 返回 → 收起抽屉，回到「分类 + 频道」
-        if (epgPanelOpen && handleEpgKey(keyCode)) return true;
+        // ---- L3 纯播放态（面板收起）----
+        if (!panelVisible) {
+            if (keyCode == KeyEvent.KEYCODE_DPAD_UP || keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
+                showPanel();
+                return true;
+            }
+        }
 
         // 右键：频道列 → 展开节目单。
         // 条件放宽到"只要面板可见、不在分类列"，避免 zone 因为前面的操作
@@ -5023,6 +5099,10 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             return true;
         }
 
+        // ---- L4 主界面三栏 ----
+        // 面板收起 = 纯播放态在上层，三栏在下面。这时候绝不能再用焦点引擎，
+        // 否则按键会改到看不见的分类/频道状态（切回来发现焦点莫名跳了）。
+        if (!panelVisible) return true;
         if (focus.onKey(keyCode)) return true;
 
         switch (keyCode) {
@@ -5132,8 +5212,13 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             }
             if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT
                     || keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) {
-                return true;      // 这两页没有横向选项，别让事件漏到后面的列表逻辑
+                return true;      // 这两页没有横向选项
             }
+            // 「关于 / 手机助手」页：其它键（数字、音量、播放键…）一律吞掉。
+            // 原来这里不 return，事件会落到下面的 rowColumn 逻辑上 ——
+            // 用户在「关于」页按个方向键，隐藏的设置列表焦点却被改动了，
+            // 切回「播放设置」就发现焦点莫名其妙跳了。
+            return true;
         }
 
         // 按「上」进 Tab 条。
@@ -5174,7 +5259,9 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             boolean handled2 = focus.onKey(keyCode);
             int after = focus.optIndex();
             if (row >= 0 && row < rowViews.size()) {
-                rowViews.get(row).setRowFocused(false);
+                // 行本身必须保持"被聚焦"状态，否则按一下左右键整行白框消失，
+                // 看上去像焦点丢了、也没选中 —— 用户会以为左右键不起作用。
+                rowViews.get(row).setRowFocused(!tabFocus);
                 rowViews.get(row).setOptionFocused(after);
             }
             if (after != before && isValueRow(row)) {
