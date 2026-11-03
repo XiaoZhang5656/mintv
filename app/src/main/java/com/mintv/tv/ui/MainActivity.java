@@ -4934,6 +4934,13 @@ public class MainActivity extends Activity implements FocusEngine.Host {
 
     @Override
     public boolean onKeyDown(int keyCode, KeyEvent event) {
+        android.util.Log.d("MinTVKey", "key=" + keyCode
+                + " tab=" + currentTab
+                + " dialogVisible=" + (dialogRoot != null && dialogRoot.getVisibility() == View.VISIBLE)
+                + " sysDialog=" + sysDialogOpen
+                + " tabFocus=" + tabFocus
+                + " zone=" + focus.zone()
+                + " pageFocus=" + pageFocusIdx + "/" + pageFocus.size());
         // 系统弹窗开着：按键全部交给它，否则遥控器选不到弹窗按钮
         if (sysDialogOpen) return super.onKeyDown(keyCode, event);
         if (dialogRoot != null && dialogRoot.getVisibility() == View.VISIBLE) {
