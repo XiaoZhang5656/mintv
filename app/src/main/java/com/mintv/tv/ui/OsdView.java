@@ -96,6 +96,10 @@ public class OsdView extends View {
     /** 进度条在 View 坐标系里的矩形，拖动命中测试用。 */
     private final android.graphics.RectF barRect = new android.graphics.RectF();
     private boolean barShown = false;
+    /** 播放控制条命中区与状态。 */
+    private final android.graphics.RectF ctlRect = new android.graphics.RectF();
+    private boolean ctlShown;
+    private boolean paused;
     /** 左侧被面板挡住时，卡片要往右让，否则会盖在频道列表上。 */
     private float leftInset = 0f;
 
@@ -169,6 +173,17 @@ public class OsdView extends View {
     }
 
     /** EPG：目前播放 / 下个节目 / 进度。没有 EPG 就不调用。 */
+    /** 播放控制回调。 */
+    public interface CtlListener {
+        void onPrevChannel();
+        void onNextChannel();
+        void onTogglePause();
+    }
+    private CtlListener ctlListener;
+    public void setCtlListener(CtlListener l) { ctlListener = l; }
+    /** 供外部同步暂停图标。 */
+    public void setPaused(boolean p) { paused = p; invalidate(); }
+
     public void setProgram(String now, String next, float progress01) {
         nowText = now;
         nextText = next;
@@ -392,8 +407,23 @@ public class OsdView extends View {
         // 不判可见性的话，点在"已经看不见的进度条"位置上会被这里吃掉，
         // 导致点视频区收不起面板 —— 表现就是"要点一下别的才恢复"。
         if (osdAlpha <= 0f) return false;
-        if (!barShown || seekListener == null) return false;
         float x = ev.getX(), y = ev.getY();
+
+        // ---- 播放控制条（上一台 / 暂停 / 下一台）----
+        if (ctlShown && ctlRect.contains(x, y)
+                && ev.getActionMasked() == android.view.MotionEvent.ACTION_DOWN) {
+            float bw = (ctlRect.width()) / 3f;
+            int idx = (int) ((x - ctlRect.left) / bw);
+            if (ctlListener != null) {
+                if (idx == 0) ctlListener.onPrevChannel();
+                else if (idx == 1) { paused = !paused; invalidate(); ctlListener.onTogglePause(); }
+                else ctlListener.onNextChannel();
+            }
+            holdOsd();
+            return true;
+        }
+
+        if (!barShown || seekListener == null) return false;
         boolean hit = barRect.contains(x, y);
 
         switch (ev.getActionMasked()) {
@@ -530,24 +560,60 @@ public class OsdView extends View {
         }
 
         // ---- 第 3 行：进度条 ----
+        //
+        // 直播流没有可跳转时间轴（progress < 0），但**槽位照样要画**：
+        // 少了它卡片在直播/回看之间会忽高忽低，而且用户看不出"这里本来是进度条"。
+        // 没有进度时画一条灰槽 + 「直播」字样，可拖动时才是蓝色填充。
         barShown = false;
-        if (progress >= 0f) {
+        {
             float fullW = cardW - padH * 2;
             float barW = fullW - Theme.px(60);
             float barTop = y;
             barRect.set(rowX, barTop - Theme.px(14), rowX + barW, barTop + barH + Theme.px(14));
             barShown = true;
+
+            // 槽
             fill.setColor(0x33FFFFFF);
             r.set(rowX, barTop, rowX + barW, barTop + barH);
             c.drawRoundRect(r, barH / 2f, barH / 2f, fill);
-            fill.setColor(0xFF2F7BFF);
-            r.set(rowX, barTop, rowX + barW * Math.min(1f, progress), barTop + barH);
-            c.drawRoundRect(r, barH / 2f, barH / 2f, fill);
+
+            if (progress >= 0f) {
+                fill.setColor(0xFF2F7BFF);
+                r.set(rowX, barTop, rowX + barW * Math.min(1f, progress), barTop + barH);
+                c.drawRoundRect(r, barH / 2f, barH / 2f, fill);
+            }
+
             p.setColor(Theme.TEXT_SUB);
             p.setTextSize(Theme.sp(16));
-            c.drawText(Math.round(progress * 100) + "%", rowX + barW + Theme.px(12),
-                    barTop + barH + Theme.px(4), p);
+            String right = progress >= 0f
+                    ? Math.round(progress * 100) + "%"
+                    : "直播";
+            c.drawText(right, rowX + barW + Theme.px(12), barTop + barH + Theme.px(4), p);
             y += barH + gap;
+        }
+
+        // ---- 第 4 行：播放控制按钮（上一台 / 暂停·播放 / 下一台）----
+        {
+            float bw = Theme.px(120), bh = Theme.px(46);
+            float gapB = Theme.px(14);
+            float totalW = bw * 3 + gapB * 2;
+            float bx = rowX;
+            String[] labels = {"上一台", paused ? "播放" : "暂停", "下一台"};
+            for (int i = 0; i < 3; i++) {
+                float l = bx + i * (bw + gapB);
+                int ctl = i;
+                r.set(l, y, l + bw, y + bh);
+                fill.setColor(ctl == 1 ? 0xFF2F7BFF : 0x33FFFFFF);
+                c.drawRoundRect(r, bh / 2f, bh / 2f, fill);
+                p.setColor(0xFFFFFFFF);
+                p.setTextSize(Theme.sp(17));
+                p.setTextAlign(Paint.Align.CENTER);
+                c.drawText(labels[i], l + bw / 2f, y + bh / 2f - (p.ascent() + p.descent()) / 2f, p);
+                p.setTextAlign(Paint.Align.LEFT);
+            }
+            ctlRect.set(bx, y - Theme.px(8), bx + totalW, y + bh + Theme.px(8));
+            ctlShown = true;
+            y += bh + gap;
         }
 
         // ---- 第 4 行：下个节目 ----

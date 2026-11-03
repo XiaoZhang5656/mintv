@@ -128,6 +128,17 @@ public final class Media3Backend implements PlaybackBackend {
     @Override
     public void setCallback(Callback cb) { this.cb = cb; }
 
+    @Override
+    public boolean canSeek() {
+        // 直播没有可跳转时间轴，只有回看/时移才有
+        if (player == null) return false;
+        try {
+            return player.isCurrentMediaItemSeekable();
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
     /** 设置页「解码方式」：true = 软解优先。下一次播放生效。 */
     public void setPreferSoftwareDecoder(boolean soft) {
         if (this.preferSoftware == soft) return;
@@ -416,11 +427,20 @@ public final class Media3Backend implements PlaybackBackend {
      * Media3 对直播 HLS 调用 seekTo 会跳到直播窗口内最近的可播放点，
      * 在没有 seekable window 的情况下会抛 IllegalSeekPositionException。
      */
-    @Override
-    public boolean canSeek() {
-        if (player == null) return false;
-        if (mode == Mode.LIVE) return false;
-        return player.isCurrentMediaItemSeekable();
+    @Override public void pause() {
+        if (player != null) main.post(new Runnable() {
+            @Override public void run() { player.pause(); }
+        });
+    }
+
+    @Override public void resume() {
+        if (player != null) main.post(new Runnable() {
+            @Override public void run() { player.play(); }
+        });
+    }
+
+    @Override public boolean isPlaying() {
+        return player != null && player.getPlayWhenReady();
     }
 
     @Override

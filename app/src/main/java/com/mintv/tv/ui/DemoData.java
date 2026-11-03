@@ -52,45 +52,42 @@ public final class DemoData {
 
     public static final String[] TABS = {"账户登录", "播放设置", "关于", "手机助手"};
 
-    public static final String[][] ROW_TITLES = {
-            {"切源", "同一频道多条线路时手动切换，左=上一条 右=下一条"},
-            {"画面比例", ""},
-            {"EPG显示", ""},
-            {"上下换台反转", "当前：下键上一个，上键下一个"},
-            {"换台显示", "换台时：台号和节目框 / 只台号 / 只节目框"},
-            {"左右按键", "直播：左右键时移/出 EPG（默认）"},
-            {"网速显示", ""},
-            {"开机自启", "开机后自动拉起本应用"},
-            {"解码方式", "低性能盒子软解会掉帧，仅在花屏时切换"},
-            {"超时换源", "起播无画面 / 播放中卡住超过该秒数，自动切下一条线路"},
-            {"请求头", "该源需要特定 UA/Referer 时才填，全局生效"},
-            {"播放内核", "Exo 起播快 / VLC 格式覆盖最广"},
-            {"时钟显示", "面板收起看片时是否保留右上角日期时间"},
-            {"画面输出", "黑屏只有声音时切到 SurfaceView 试试"},
-            {"界面主题", "只换配色，布局与操作完全一致"},
-            {"频道分组管理", "隐藏不看的分类，只留常用的"},
-    };
+    /**
+     * 三张旧表保留成"视图"，内容从 {@link com.mintv.tv.ui.setting.Settings}
+     * 派生，不再手工维护。
+     *
+     * <p>这样老代码里所有 ROW_TITLES[i] / ROW_OPTIONS[i] / ROW_DEFAULT[i]
+     * 的引用都不用改，但数据只有一份（Settings.ALL），不可能再对不上。
+     *
+     * @deprecated 新代码请直接用 Settings.*，这三张表只为兼容旧引用。
+     */
+    @Deprecated
+    public static final String[][] ROW_TITLES = buildTitles();
 
-    public static final String[][] ROW_OPTIONS = {
-            {"◀ 上一条", "下一条 ▶"},
-            {"自动适应", "16:9", "4:3", "原始", "铺满"},
-            {"居左", "居中"},
-            {"已开启 (ON)", "关闭"},
-            {"台号+EPG", "台号", "EPG"},
-            {"查看 EPG 回看", "切源"},
-            {"显示", "隐藏"},
-            {"开启", "关闭"},
-            {"硬件", "软件"},
-            {"关闭", "5 秒", "8 秒", "12 秒", "20 秒"},
-            {"未设置", "编辑…"},
-            {"ExoPlayer", "VLC"},
-            {"随面板隐藏", "始终显示"},
-            {"TextureView", "SurfaceView"},
-            {"暗黑", "盒子蓝", "暖色"},
-            {"打开管理"},
-    };
+    @Deprecated
+    public static final String[][] ROW_OPTIONS = buildOptions();
 
-    public static final int[] ROW_DEFAULT = {0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0};
+    @Deprecated
+    public static final int[] ROW_DEFAULT = com.mintv.tv.ui.setting.Settings.defaultSelections();
+
+    private static String[][] buildTitles() {
+        com.mintv.tv.ui.setting.SettingDef[] all = com.mintv.tv.ui.setting.Settings.ALL;
+        String[][] out = new String[all.length][2];
+        for (int i = 0; i < all.length; i++) {
+            out[i][0] = all[i].title;
+            out[i][1] = all[i].hint;
+        }
+        return out;
+    }
+
+    private static String[][] buildOptions() {
+        com.mintv.tv.ui.setting.SettingDef[] all = com.mintv.tv.ui.setting.Settings.ALL;
+        String[][] out = new String[all.length][];
+        for (int i = 0; i < all.length; i++) {
+            out[i] = all[i].options;
+        }
+        return out;
+    }
 
     // ---------- 无源时的示范 M3U ----------
 

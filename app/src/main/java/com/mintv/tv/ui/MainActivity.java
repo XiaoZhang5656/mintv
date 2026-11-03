@@ -521,6 +521,14 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         // 纯播放态（面板收起）它才完整可见。
         // --- OSD ---
         osd = new OsdView(this);
+        osd.setCtlListener(new OsdView.CtlListener() {
+            @Override public void onPrevChannel() { moveChannel(-1); }
+            @Override public void onNextChannel() { moveChannel(+1); }
+            @Override public void onTogglePause() {
+                if (player == null) return;
+                if (player.isPlaying()) player.pause(); else player.resume();
+            }
+        });
         // 进度条拖动：能不能 seek 由播放内核说了算（直播 = false）
         osd.setSeekListener(new OsdView.SeekListener() {
             @Override public boolean canSeek() {
@@ -1458,28 +1466,30 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     };
     /** 设置行下标（与 DemoData.ROW_TITLES 顺序一致） */
     // 顺序必须与 DemoData.ROW_TITLES 完全一致
-    private static final int ROW_SOURCE         = 0;   // 切源
-    private static final int ROW_RATIO          = 1;
-    private static final int ROW_EPG_POS        = 2;
-    private static final int ROW_REVERSE        = 3;
-    private static final int ROW_OSD_STYLE      = 4;
-    private static final int ROW_LEFTKEY        = 5;
-    private static final int ROW_SPEED          = 6;
-    private static final int ROW_AUTOPLAY       = 7;
-    private static final int ROW_DECODER        = 8;
+    // 行号一律指向 Settings 的索引常量，不再自己写数字 ——
+    // 否则加一个设置项就要同时改这里和 Settings，迟早对不上。
+    private static final int ROW_SOURCE   = com.mintv.tv.ui.setting.Settings.IDX_SOURCE;
+    private static final int ROW_RATIO    = com.mintv.tv.ui.setting.Settings.IDX_ASPECT;
+    private static final int ROW_EPG_POS  = com.mintv.tv.ui.setting.Settings.IDX_EPG_POS;
+    private static final int ROW_REVERSE  = com.mintv.tv.ui.setting.Settings.IDX_REVERSE;
+    private static final int ROW_OSD_STYLE= com.mintv.tv.ui.setting.Settings.IDX_SWITCH_UI;
+    private static final int ROW_LEFTKEY  = com.mintv.tv.ui.setting.Settings.IDX_LEFT_KEY;
+    private static final int ROW_SPEED    = com.mintv.tv.ui.setting.Settings.IDX_SPEED;
+    private static final int ROW_AUTOPLAY = com.mintv.tv.ui.setting.Settings.IDX_AUTOSTART;
+    private static final int ROW_DECODER  = com.mintv.tv.ui.setting.Settings.IDX_DECODER;
     /** 超时换源：0=关闭，1=5s，2=8s，3=12s，4=20s。开关和秒数合成一项了。 */
-    private static final int ROW_TIMEOUT        = 9;
-    private static final int ROW_HEADERS        = 10;
-    private static final int ROW_ENGINE         = 11;
-    private static final int ROW_CLOCK          = 12;
-    private static final int ROW_OUTPUT         = 13;
-    private static final int ROW_THEME          = 14;
-    private static final int ROW_GROUPMGR       = 15;
+    private static final int ROW_TIMEOUT  = com.mintv.tv.ui.setting.Settings.IDX_TIMEOUT;
+    private static final int ROW_HEADERS  = com.mintv.tv.ui.setting.Settings.IDX_HEADERS;
+    private static final int ROW_ENGINE   = com.mintv.tv.ui.setting.Settings.IDX_ENGINE;
+    private static final int ROW_CLOCK    = com.mintv.tv.ui.setting.Settings.IDX_CLOCK;
+    private static final int ROW_OUTPUT   = com.mintv.tv.ui.setting.Settings.IDX_OUTPUT;
+    private static final int ROW_THEME    = com.mintv.tv.ui.setting.Settings.IDX_THEME;
+    private static final int ROW_GROUPMGR = com.mintv.tv.ui.setting.Settings.IDX_GROUP_MGR;
 
     private static final String KEY_UI_THEME    = "ui_theme";
     private static final String KEY_SELECTIONS  = "selections";
     private static final String KEY_HIDDEN_CATS = "hidden_cats";
-    private static final int ROW_GROUP_MGR      = 15;
+    private static final int ROW_GROUP_MGR= com.mintv.tv.ui.setting.Settings.IDX_GROUP_MGR;
 
     /** 被用户隐藏的分类名（「全部」和「我的收藏」不允许隐藏）。 */
     private final java.util.LinkedHashSet<String> hiddenCats = new java.util.LinkedHashSet<>();
@@ -3799,6 +3809,22 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             videoTap.setVisibility(visible ? View.VISIBLE : View.GONE);
         }
         updateOsdInset();
+
+        // ── 焦点状态跟面板一起切换 ──
+        //
+        // 这是"左键进不去分类列"的真正原因：面板收起期间 focus.onKey 被
+        // L4 守卫拦住，但 focus.zone 里存的还是上一次的值。面板重新可见时
+        // 如果 zone 残留在 NAV（上次停的），左键就会走"导航列最左：返回
+        // false"那条路 —— 于是没有任何反应。
+        //
+        // 明确规则：面板刚恢复可见，焦点一律落在「频道列」。
+        if (visible) {
+            if (focus.zone() != FocusEngine.Zone.CHAN) {
+                focus.setZone(FocusEngine.Zone.CHAN);
+            }
+            updateNavFocus(focus.navIndex());
+            updateChannelFocus(focus.chanIndex());
+        }
     }
 
     /** 面板不可见时把子 View 全部设为不可点击，双保险。 */
@@ -4686,6 +4712,13 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     }
 
     private void applyRowFocus(int rowIndex) {
+        if (rowIndex < 0) {
+            // Tab 条接管焦点：所有行的白框都去掉，视觉上才清楚"现在在 Tab 上"
+            for (int i = 0; i < rowViews.size(); i++) {
+                rowViews.get(i).setRowFocused(false);
+            }
+            return;
+        }
         for (int i = 0; i < rowViews.size(); i++) {
             SettingRowView r = rowViews.get(i);
             r.setRowFocused(i == rowIndex);
@@ -5047,140 +5080,81 @@ public class MainActivity extends Activity implements FocusEngine.Host {
 
     // ================= 按键 =================
 
-    @Override
-    public boolean onKeyDown(int keyCode, KeyEvent event) {
-        android.util.Log.d("MinTVKey", "key=" + keyCode
-                + " tab=" + currentTab
-                + " dialogVisible=" + (dialogRoot != null && dialogRoot.getVisibility() == View.VISIBLE)
-                + " sysDialog=" + sysDialogOpen
-                + " tabFocus=" + tabFocus
-                + " zone=" + focus.zone()
-                + " pageFocus=" + pageFocusIdx + "/" + pageFocus.size());
-        // ══════════════════════════════════════════════════════════
-        //  按键路由标准：谁在上层谁优先，逐层下探，绝不穿透
-        // ══════════════════════════════════════════════════════════
-        //  L0  系统弹窗（AlertDialog）   → 交还系统，它自己管焦点
-        //  L1  设置弹窗 dialogRoot        → handleSettingsKey，无条件吞
-        //  L2  节目单面板 epgPanelOpen    → handleEpgKey
-        //  L3  纯播放态（面板已收起）      → OSD / 快进
-        //  L4  主界面三栏                 → 焦点引擎
-        //
-        //  规则：上层可见时，下层一律不响应；上层处理不了的键也返回 true
-        //  吞掉，不允许落到下层 —— 否则就会出现"设置和频道同时响应"。
-        //  ══════════════════════════════════════════════════════════
+    /** 按键路由：只做三件事 —— 建层、转发、兜底。 */
+    private com.mintv.tv.ui.key.KeyRouter keyRouter;
 
-        // ---- 音量键：最高优先，任何层都要能调 ----
-        // 以前放在 L1 之后，设置弹窗开着时音量键被 handleSettingsKey 吞掉，
-        // 用户在看设置页时连音量都调不了。
-        if (keyCode == KeyEvent.KEYCODE_VOLUME_UP || keyCode == KeyEvent.KEYCODE_VOLUME_DOWN
-                || keyCode == KeyEvent.KEYCODE_VOLUME_MUTE) {
-            handleVolumeKey(keyCode);
-            return true;
-        }
+    private void buildKeyRouter() {
+        keyRouter = new com.mintv.tv.ui.key.KeyRouter()
+                // 顺序 = 优先级，从上到下。加新的一层就 add 一行。
+                .add(new com.mintv.tv.ui.key.SystemDialogLayer(
+                        new com.mintv.tv.ui.key.SystemDialogLayer.Host() {
+                    @Override public boolean isSystemDialogShowing() { return sysDialogOpen; }
+                }))
+                .add(new com.mintv.tv.ui.key.SettingsLayer(
+                        new com.mintv.tv.ui.key.SettingsLayer.Host() {
+                    @Override public boolean isSettingsVisible() {
+                        return dialogRoot != null && dialogRoot.getVisibility() == View.VISIBLE;
+                    }
+                    @Override public boolean handleSettingsKey(KeyEvent e) {
+                        return MainActivity.this.handleSettingsKey(e.getKeyCode(), e);
+                    }
+                }))
+                .add(new com.mintv.tv.ui.key.EpgLayer(
+                        new com.mintv.tv.ui.key.EpgLayer.Host() {
+                    @Override public boolean isEpgOpen() { return epgPanelOpen; }
+                    @Override public boolean handleEpgKey(KeyEvent e) {
+                        return MainActivity.this.handleEpgKey(e.getKeyCode());
+                    }
+                    @Override public void closeEpg() { closeEpgPanel(); }
+                }))
+                .add(new com.mintv.tv.ui.key.PanelLayer(
+                        new com.mintv.tv.ui.key.PanelLayer.Host() {
+                    @Override public boolean isPanelVisible() { return panelVisible; }
+                    @Override public boolean handlePanelKey(KeyEvent e) {
+                        return handlePanelKeyInner(e);
+                    }
+                    @Override public boolean tryOpenEpg() {
+                        if (focus.zone() == FocusEngine.Zone.NAV) return false;
+                        if (focus.chanIndex() < 0) return false;
+                        showEpgPanel(focus.chanIndex());
+                        return true;
+                    }
+                    @Override public void hidePanel() { MainActivity.this.hidePanel(); }
+                }))
+                .add(new com.mintv.tv.ui.key.PlayerLayer(
+                        new com.mintv.tv.ui.key.PlayerLayer.Host() {
+                    @Override public boolean isPanelVisible() { return panelVisible; }
+                    @Override public void showPanel() { MainActivity.this.showPanel(); }
+                    @Override public void onSeekStep(int d) { }
+                    @Override public boolean startSeek(boolean f) {
+                        return MainActivity.this.startSeek(f);
+                    }
+                    @Override public boolean isSeeking() { return seeking; }
+                    @Override public void endSeek() { MainActivity.this.endSeek(); }
+                    @Override public void appendDigit(int d) { appendChannelDigit(d); }
+                    @Override public void jumpToLastChannel() {
+                        MainActivity.this.jumpToLastChannel();
+                    }
+                    @Override public boolean canSeek() {
+                        return player != null && player.canSeek();
+                    }
+                    @Override public void seekStep(int d) {
+                        if (player != null && player.canSeek()) {
+                            player.seekTo(Math.max(0, player.positionMs() + d * 10_000L));
+                        }
+                    }
+                    @Override public boolean isOsdVisible() {
+                        return osd != null && osd.isVisible();
+                    }
+                    @Override public void hideOsd() { if (osd != null) osd.hideNow(); }
+                    @Override public void reshowOsd() { if (osd != null) osd.reshow(); }
+                }));
+    }
 
-        // L0
-        if (sysDialogOpen) return super.onKeyDown(keyCode, event);
-
-        // L1
-        if (dialogRoot != null && dialogRoot.getVisibility() == View.VISIBLE) {
-            handleSettingsKey(keyCode, event);
-            return true;          // 无条件吞，绝不 return handleSettingsKey()
-        }
-
-
-        // 长按 MENU = 播放诊断，短按 MENU = 设置。
-        // 顺序不能反：原来短按那段写在前面且直接 return，
-        // 长按分支成了永远执行不到的死代码。
-        if (keyCode == KeyEvent.KEYCODE_MENU) {
-            if (event.getRepeatCount() == 0 && !event.isLongPress()) {
-                // 首帧按下：先跟踪，等抬手再决定 —— 这样长按不会被误判成短按
-                event.startTracking();
-                menuPressed = true;
-            }
-            return true;      // 具体动作放在 onKeyLongPress / onKeyUp
-        }
-
-        // ---- L2 节目单面板 ----
-        // 必须排在"纯播放态"之前：节目单开着时上下键是选节目，
-        // 不能被外面的"唤出面板"先吃掉。
-        if (epgPanelOpen) {
-            if (keyCode == KeyEvent.KEYCODE_BACK || keyCode == KeyEvent.KEYCODE_ESCAPE) {
-                closeEpgPanel();
-            } else {
-                handleEpgKey(keyCode);
-            }
-            return true;          // 节目单开着时任何键都不下传
-        }
-
-        // ---- 数字键换台 ----
-        // 放在 L2 之后：节目单开着时数字键不该换台（用户是在选节目）。
-        if (keyCode >= KeyEvent.KEYCODE_0 && keyCode <= KeyEvent.KEYCODE_9) {
-            appendChannelDigit(keyCode - KeyEvent.KEYCODE_0);
-            return true;
-        }
-
-        // ---- 上一频道 ----
-        if (keyCode == KeyEvent.KEYCODE_LAST_CHANNEL || keyCode == KeyEvent.KEYCODE_MEDIA_PREVIOUS) {
-            jumpToLastChannel();
-            return true;
-        }
-
-        // 信息键：直接调出 OSD 信息条（节目、进度、编码、网速）。
-        // 电视遥控器上通常标 INFO / 信息 / i，不同厂商映射到这两个码之一。
-        if (keyCode == KeyEvent.KEYCODE_INFO || keyCode == KeyEvent.KEYCODE_GUIDE) {
-            if (osd != null) osd.reshow();
-            return true;
-        }
-
-        // ---- L3 纯播放态（面板收起）----
-        if (!panelVisible) {
-            if (keyCode == KeyEvent.KEYCODE_DPAD_UP || keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
-                showPanel();
-                return true;
-            }
-        }
-
-        // 右键：频道列 → 展开节目单。
-        // 条件放宽到"只要面板可见、不在分类列"，避免 zone 因为前面的操作
-        // 残留在别的值上时右键毫无反应。
-        if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT && panelVisible
-                && focus.zone() != FocusEngine.Zone.NAV
-                && focus.chanIndex() >= 0) {
-            showEpgPanel(focus.chanIndex());
-            return true;
-        }
-
-        // 面板收起（看视频）时，左右键是快进/快退，按住可长按加速
-        if (!panelVisible && (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT
-                || keyCode == KeyEvent.KEYCODE_DPAD_LEFT)) {
-            if (event.getRepeatCount() == 0) {
-                event.startTracking();          // 交给 onKeyLongPress 判定
-            } else if (!seeking) {
-                // 不支持长按的设备：连续按每下跳 10 秒
-                if (player != null && player.canSeek()) {
-                    long step = keyCode == KeyEvent.KEYCODE_DPAD_RIGHT ? 10_000 : -10_000;
-                    player.seekTo(Math.max(0, player.positionMs() + step));
-                }
-            }
-            return true;
-        }
-
-        // ---- L4 主界面三栏 ----
-        // 面板收起 = 纯播放态在上层，三栏在下面。这时候绝不能再用焦点引擎，
-        // 否则按键会改到看不见的分类/频道状态（切回来发现焦点莫名跳了）。
-        if (!panelVisible) {
-            // 纯播放态：BACK 先唤回面板，再按一次才退出。
-            // 原来这里无条件 return true，按 BACK 直接 finish()，
-            // 用户在看片时误按一下就退出了。
-            if (keyCode == KeyEvent.KEYCODE_BACK) {
-                if (osd != null && osd.isVisible()) osd.hideNow();
-                showPanel();
-                return true;
-            }
-            return true;
-        }
+    /** 面板可见时的按键：焦点引擎 + OK/BACK。 */
+    private boolean handlePanelKeyInner(KeyEvent event) {
+        int keyCode = event.getKeyCode();
         if (focus.onKey(keyCode)) return true;
-
         switch (keyCode) {
             case KeyEvent.KEYCODE_DPAD_CENTER:
             case KeyEvent.KEYCODE_ENTER:
@@ -5191,35 +5165,53 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                     fillEpg(focus.chanIndex());
                 }
                 return true;
-            case KeyEvent.KEYCODE_BACK:
-                // 节目单在上面时就该优先关节目单，先看上层
-                if (epgPanelOpen) { closeEpgPanel(); return true; }
-                if (dialogRoot != null && dialogRoot.getVisibility() == View.VISIBLE) {
-                    closeSettings(); return true;
-                }
-                if (panelVisible) { hidePanel(); return true; }
-                if (osd != null && osd.isVisible()) { osd.hideNow(); return true; }
-                finish();
-                return true;
             default:
-                return super.onKeyDown(keyCode, event);
+                return false;
         }
+    }
+
+    @Override
+    public boolean onKeyDown(int keyCode, KeyEvent event) {
+        if (keyRouter == null) buildKeyRouter();
+
+        // ── 全局约定：音量键最高优先，任何界面都能调 ──
+        if (keyCode == KeyEvent.KEYCODE_VOLUME_UP
+                || keyCode == KeyEvent.KEYCODE_VOLUME_DOWN
+                || keyCode == KeyEvent.KEYCODE_VOLUME_MUTE) {
+            handleVolumeKey(keyCode);
+            return true;
+        }
+
+        // ── 全局约定：MENU 短按开设置、长按开诊断 ──
+        // 这两个不属于任何界面层，是"外壳级"的行为，所以留在路由之前。
+        // 放在这里也避免了"某个层忘了处理 MENU"导致的失灵。
+        if (keyCode == KeyEvent.KEYCODE_MENU) {
+            if (event.getRepeatCount() == 0 && !event.isLongPress()) {
+                event.startTracking();
+                menuPressed = true;
+            }
+            return true;
+        }
+
+        // ── 全局约定：INFO / GUIDE 调出 OSD ──
+        if (keyCode == KeyEvent.KEYCODE_INFO || keyCode == KeyEvent.KEYCODE_GUIDE) {
+            if (osd != null) osd.reshow();
+            return true;
+        }
+
+        if (keyRouter.onKeyDown(event)) return true;
+        return super.onKeyDown(keyCode, event);
     }
 
     @Override
     public boolean onKeyLongPress(int keyCode, KeyEvent event) {
         if (keyCode == KeyEvent.KEYCODE_MENU) {
-            menuPressed = false;          // 长按已消费，抬手不再当短按
+            menuPressed = false;
             showDiagnostics();
             return true;
         }
-        // 上层（系统弹窗 / 设置 / 节目单）在的时候，左右长按不该触发快进
-        int layer = activeLayer();
-        if (layer == LAYER_SYS_DIALOG || layer == LAYER_SETTINGS || layer == LAYER_EPG) {
-            return true;
-        }
-        if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) return startSeek(true);
-        if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT) return startSeek(false);
+        if (keyRouter == null) buildKeyRouter();
+        if (keyRouter.onKeyLongPress(event)) return true;
         return super.onKeyLongPress(keyCode, event);
     }
 
@@ -5227,18 +5219,14 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     public boolean onKeyUp(int keyCode, KeyEvent event) {
         if (keyCode == KeyEvent.KEYCODE_MENU && menuPressed) {
             menuPressed = false;
-            if (event.isCanceled()) return true;
-            if (!event.isTracking()) return true;   // 长按已经被 onKeyLongPress 消费
-            openSettings();
+            if (!event.isCanceled() && event.isTracking()) openSettings();
             return true;
         }
-        if (seeking && (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT
-                || keyCode == KeyEvent.KEYCODE_DPAD_LEFT)) {
-            endSeek();
-            return true;
-        }
+        if (keyRouter == null) buildKeyRouter();
+        if (keyRouter.onKeyUp(event)) return true;
         return super.onKeyUp(keyCode, event);
     }
+
 
     /**
      * 这一行是「多选一的配置值」还是「一个按钮」。
@@ -5277,6 +5265,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                 tabFocus = false;
                 paintTabs();
                 applyRowFocus(focus.rowIndex());
+                refreshSettingsFocus();
                 return true;
             }
             return true;
@@ -5313,14 +5302,21 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         }
 
         // 按「上」进 Tab 条。
-        // 判断条件不能只看 rowIndex()==0：在「关于 / 手机助手」页上
-        // 列表是隐藏的，焦点还停在旧位置上，那样永远进不去 Tab 条，
-        // 用户就以为遥控器切不了页。
-        if (keyCode == KeyEvent.KEYCODE_DPAD_UP
-                && (currentTab != TAB_SETTINGS || focus.rowIndex() == 0)) {
-            tabFocus = true;
-            paintTabs();
-            return true;
+        //
+        // 以前条件是 rowIndex()==0，只有焦点在第一行时才进得去 ——
+        // 用户在列表第 13 行（画面输出）想切页，按上键只会往上挪一行，
+        // 按十几次才到顶。而设置页本来就没有"上下进入别的区域"的需求，
+        // 上下键只是行间移动，所以 Tab 条应该永远可以用一个明确的键够到。
+        //
+        // 现在的规则：上键在 Tab 条之外 → 先正常上移一行；
+        //              已经在第一行/或按住不放 → 进 Tab 条。
+        if (keyCode == KeyEvent.KEYCODE_DPAD_UP) {
+            if (focus.rowIndex() == 0 || event.getRepeatCount() > 0) {
+                tabFocus = true;
+                paintTabs();
+                applyRowFocus(-1);
+                return true;
+            }
         }
         if (keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER) {
             int row = focus.rowIndex();
@@ -5349,6 +5345,12 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             int before = focus.optIndex();
             boolean handled2 = focus.onKey(keyCode);
             int after = focus.optIndex();
+            android.util.Log.d("MinTVKey", "LR row=" + row + " opt " + before
+                    + "->" + after + " handled=" + handled2
+                    + " rows=" + rowViews.size()
+                    + " optCountsLen=" + (DemoData.ROW_OPTIONS.length)
+                    + " thisRowOpts=" + (row >= 0 && row < DemoData.ROW_OPTIONS.length
+                        ? DemoData.ROW_OPTIONS[row].length : -1));
             if (row >= 0 && row < rowViews.size()) {
                 // 行本身必须保持"被聚焦"状态，否则按一下左右键整行白框消失，
                 // 看上去像焦点丢了、也没选中 —— 用户会以为左右键不起作用。
@@ -5359,6 +5361,14 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                 onSettingCommitted(row, after);
                 rowViews.get(row).setSelected(after);
             }
+            return true;
+        }
+
+        // TAB 键（有的遥控器有）直接进/出 Tab 条
+        if (keyCode == KeyEvent.KEYCODE_TAB) {
+            tabFocus = !tabFocus;
+            paintTabs();
+            applyRowFocus(tabFocus ? -1 : focus.rowIndex());
             return true;
         }
 

@@ -22,4 +22,12 @@ public class App extends MultiDexApplication {
         super.attachBaseContext(base);
         MultiDex.install(this);
     }
+
+    @Override
+    public void onCreate() {
+        super.onCreate();
+        // 设置表自检：id 重复、索引常量与表长度不同步 → 立刻抛异常。
+        // 宁可启动崩，也不要带着错位的行号去读写用户配置。
+        com.mintv.tv.ui.setting.Settings.verify();
+    }
 }

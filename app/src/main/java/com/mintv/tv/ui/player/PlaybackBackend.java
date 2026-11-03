@@ -98,6 +98,13 @@ public interface PlaybackBackend {
     /** 当前是否允许 seek。直播流必须返回 false。 */
     boolean canSeek();
 
+    /** 暂停。默认空实现，不支持的后端直接忽略。 */
+    default void pause() { }
+    /** 继续播放。 */
+    default void resume() { }
+    /** 当前是否在播（用于切换"暂停/播放"图标）。 */
+    default boolean isPlaying() { return true; }
+
     /** 跳转。实现里要处理好直播边缘、缓冲不足等情况。 */
     void seekTo(long positionMs);
 
