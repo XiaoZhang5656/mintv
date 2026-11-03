@@ -2913,6 +2913,30 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         }
     }
 
+    /**
+     * 往自己的按键分发里注入一个 KeyEvent。
+     *
+     * <p>为什么不直接调 moveChannel / setZone：
+     * 那些是"结果"，而用户按方向键要的是"经过完整判定后的结果"。
+     * 直接调结果方法会跳过层级、跳过焦点引擎、跳过节目单/设置的拦截，
+     * 于是手机遥控和实体遥控器的行为对不上。
+     *
+     * <p>走 dispatchKeyEvent 就保证了只有一条代码路径。
+     */
+    private void injectKey(final int keyCode) {
+        ui.post(new Runnable() {
+            @Override public void run() {
+                long now = android.os.SystemClock.uptimeMillis();
+                android.view.KeyEvent down = new android.view.KeyEvent(
+                        now, now, android.view.KeyEvent.ACTION_DOWN, keyCode, 0);
+                dispatchKeyEvent(down);
+                android.view.KeyEvent up = new android.view.KeyEvent(
+                        now, now + 30, android.view.KeyEvent.ACTION_UP, keyCode, 0);
+                dispatchKeyEvent(up);
+            }
+        });
+    }
+
     private String handleRemoteCommand(String type, String value) {
         if (type == null) return "未知命令";
         final String t = type;
@@ -2926,13 +2950,29 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                     else if ("VOL_DOWN".equals(t)) handleVolumeKey(android.view.KeyEvent.KEYCODE_VOLUME_DOWN);
                     else if ("MUTE".equals(t)) handleVolumeKey(android.view.KeyEvent.KEYCODE_VOLUME_MUTE);
                     else if ("LINE".equals(t)) switchSource(+1);
-                    else if ("MENU".equals(t)) { if (!dialogOpen()) openSettings(); else closeSettings(); }
-                    else if ("BACK".equals(t)) { if (dialogOpen()) closeSettings(); else if (panelVisible) enterFullPlayer(); }
-                    else if ("HOME".equals(t)) { if (dialogOpen()) closeSettings(); setPanelVisible(true); }
-                    else if ("OK".equals(t)) { if (!panelVisible) setPanelVisible(true); }
-                    // 上下键方向跟用户设置保持一致（「上下换台反转」）
-                    else if ("UP".equals(t)) moveChannel(selections[ROW_REVERSE] != 0 ? +1 : -1);
-                    else if ("DOWN".equals(t)) moveChannel(selections[ROW_REVERSE] != 0 ? -1 : +1);
+                    // MENU / BACK / HOME 也统统注入真实按键。
+                    // 它们以前各自判断 dialogOpen()/panelVisible，等于又写了一套
+                    // 层级逻辑，和 KeyRouter 里的规则迟早对不上。
+                    else if ("MENU".equals(t)) injectKey(android.view.KeyEvent.KEYCODE_MENU);
+                    else if ("BACK".equals(t)) injectKey(android.view.KeyEvent.KEYCODE_BACK);
+                    else if ("HOME".equals(t)) injectKey(android.view.KeyEvent.KEYCODE_HOME);
+                    // OK 也走完整路由：设置开着时它是"确认当前行"，
+                    // 节目单开着时是"播放选中节目"，面板收起时才是"唤回面板"。
+                    // 以前这里写死 setPanelVisible(true)，设置开着按 OK
+                    // 会把频道列表调到弹窗下面 —— 就是"设置还在却冒出频道列"。
+                    else if ("OK".equals(t)) injectKey(android.view.KeyEvent.KEYCODE_DPAD_CENTER);
+                    // ── 方向键：注入真实 KeyEvent，走和遥控器完全一样的路由 ──
+                    //
+                    // 以前这里是 moveChannel()，直接换台 —— 它绕过了焦点引擎，
+                    // 所以手机上按左右永远进不了分类列（后端压根没处理 LEFT/RIGHT），
+                    // 按上下也只会换台、不会在列表里移动。
+                    //
+                    // 现在统一走 dispatchKeyEvent，行为与实体遥控器 100% 一致，
+                    // 也就不存在"手机和遥控器行为不一样"这种问题。
+                    else if ("UP".equals(t)) injectKey(android.view.KeyEvent.KEYCODE_DPAD_UP);
+                    else if ("DOWN".equals(t)) injectKey(android.view.KeyEvent.KEYCODE_DPAD_DOWN);
+                    else if ("LEFT".equals(t)) injectKey(android.view.KeyEvent.KEYCODE_DPAD_LEFT);
+                    else if ("RIGHT".equals(t)) injectKey(android.view.KeyEvent.KEYCODE_DPAD_RIGHT);
                     else if ("PLAYCH".equals(t)) {
                         playByNumber(v);
                     }
@@ -5135,6 +5175,8 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                     @Override public void jumpToLastChannel() {
                         MainActivity.this.jumpToLastChannel();
                     }
+                    @Override public void channelUp() { moveChannel(+1); }
+                    @Override public void channelDown() { moveChannel(-1); }
                     @Override public boolean canSeek() {
                         return player != null && player.canSeek();
                     }

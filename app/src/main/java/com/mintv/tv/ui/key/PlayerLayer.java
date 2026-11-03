@@ -25,6 +25,8 @@ public final class PlayerLayer implements KeyLayer {
         void endSeek();
         void appendDigit(int digit);
         void jumpToLastChannel();
+        void channelUp();
+        void channelDown();
         boolean canSeek();
         void seekStep(int direction);
         boolean isOsdVisible();
@@ -76,6 +78,9 @@ public final class PlayerLayer implements KeyLayer {
                     host.jumpToLastChannel();
                     return true;
                 }
+                // 遥控器上的 CH+ / CH-（部分遥控器有独立按键）
+                if (code == KeyEvent.KEYCODE_CHANNEL_UP) { host.channelUp(); return true; }
+                if (code == KeyEvent.KEYCODE_CHANNEL_DOWN) { host.channelDown(); return true; }
                 return false;
         }
     }
