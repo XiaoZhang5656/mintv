@@ -81,6 +81,37 @@ public final class NetProxy {
         }
     }
 
+    /**
+     * 转成 libVLC 的启动参数。
+     *
+     * <p>VLC 有两个入口，**互斥**：同时给只有一个会生效。
+     * <ul>
+     *   <li>{@code --socks=socks5://host:port}  SOCKS5</li>
+     *   <li>{@code --http-proxy=http://host:port}  HTTP/HTTPS</li>
+     * </ul>
+     *
+     * <p>这样播放器本身也走代理 —— 不只是脚本。
+     * 组播（udp/rtp）不走 HTTP/SOCKS，不受影响。
+     */
+    public static java.util.List<String> vlcArgs(Context c) {
+        java.util.List<String> out = new java.util.ArrayList<>();
+        try {
+            String s = url(c);
+            if (s == null || s.isEmpty()) return out;
+            String v = s.trim();
+            boolean socks = v.toLowerCase(java.util.Locale.US).startsWith("socks");
+            if (socks) {
+                // VLC 期望 socks5://host:port 形式
+                if (!v.contains("://")) v = "socks5://" + v;
+                out.add("--socks=" + v);
+            } else {
+                if (!v.contains("://")) v = "http://" + v;
+                out.add("--http-proxy=" + v);
+            }
+        } catch (Throwable ignored) { }
+        return out;
+    }
+
     /** 给界面显示的一句话。 */
     public static String summary(Context c) {
         String s = url(c);

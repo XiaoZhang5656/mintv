@@ -1,5 +1,7 @@
 package com.mintv.tv.ui.player;
 
+import com.mintv.tv.data.NetProxy;
+
 import android.content.Context;
 import android.net.Uri;
 import android.os.Handler;
@@ -250,6 +252,10 @@ public final class VlcBackend implements PlaybackBackend {
         // 顺带说明：这不是 FCC。FCC（Fast Channel Change）是组播技术，
         // 需要运营商部署 FCC 服务器 + RTP 单播 burst，HLS 源用不上，
         // VLC 也没有实现那个协议。
+        // 播放器也走代理 —— 不只是脚本。
+        // VLC 的两个入口互斥，NetProxy.vlcArgs 已经按类型选好。
+        args.addAll(NetProxy.vlcArgs(ctx));
+
         args.add("--clock-jitter=0");
         args.add("--clock-synchro=0");
         // 解码方式**不在这里设**，见 play() 里的 media option。

@@ -639,7 +639,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         input.setHintTextColor(0xFF6E7683);
         input.setBackgroundColor(0xFF1B1C1F);
         showSystemDialog(new android.app.AlertDialog.Builder(this)
-                .setTitle("网络代理（留空 = 直连）")
+                .setTitle("播放器代理（留空 = 直连）")
                 .setView(input)
                 .setPositiveButton("保存", new android.content.DialogInterface.OnClickListener() {
                     @Override public void onClick(android.content.DialogInterface d, int w) {
@@ -778,6 +778,39 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             return;
         }
         super.onActivityResult(req, res, data);
+    }
+
+    private final java.util.concurrent.atomic.AtomicInteger reconnectSeq =
+            new java.util.concurrent.atomic.AtomicInteger(0);
+
+    /**
+     * 单源超时的重连调度。
+     *
+     * <p>以前只有一条线路时超时直接放弃 —— 用户看到「该源无响应」
+     * 之后永久黑屏，只能手动切台。而绝大多数"无响应"是临时的
+     * （服务端重启、切片还没生成），重连几次往往就好了。
+     *
+     * <p>退避间隔 2s→4s→8s→16s→封顶 30s，避免疯狂重连把源打死。
+     * 出画面后计数清零。
+     */
+    private void scheduleReconnect() {
+        final int seq = reconnectSeq.incrementAndGet();
+        long delay = attempt().nextReconnectDelayMs();
+        int n = attempt().reconnectCount();
+
+        String sec = delay < 1000 ? (delay + "ms") : ((delay / 1000) + " 秒");
+        osd.toast("该源无响应， " + sec + "后重连" + (n > 1 ? "（第 " + n + " 次）" : ""));
+
+        ui.postDelayed(new Runnable() {
+            @Override public void run() {
+                // 期间用户换台了就不重连了
+                if (seq != reconnectSeq.get()) return;
+                if (isFinishing()) return;
+                // 清掉"已经尝试过"的标记，否则第二次超时会被挡住
+                attempt().resetForReconnect();
+                playChannelInternal(playingChannel, true);
+            }
+        }, delay);
     }
 
     private void openThemePicker() {
@@ -1950,6 +1983,10 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                     playChannelInternal(playingChannel, true);
                     return;
                 }
+            }
+            if (act == com.mintv.tv.data.PlaybackAttempt.Action.RECONNECT) {
+                scheduleReconnect();
+                return;
             }
             osd.toast("该源无响应");
         }
@@ -5678,6 +5715,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
 
     private void moveChannel(int step) {
         if (channels.isEmpty()) return;
+        reconnectSeq.incrementAndGet();      // 作废待执行的重连
         clearRestorePending();
         resetNoVideoStage();
         int n = focus.chanIndex() + step;

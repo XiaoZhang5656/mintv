@@ -316,20 +316,18 @@ public final class ScriptEngine {
 
             // 上游代理：脚本里的 fetch 和本地 HLS 代理共用同一个配置。
             // 有些源只对特定出口开放，不挂代理直接 403。
-            // 代理优先级：单次请求指定 > 全局设置 > 直连。
+            // 脚本的代理只认脚本自己写的，不继承设置项里的那个 ——
+            // 那个是「播放器代理」，管的是 VLC 连源。
             //
-            // 单次指定写在 init 里：
-            //   fetch(url, { proxy: "socks5://10.0.0.1:1080" })
-            //   fetch(url, { proxy: "" })          ← 强制直连，忽略全局
+            //   fetch(url, { proxy: "socks5://10.0.0.1:1080" })  用它
+            //   fetch(url)                                        直连
             //
-            // 为什么要 per-request：同一次解析里经常要打两个不同的接口，
-            // 一个内网一个公网，全局一个代理应付不了。
-            java.net.Proxy proxy;
+            // 两套分开是有意的：脚本作者清楚自己要什么，
+            // 而设置项是给"不写脚本的普通用户"准备的。
+            java.net.Proxy proxy = null;
             if (init != null && init.has("proxy")) {
                 String pv = init.optString("proxy", "");
-                proxy = pv.isEmpty() ? null : NetProxy.parse(pv);   // "" = 强制直连
-            } else {
-                proxy = NetProxy.get(ctx);
+                if (!pv.isEmpty()) proxy = NetProxy.parse(pv);
             }
             java.net.URL u = new URL(url);
             conn = proxy != null

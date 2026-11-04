@@ -205,9 +205,9 @@ public final class ScriptRouter {
                               String proxySpec, OutputStream out) {
         java.net.HttpURLConnection conn = null;
         try {
-            // 代理优先用脚本这次指定的，否则用全局设置
-            java.net.Proxy proxy = proxySpec == null || proxySpec.isEmpty()
-                    ? NetProxy.get(ctx) : NetProxy.parse(proxySpec);
+            // 只认脚本这次指定的，不继承设置项 —— 那个是播放器代理
+            java.net.Proxy proxy = (proxySpec == null || proxySpec.isEmpty())
+                    ? null : NetProxy.parse(proxySpec);
             java.net.URL u = new java.net.URL(url);
             conn = proxy != null
                     ? (java.net.HttpURLConnection) u.openConnection(proxy)

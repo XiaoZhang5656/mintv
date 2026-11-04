@@ -31,6 +31,14 @@ public final class PlaybackAttempt {
         RETRY_SOFT_DECODE,
         /** 切到下一条线路。 */
         SWITCH_SOURCE,
+        /**
+         * 只有一条线路且超时：重连同一条。
+         *
+         * <p>以前单源超时直接 GIVE_UP，用户看到「该源无响应」之后
+         * 永久黑屏，只能手动切台。而绝大多数"无响应"是临时的
+         * （服务端重启、切片还没生成），重连几次往往就好了。
+         */
+        RECONNECT,
         /** 没牌可打了，明确告知用户。 */
         GIVE_UP
     }
@@ -42,6 +50,8 @@ public final class PlaybackAttempt {
 
     /** 已出首帧。 */
     private boolean firstFrame;
+    /** 单源重连次数，用于退避间隔。 */
+    private int reconnectCount;
     /** 起播看门狗已经触发过 —— 只用来防重复，**不参与卡顿判断**。 */
     private boolean startupFailed;
     /** 解码错误已经处理过一次。 */
@@ -122,6 +132,10 @@ public final class PlaybackAttempt {
 
     /** 出首帧。 */
     public void onFirstFrame() {
+        // 出画面说明这次尝试真的成功了，重连计数归零。
+        // 不归零的话：看了一小时源断了，第一次重连直接按第 10 次
+        // 算，等 30 秒才动 —— 用户以为卡死了。
+        reconnectCount = 0;
         firstFrame = true;
         // ⚠ 这里**不能**去动"看门狗已触发"那个标志。
         //
@@ -142,7 +156,7 @@ public final class PlaybackAttempt {
     public Action onStartupTimeout() {
         if (firstFrame || startupFailed) return Action.NONE;
         startupFailed = true;
-        return sourceCount > 1 ? Action.SWITCH_SOURCE : Action.GIVE_UP;
+        return sourceCount > 1 ? Action.SWITCH_SOURCE : Action.RECONNECT;
     }
 
     /**
@@ -190,7 +204,7 @@ public final class PlaybackAttempt {
         if (now - stallSince < timeoutMs) return Action.NONE;
 
         stallSince = now;   // 重置，避免连续触发
-        return sourceCount > 1 ? Action.SWITCH_SOURCE : Action.GIVE_UP;
+        return sourceCount > 1 ? Action.SWITCH_SOURCE : Action.RECONNECT;
     }
 
     /**
@@ -199,6 +213,30 @@ public final class PlaybackAttempt {
      * <p>只清「卡顿采样」和「是否出过帧」，**不清降级进度** ——
      * 否则换线路之后又会从"软解"重来一遍，来回横跳。
      */
+    /**
+     * 重连前清掉「已经尝试过」的标记。
+     *
+     * <p>不清的话：第一次超时 → startupFailed=true → RECONNECT →
+     * 第二次超时被这个标记挡住，返回 NONE，永远不动作，卡死黑屏。
+     * 降级进度（软解、换线路）不清 —— 那些是本次尝试的成果，重连后仍然有效。
+     */
+    public void resetForReconnect() {
+        startupFailed = false;
+        errorRetried = false;
+        stallLastPos = -1;
+        stallSince = -1;
+        lowSpeedSince = -1;
+    }
+
+    /** 退避间隔：2s → 4s → 8s → 封顶 30s。 */
+    public long nextReconnectDelayMs() {
+        reconnectCount = Math.min(reconnectCount + 1, 10);
+        long d = 2000L << Math.min(reconnectCount - 1, 4);   // 2/4/8/16/32
+        return Math.min(d, 30000L);
+    }
+
+    public int reconnectCount() { return reconnectCount; }
+
     public void onRestart() {
         firstFrame = false;
         paused = false;
