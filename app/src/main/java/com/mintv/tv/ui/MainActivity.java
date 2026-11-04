@@ -899,17 +899,14 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         h.setGravity(Gravity.CENTER_VERTICAL);
         h.setPadding(Theme.px(6), Theme.px(18), Theme.px(6), Theme.px(4));
 
-        // 主题色竖条
-        View bar = new View(this);
-        bar.setBackgroundColor(Theme.FOCUS_BLUE);
-        LinearLayout.LayoutParams barLp = new LinearLayout.LayoutParams(
-                Theme.px(3), Theme.px(14));
-        barLp.rightMargin = Theme.px(10);
-        h.addView(bar, barLp);
-
+        // 文字直接用主题色。
+        //
+        // Theme.FOCUS_BLUE 已经是 ensureReadable() 处理过的
+        // （明度下限 0.62），深底上读得清 —— 之前看不见是布局问题
+        // （WRAP_CONTENT 被算成 0 宽），不是对比度问题，我当时判断错了。
         TextView t = new TextView(this);
         t.setText(title);
-        t.setTextColor(Theme.TEXT);          // 灰白，任何主题下都读得清
+        t.setTextColor(Theme.FOCUS_BLUE);
         t.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, Theme.sp(14));
         t.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
         t.setGravity(Gravity.CENTER_VERTICAL);
