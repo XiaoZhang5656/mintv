@@ -12,7 +12,11 @@ package com.mintv.tv.ui.focus;
  */
 public final class FocusEngine {
 
-    public enum Zone { NAV, CHAN, SETTINGS_ROW }
+    /**
+     * {SUB} 是最左侧的订阅列，比 NAV（分类）更外层。
+     * 层级上是「先选源、再选分类」，所以左右键的顺序是 SUB ↔ NAV ↔ CHAN。
+     */
+    public enum Zone { SUB, NAV, CHAN, SETTINGS_ROW }
 
     /** 宿主回调：索引变了，把焦点和滚动同步到 View 上。 */
     public interface Host {

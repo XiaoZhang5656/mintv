@@ -2019,6 +2019,71 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         }
     }
 
+    /** 订阅列的焦点下标（0 = 第一个订阅）。 */
+    private int subFocusIdx = 0;
+
+    /** 从分类列进订阅列：焦点落在当前激活的订阅上。 */
+    private void enterSubColumn() {
+        java.util.List<com.mintv.tv.data.SubscriptionStore.Sub> subs =
+                com.mintv.tv.data.SubscriptionStore.list(this);
+        String active = com.mintv.tv.data.SubscriptionStore.activeId(this);
+        subFocusIdx = 0;
+        for (int i = 0; i < subs.size(); i++) {
+            if (subs.get(i).id.equals(active)) { subFocusIdx = i; break; }
+        }
+        focus.setZone(FocusEngine.Zone.SUB);
+        paintSubFocus();
+    }
+
+    /** 订阅列的按键：上下移动、右回分类、OK 切换。 */
+    private boolean handleSubColumnKey(int keyCode) {
+        java.util.List<com.mintv.tv.data.SubscriptionStore.Sub> subs =
+                com.mintv.tv.data.SubscriptionStore.list(this);
+        if (subs.isEmpty()) return false;
+
+        switch (keyCode) {
+            case KeyEvent.KEYCODE_DPAD_UP:
+                subFocusIdx = (subFocusIdx - 1 + subs.size()) % subs.size();
+                paintSubFocus();
+                return true;
+            case KeyEvent.KEYCODE_DPAD_DOWN:
+                subFocusIdx = (subFocusIdx + 1) % subs.size();
+                paintSubFocus();
+                return true;
+            case KeyEvent.KEYCODE_DPAD_RIGHT:
+                focus.setZone(FocusEngine.Zone.NAV);
+                clearSubFocus();
+                updateNavFocus(focus.navIndex());
+                return true;
+            case KeyEvent.KEYCODE_DPAD_CENTER:
+            case KeyEvent.KEYCODE_ENTER:
+                onSubClicked(subs.get(Math.min(subFocusIdx, subs.size() - 1)).id);
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    /** 只把第 idx 个订阅画成焦点态，其余恢复。 */
+    private void paintSubFocus() {
+        if (subColumn == null) return;
+        int navIdx = 0;
+        for (int i = 1; i < subColumn.getChildCount(); i++) {
+            View v = subColumn.getChildAt(i);
+            if (!(v instanceof NavItemView)) continue;
+            ((NavItemView) v).setFocused(navIdx == subFocusIdx, true);
+            navIdx++;
+        }
+    }
+
+    private void clearSubFocus() {
+        if (subColumn == null) return;
+        for (int i = 1; i < subColumn.getChildCount(); i++) {
+            View v = subColumn.getChildAt(i);
+            if (v instanceof NavItemView) ((NavItemView) v).setFocused(false, true);
+        }
+    }
+
     private void onSubClicked(String subId) {
         String cur = com.mintv.tv.data.SubscriptionStore.activeId(this);
         if (subId != null && subId.equals(cur)) return;      // 已经是它了
@@ -6321,6 +6386,20 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         if (keyCode == KeyEvent.KEYCODE_INFO || keyCode == KeyEvent.KEYCODE_GUIDE) {
             if (osd != null) osd.reshow();
             return true;
+        }
+
+        // ── 订阅列焦点 ──
+        // 不走 keyRouter：它不是"层"，是最左侧一列，处理逻辑只有上下移动和
+        // 左右进出，塞进层体系反而绕。
+        if (subColumn != null && subColumn.getVisibility() == View.VISIBLE) {
+            if (focus.zone() == FocusEngine.Zone.SUB) {
+                if (handleSubColumnKey(keyCode)) return true;
+            } else if (focus.zone() == FocusEngine.Zone.NAV
+                    && keyCode == KeyEvent.KEYCODE_DPAD_LEFT) {
+                // 分类列按左 → 进订阅列
+                enterSubColumn();
+                return true;
+            }
         }
 
         if (keyRouter.onKeyDown(event)) return true;
