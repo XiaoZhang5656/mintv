@@ -53,34 +53,56 @@ def read_version_code(apk_path):
 
 
 def target_name(apk_path):
-    """把一个打包产物映射成仓库里的文件名。
+    """保持原文件名。
 
-    开启 ABI 分包后会同时产出 app-arm64-v8a-debug.apk 和
-    app-armeabi-v7a-debug.apk，不能都叫 tvui-java-debug.apk 互相覆盖。
+    <p>下载链接一直是 public/apk/app-arm64-v8a-debug.apk，
+    改成 mintv-<abi>.apk 会让所有已发出去的链接 404。
     """
-    base = os.path.basename(apk_path)
-    for abi in ('arm64-v8a', 'armeabi-v7a', 'x86_64', 'x86'):
-        if abi in base:
-            return 'mintv-%s.apk' % abi
-    return 'tvui-java-debug.apk'
-
+    return 'public/apk/' + os.path.basename(apk_path)
 
 def publish(apk_path, repo_path):
-    data = open(apk_path, 'rb').read()
-    vc = read_version_code(apk_path)
-    api = 'https://api.github.com/repos/%s/contents/%s' % (REPO, repo_path)
-    print('publish', apk_path, '->', repo_path, len(data), 'bytes versionCode=', vc)
-    cur = call(api, ok404=True)
-    body = {
-        'message': 'ci: publish debug apk [skip ci]',
-        'content': base64.b64encode(data).decode(),
-        'branch': 'main',
-    }
-    if cur and 'sha' in cur:
-        body['sha'] = cur['sha']
-    res = call(api, 'PUT', body)
-    print('  commit', (res.get('commit') or {}).get('sha', '')[:10])
+    """用 Git Data API 上传，不用 Contents API。
 
+    Contents API 单文件实际上限约 50MB（base64 后翻 4/3），
+    APK 到 47MB 就会被 422 拒掉：
+      "the file is too large to be processed"
+
+    Git Data API 的 blob 支持到 100MB，而且不需要 base64 之外的额外膨胀。
+    """
+    data = open(apk_path, 'rb').read()
+    # version.json 不是 apk，读 versionCode 会抛异常
+    vc = read_version_code(apk_path) if apk_path.endswith('.apk') else '-' 
+    print('publish', apk_path, '->', repo_path, len(data), 'bytes versionCode=', vc)
+
+    repo = 'https://api.github.com/repos/%s' % REPO
+
+    # 1) 当前 head
+    head = call(repo + '/git/ref/heads/main')
+    parent = head['object']['sha']
+
+    # 2) 传 blob
+    blob = call(repo + '/git/blobs', 'POST', {
+        'content': base64.b64encode(data).decode(),
+        'encoding': 'base64',
+    })
+    print('  blob', blob['sha'][:10])
+
+    # 3) 在父 commit 的树上加这一个文件
+    base = call(repo + '/git/commits/' + parent)
+    tree = call(repo + '/git/trees', 'POST', {
+        'base_tree': base['tree']['sha'],
+        'tree': [{'path': repo_path, 'mode': '100644',
+                  'type': 'blob', 'sha': blob['sha']}],
+    })
+
+    # 4) 提交并移动分支
+    commit = call(repo + '/git/commits', 'POST', {
+        'message': 'ci: publish debug apk [skip ci]',
+        'tree': tree['sha'],
+        'parents': [parent],
+    })
+    call(repo + '/git/refs/heads/main', 'PATCH', {'sha': commit['sha']})
+    print('  commit', commit['sha'][:10])
 
 def main():
     apks = sorted(glob.glob('app/build/outputs/apk/debug/*.apk'))
@@ -88,6 +110,11 @@ def main():
         raise SystemExit('no apk found')
     for a in apks:
         publish(a, target_name(a))
+    # version.json 也要发：git push 失败时它没有上去，
+    # 客户端靠它判断有没有新版本
+    vj = 'public/version.json'
+    if os.path.exists(vj):
+        publish(vj, vj)
 
 
 if __name__ == '__main__':
