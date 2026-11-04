@@ -58,6 +58,8 @@ public final class Settings {
             // 选项数量会变，不适合用定长数组表达。
             SettingDef.action("theme", "主题颜色",
                     "调的是强调色：选中框、进度、按钮。背景保持深色", "选择…"),
+            SettingDef.value("show_subs", "显示订阅列",
+                    "开启后左侧多一列订阅，可在播放页直接切换源。默认关闭", new String[]{"已关闭", "开启"}, 0),
             SettingDef.action("script_dir", "脚本目录",
                     "选一个外部目录放脚本，文件管理器可见；不选则用 App 私有目录", "选择…"),
             SettingDef.action("net_proxy", "播放器代理",
@@ -90,6 +92,7 @@ public final class Settings {
     public static final int IDX_CLOCK = indexOf("clock");
     public static final int IDX_OUTPUT = indexOf("output");
     public static final int IDX_THEME = indexOf("theme");
+    public static final int IDX_SHOW_SUBS = indexOf("show_subs");
     public static final int IDX_SCRIPT_DIR = indexOf("script_dir");
     public static final int IDX_NET_PROXY = indexOf("net_proxy");
     public static final int IDX_LOCAL_IMPORT = indexOf("local_import");

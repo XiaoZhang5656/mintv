@@ -843,6 +843,19 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         themePicker.requestFocus();
     }
 
+    /**
+     * 把 OSD 的两个外观设置推给 OsdView。
+     *
+     * <p>这两个设置以前是**假的** —— SettingDef 里定义了、界面能点、
+     * selections 也存下来了，但从来没有代码读它，改了完全没效果。
+     * 比没有这个功能更糟：用户以为调好了，其实没变。
+     */
+    private void applyOsdPrefs() {
+        if (osd == null) return;
+        osd.setAlignLeft(selections[ROW_EPG_POS] == 0);
+        osd.setSwitchMask(selections[ROW_SWITCH_UI]);
+    }
+
     private void applyOutputMode() {
         if (textureView == null || surfaceView == null) return;
         boolean tex = selections[ROW_OUTPUT] == OUTPUT_TEXTURE;
@@ -951,6 +964,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         // OSD 必须在 scrim **之上**、面板之下。
         // 之前它加在 scrim 前面，左侧那块 94% 黑的渐变遮罩直接盖住信息条左半边，
         // 看起来就是"信息条只显示了一半/压根没显示"。
+        applyOsdPrefs();
         root.addView(osd, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
@@ -1999,6 +2013,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     private static final int ROW_SOURCE   = com.mintv.tv.ui.setting.Settings.IDX_SOURCE;
     private static final int ROW_RATIO    = com.mintv.tv.ui.setting.Settings.IDX_ASPECT;
     private static final int ROW_EPG_POS  = com.mintv.tv.ui.setting.Settings.IDX_EPG_POS;
+    private static final int ROW_SWITCH_UI = com.mintv.tv.ui.setting.Settings.IDX_SWITCH_UI;
     private static final int ROW_REVERSE  = com.mintv.tv.ui.setting.Settings.IDX_REVERSE;
     private static final int ROW_OSD_STYLE= com.mintv.tv.ui.setting.Settings.IDX_SWITCH_UI;
     private static final int ROW_LEFTKEY  = com.mintv.tv.ui.setting.Settings.IDX_LEFT_KEY;
@@ -5500,6 +5515,8 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             openGroupManager();
         } else if (row == ROW_THEME) {
             openThemePicker();
+        } else if (row == ROW_EPG_POS || row == ROW_SWITCH_UI) {
+            applyOsdPrefs();
         } else if (row == ROW_OUTPUT) {
             // 换渲染目标等于换输出管线：直接重建播放器最干净。
             // 不重建的话旧实例可能还持有已隐藏的 surface，

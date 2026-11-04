@@ -47,6 +47,12 @@ public class OsdView extends View {
     /** 台标。null 表示这个台没有图标，布局会自动不留空位。 */
     private android.graphics.Bitmap logo;
 
+    /** OSD 卡片是否靠左（false = 居中）。 */
+    private boolean alignLeft;
+
+    /** 换台时显示什么：0=台号+EPG  1=只台号  2=只EPG。 */
+    private int switchMask;
+
     private String clockText;
     /** 实时倍率（Δ播放时间/Δ墙钟），<0 表示还没数据。 */
     private float realtimeSpeed = -1f;
@@ -630,7 +636,11 @@ public class OsdView extends View {
 
         // ---- 卡片底 ----
         float avail = getWidth() - leftInset;
-        float left = leftInset + Math.max(0f, (avail - cardW) / 2f);
+        // 居左：贴着左栏边缘（不挡画面中心）
+        // 居中：屏幕水平居中（更醒目，但会盖住画面主体）
+        float left = alignLeft
+                ? leftInset + Theme.px(8)
+                : leftInset + Math.max(0f, (avail - cardW) / 2f);
         r.set(left, top, left + cardW, bottom);
         fill.setColor(Theme.OSD_CARD_BG);
         c.drawRoundRect(r, Theme.px(12), Theme.px(12), fill);
@@ -701,10 +711,10 @@ public class OsdView extends View {
             c.drawText(group, catX + Theme.px(11),
                     noTop + noH / 2f - (p.ascent() + p.descent()) / 2f, p);
         }
-        y += noH + gap1;
+        y += (switchMask == 2 ? 0 : noH) + gap1;
 
         // ═══════════ 第 2 行：正在播 ═══════════
-        if (nowText != null) {
+        if (nowText != null && switchMask != 1) {
             p.setTextSize(fsLabel);
             p.setColor(Theme.TEXT_SUB);
             c.drawText("正在播", x, y + fsProg * 0.8f, p);
@@ -874,6 +884,20 @@ public class OsdView extends View {
     public void setRealtimeSpeed(float x) {
         if (Math.abs(x - realtimeSpeed) < 0.01f) return;   // 变化太小不重绘
         realtimeSpeed = x;
+        invalidate();
+    }
+
+    /** 卡片位置：true = 靠左，false = 居中。 */
+    public void setAlignLeft(boolean left) {
+        if (this.alignLeft == left) return;
+        this.alignLeft = left;
+        invalidate();
+    }
+
+    /** 换台时的显示内容：0=台号+EPG  1=只台号  2=只EPG。 */
+    public void setSwitchMask(int mask) {
+        if (this.switchMask == mask) return;
+        this.switchMask = mask;
         invalidate();
     }
 
