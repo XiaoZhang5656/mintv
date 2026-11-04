@@ -622,6 +622,38 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     private static final int REQ_LOCAL_SOURCE = 4002;
 
     /**
+     * 网络代理输入框。
+     *
+     * <p>为什么需要代理：有些源只对特定出口 IP 开放，或者在内网深处。
+     * 做法不是给播放器配代理（VLC 那套只管 HTTP，组播根本不走），
+     * 而是让播放器全程访问 127.0.0.1，由宿主带代理去回源。
+     */
+    private void showProxyDialog() {
+        android.widget.EditText input = new android.widget.EditText(this);
+        input.setText(com.mintv.tv.data.NetProxy.url(this));
+        input.setHint("socks5://127.0.0.1:1080  或  http://127.0.0.1:8080");
+        input.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, Theme.sp(17));
+        input.setSingleLine(true);
+        input.setPadding(Theme.px(18), Theme.px(14), Theme.px(18), Theme.px(14));
+        input.setTextColor(0xFFE8ECF2);
+        input.setHintTextColor(0xFF6E7683);
+        input.setBackgroundColor(0xFF1B1C1F);
+        showSystemDialog(new android.app.AlertDialog.Builder(this)
+                .setTitle("网络代理（留空 = 直连）")
+                .setView(input)
+                .setPositiveButton("保存", new android.content.DialogInterface.OnClickListener() {
+                    @Override public void onClick(android.content.DialogInterface d, int w) {
+                        com.mintv.tv.data.NetProxy.save(MainActivity.this, input.getText().toString());
+                        osd.toast("代理已保存：" + com.mintv.tv.data.NetProxy.summary(MainActivity.this));
+                        // 重建播放器，让新配置在下次起播生效
+                        if (playerManager != null) playerManager.release();
+                        playChannelInternal(playingChannel, true);
+                    }
+                })
+                .setNegativeButton("取消", null));
+    }
+
+    /**
      * 从本机 / U 盘导入一份源文件。
      *
      * <p>读完之后内容会**复制**到 App 目录，不是引用原文件 ——
@@ -1951,6 +1983,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     private static final int ROW_GROUP_MGR= com.mintv.tv.ui.setting.Settings.IDX_GROUP_MGR;
     private static final int ROW_SCRIPT_DIR = com.mintv.tv.ui.setting.Settings.IDX_SCRIPT_DIR;
     private static final int ROW_LOCAL_IMPORT = com.mintv.tv.ui.setting.Settings.IDX_LOCAL_IMPORT;
+    private static final int ROW_NET_PROXY = com.mintv.tv.ui.setting.Settings.IDX_NET_PROXY;
 
     /** 被用户隐藏的分类名（「全部」和「我的收藏」不允许隐藏）。 */
     private final java.util.LinkedHashSet<String> hiddenCats = new java.util.LinkedHashSet<>();
@@ -5015,6 +5048,12 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             out[0] = Theme.ACCENT_NAMES[Theme.accentIndex];
             return out;
         }
+        if ("net_proxy".equals(id)) {
+            String[] out = base.clone();
+            out[0] = com.mintv.tv.data.NetProxy.url(this).isEmpty()
+                    ? "直连" : com.mintv.tv.data.NetProxy.url(this);
+            return out;
+        }
         if ("script_dir".equals(id)) {
             String[] out = base.clone();
             String p = new com.mintv.tv.data.ScriptStore(this).displayPath();
@@ -5413,6 +5452,8 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         } else if (row == ROW_AUTOPLAY) {
             saveAutoStartFlag();
             if (value == 0) showAutoStartGuide();
+        } else if (row == ROW_NET_PROXY) {
+            showProxyDialog();
         } else if (row == ROW_LOCAL_IMPORT) {
             pickLocalSource();
         } else if (row == ROW_SCRIPT_DIR) {

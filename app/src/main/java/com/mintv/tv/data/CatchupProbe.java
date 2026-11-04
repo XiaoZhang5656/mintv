@@ -170,7 +170,7 @@ public final class CatchupProbe {
             conn.setConnectTimeout(4000);
             conn.setReadTimeout(6000);
             conn.setRequestMethod("GET");
-            conn.setRequestProperty("User-Agent", "Mozilla/5.0 MinTV/1.0");
+            conn.setRequestProperty("User-Agent", "MinTV");
             conn.setRequestProperty("Range", "bytes=0-1535");
             conn.setInstanceFollowRedirects(true);
             int code = conn.getResponseCode();
@@ -225,7 +225,7 @@ public final class CatchupProbe {
             conn.setConnectTimeout(4000);
             conn.setReadTimeout(6000);
             conn.setRequestMethod("GET");
-            conn.setRequestProperty("User-Agent", "Mozilla/5.0 MinTV/1.0");
+            conn.setRequestProperty("User-Agent", "MinTV");
             conn.setRequestProperty("Range", "bytes=0-511");
             conn.setInstanceFollowRedirects(true);
             int code = conn.getResponseCode();

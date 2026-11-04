@@ -60,6 +60,8 @@ public final class Settings {
                     "调的是强调色：选中框、进度、按钮。背景保持深色", "选择…"),
             SettingDef.action("script_dir", "脚本目录",
                     "选一个外部目录放脚本，文件管理器可见；不选则用 App 私有目录", "选择…"),
+            SettingDef.action("net_proxy", "网络代理",
+                    "脚本 fetch 和分片转发都走它；留空直连。格式 http://ip:端口 或 socks5://ip:端口", "设置…"),
             SettingDef.action("local_import", "导入本地源",
                     "从本机或 U 盘导入 m3u / txt，内容复制到本机，不依赖网络", "选择文件…"),
             SettingDef.action("group_mgr", "频道分组管理",
@@ -89,6 +91,7 @@ public final class Settings {
     public static final int IDX_OUTPUT = indexOf("output");
     public static final int IDX_THEME = indexOf("theme");
     public static final int IDX_SCRIPT_DIR = indexOf("script_dir");
+    public static final int IDX_NET_PROXY = indexOf("net_proxy");
     public static final int IDX_LOCAL_IMPORT = indexOf("local_import");
     public static final int IDX_GROUP_MGR = indexOf("group_mgr");
 

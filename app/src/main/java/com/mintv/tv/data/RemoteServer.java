@@ -364,7 +364,8 @@ public final class RemoteServer {
         if (!path.startsWith("/api/") && path.length() > 1) {
             try {
                 ScriptRouter sr = router();
-                if (sr.canHandle(path)) {
+                // /seg/ 是分片转发，不走脚本匹配，但同样由 ScriptRouter 处理
+                if (path.startsWith("/seg/") || sr.canHandle(path)) {
                     sr.handle(path, query, out);
                     return;
                 }

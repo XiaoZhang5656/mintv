@@ -152,7 +152,8 @@ public final class LogoLoader {
             conn = (HttpURLConnection) new URL(url).openConnection();
             conn.setConnectTimeout(6000);
             conn.setReadTimeout(8000);
-            conn.setRequestProperty("User-Agent", "Mozilla/5.0 TVUI/1.0");
+            // 用自己标识，不伪装浏览器 —— 伪装反而不诚实且没必要
+            conn.setRequestProperty("User-Agent", "MinTV");
             conn.setInstanceFollowRedirects(true);
             try (InputStream in = conn.getInputStream()) {
                 ByteArrayOutputStream bos = new ByteArrayOutputStream();

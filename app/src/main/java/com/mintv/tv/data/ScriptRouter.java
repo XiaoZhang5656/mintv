@@ -117,6 +117,14 @@ public final class ScriptRouter {
      * 失败写 502，并记一条脚本日志 —— 用户在手机页面上能看到原因。
      */
     public void handle(String path, String query, OutputStream out) {
+        // 分片转发：脚本把 m3u8 里的 ts 地址改写成 /seg/xxx?src=<真实地址>，
+        // 播放器来请求这里，宿主带代理去回源，原样吐回去。
+        // 播放器全程只跟 127.0.0.1 打交道，所以上游是 HTTP / SOCKS5 /
+        // 内网，对它都没区别。
+        if (path.startsWith("/seg/")) {
+            proxySegment(query, out);
+            return;
+        }
         Route r = match(path);
         if (r == null) {
             write(out, 404, "text/plain; charset=utf-8", "no script route: " + path);
@@ -166,6 +174,88 @@ public final class ScriptRouter {
 
         // 有地址：302 过去，请求头交给播放器（VLC 只认 Referer/UA/Cookie）
         writeRedirect(out, res.url);
+    }
+
+    /**
+     * 分片转发。
+     *
+     * <p>必须**流式**转发：一个 ts 分片 500KB~2MB，4K 的能到 5MB，
+     * 整个读进内存再写回去会让延迟和内存都炸。
+     */
+    private void proxySegment(String query, OutputStream out) {
+        String src = qparam(query, "src");
+        if (src == null || src.isEmpty()) {
+            write(out, 400, "text/plain; charset=utf-8", "missing src");
+            return;
+        }
+        java.net.HttpURLConnection conn = null;
+        try {
+            java.net.Proxy proxy = NetProxy.get(ctx);
+            java.net.URL u = new java.net.URL(src);
+            conn = proxy != null
+                    ? (java.net.HttpURLConnection) u.openConnection(proxy)
+                    : (java.net.HttpURLConnection) u.openConnection();
+            conn.setConnectTimeout(8000);
+            conn.setReadTimeout(15000);
+            conn.setInstanceFollowRedirects(true);
+
+            // ⚠ 不写任何默认请求头。
+            // 有些源恰恰不允许带 UA，硬塞一个 Mozilla 会被 403；
+            // 带什么头是脚本的决定，框架只负责搬运。
+            // 脚本想带就在改写地址时带上：
+            //   /seg/xx?src=...&ua=<编码后的UA>&ref=<编码后的Referer>
+            String ua = qparam(query, "ua");
+            if (ua != null && !ua.isEmpty()) conn.setRequestProperty("User-Agent", ua);
+            String ref = qparam(query, "ref");
+            if (ref != null && !ref.isEmpty()) conn.setRequestProperty("Referer", ref);
+            String ck = qparam(query, "ck");
+            if (ck != null && !ck.isEmpty()) conn.setRequestProperty("Cookie", ck);
+
+            int code = conn.getResponseCode();
+            if (code >= 400) {
+                write(out, 502, "text/plain; charset=utf-8", "upstream " + code);
+                return;
+            }
+            String ct = conn.getContentType();
+            if (ct == null || ct.isEmpty()) ct = "video/mp2t";
+            long len = conn.getContentLength();
+
+            StringBuilder h = new StringBuilder();
+            h.append("HTTP/1.1 200 OK\r\n");
+            h.append("Content-Type: ").append(ct).append("\r\n");
+            if (len > 0) h.append("Content-Length: ").append(len).append("\r\n");
+            h.append("Access-Control-Allow-Origin: *\r\n");
+            h.append("Connection: close\r\n\r\n");
+            out.write(h.toString().getBytes("UTF-8"));
+
+            java.io.InputStream in = conn.getInputStream();
+            byte[] buf = new byte[16 * 1024];
+            int n;
+            int total = 0;
+            while ((n = in.read(buf)) > 0) {
+                out.write(buf, 0, n);
+                total += n;
+                if (total > 32 * 1024 * 1024) break;   // 单分片上限，防异常流
+            }
+            out.flush();
+            try { in.close(); } catch (Throwable ignored) { }
+        } catch (Throwable t) {
+            try { write(out, 502, "text/plain; charset=utf-8", "proxy failed"); }
+            catch (Throwable ignored) { }
+        } finally {
+            if (conn != null) conn.disconnect();
+        }
+    }
+
+    private static String qparam(String query, String key) {
+        if (query == null || query.isEmpty()) return null;
+        for (String p : query.split("&")) {
+            int i = p.indexOf('=');
+            if (i < 0) continue;
+            if (!p.substring(0, i).equals(key)) continue;
+            return safeDecode(p.substring(i + 1));
+        }
+        return null;
     }
 
     // ================= 输出 =================

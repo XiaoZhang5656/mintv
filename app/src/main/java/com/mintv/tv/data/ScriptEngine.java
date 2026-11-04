@@ -313,7 +313,13 @@ public final class ScriptEngine {
             String method = init.optString("method", "GET").toUpperCase();
             String body = init.optString("body", "");
 
-            conn = (HttpURLConnection) new URL(url).openConnection();
+            // 上游代理：脚本里的 fetch 和本地 HLS 代理共用同一个配置。
+            // 有些源只对特定出口开放，不挂代理直接 403。
+            java.net.Proxy proxy = NetProxy.get(ctx);
+            java.net.URL u = new URL(url);
+            conn = proxy != null
+                    ? (HttpURLConnection) u.openConnection(proxy)
+                    : (HttpURLConnection) u.openConnection();
             conn.setRequestMethod(method);
             conn.setConnectTimeout(8000);
             conn.setReadTimeout(12000);
