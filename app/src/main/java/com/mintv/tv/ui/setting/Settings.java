@@ -54,9 +54,10 @@ public final class Settings {
             SettingDef.value("output", "画面输出",
                     "黑屏只有声音时切到 SurfaceView 试试",
                     new String[]{"TextureView", "SurfaceView"}, 0),
-            SettingDef.value("theme", "界面主题",
-                    "只换配色，布局与操作完全一致",
-                    new String[]{"暗黑", "盒子蓝", "暖色"}, 0),
+            // 改成 action：原本是 3 选 1，现在点开是调色板网格，
+            // 选项数量会变，不适合用定长数组表达。
+            SettingDef.action("theme", "主题颜色",
+                    "调的是强调色：选中框、进度、按钮。背景保持深色", null),
             SettingDef.action("group_mgr", "频道分组管理",
                     "隐藏不看的分类，只留常用的", "打开管理"),
     };

@@ -65,9 +65,11 @@ body{
 .theme:active,.themebtn:active{background:var(--hover)}
 
 /* ---------- 页面切换 ---------- */
-.navtabs{display:flex;gap:8px;margin:0 0 16px}
+.navtabs{display:flex;gap:8px;margin:0 0 16px;overflow-x:auto;padding-bottom:2px}
+.navtabs::-webkit-scrollbar{display:none}
 .navtabs a{
-  flex:1;text-align:center;padding:10px 0;border-radius:12px;font-size:14px;
+  flex:1 0 auto;min-width:68px;text-align:center;padding:10px 4px;
+  border-radius:12px;font-size:14px;white-space:nowrap;
   color:var(--muted);text-decoration:none;background:var(--card);
   transition:background .15s;
 }

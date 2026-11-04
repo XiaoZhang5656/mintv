@@ -1,0 +1,567 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>MinTV · 脚本</title>
+<link rel="stylesheet" href="app.css">
+<style>
+  .kind{font-size:11px;padding:2px 7px;border-radius:5px;background:var(--card2);
+        color:var(--muted);font-weight:600;flex:0 0 auto}
+  .kind.script{background:rgba(46,168,90,.16);color:#3FBE74}
+  .kind.headers{background:rgba(217,138,43,.16);color:#E0A44E}
+  .kind.module{background:rgba(138,147,156,.14);color:#98A2AC}
+  .kind.unknown{background:rgba(229,72,77,.14);color:#E5737A}
+
+  .meta{font-size:12px;color:var(--dim);margin-top:4px;display:flex;gap:7px;
+        flex-wrap:wrap;align-items:center}
+  .nm{font-size:15px;font-weight:600;color:var(--text);
+      font-family:ui-monospace,Menlo,monospace;word-break:break-all}
+  .errline{color:#E5737A;font-size:12px;margin-top:5px}
+
+  .addrow{display:flex;gap:8px}
+  .addrow button{flex:1;padding:13px 0;border:1px solid var(--line);border-radius:12px;
+    background:var(--card2);color:var(--text);font-size:14px;font-family:inherit}
+  .addrow button:active{background:var(--hover)}
+  .addrow button.p{background:var(--blue-dim);border-color:var(--blue-dim);
+    color:var(--blue);font-weight:600}
+
+  /* 编辑视图 */
+  #editView{display:none}
+  #listView.on{display:block}
+  .edhead{display:flex;align-items:center;gap:10px;margin-bottom:10px}
+  .edhead .fn{flex:1;font-size:15px;font-weight:600;
+    font-family:ui-monospace,monospace;color:var(--text);word-break:break-all}
+  .edhead button{padding:9px 16px;border:0;border-radius:11px;font-size:14px;
+    font-family:inherit;font-weight:600}
+  .btn-save{background:var(--blue);color:#fff}
+  .btn-save:disabled{background:var(--card2);color:var(--dim)}
+  .btn-back{background:var(--card2);color:var(--text)}
+
+  .status{font-size:12.5px;padding:9px 12px;border-radius:10px;margin-bottom:10px;
+    display:flex;align-items:center;gap:7px}
+  .status.ok{background:rgba(46,168,90,.12);color:#3FBE74}
+  .status.err{background:rgba(229,72,77,.12);color:#E5737A}
+  .status.wait{background:var(--card2);color:var(--muted)}
+
+  .editor{display:flex;background:#0A0D11;border:1px solid var(--line);
+    border-radius:12px;overflow:hidden;font-family:ui-monospace,Menlo,monospace;
+    font-size:12.5px;line-height:1.7}
+  .gutter{width:38px;flex:0 0 auto;background:#0D1116;color:#3C444D;text-align:right;
+    padding:10px 7px 10px 0;user-select:none;border-right:1px solid #1a2026;
+    overflow:hidden;font-size:12px}
+  .gutter div{height:21px}
+  .editor textarea{flex:1;border:0;border-radius:0;background:transparent;
+    padding:10px;min-height:420px;color:#C7CED6;font-family:inherit;
+    font-size:12.5px;line-height:1.7;resize:vertical;outline:none}
+
+  .errpanel{margin-top:10px;background:#1B1214;border:1px solid #3A2226;
+    border-radius:12px;padding:12px 14px}
+  .errpanel .h{font-size:12.5px;color:#E5737A;font-weight:600;display:flex;
+    align-items:center;margin-bottom:6px}
+  .errpanel .h span{flex:1}
+  .errpanel pre{margin:0;font-size:11.5px;color:#D3A5A8;white-space:pre-wrap;
+    font-family:ui-monospace,monospace;line-height:1.6}
+  .copy{font-size:11px;color:var(--blue);background:var(--blue-dim);
+    padding:3px 9px;border-radius:6px;border:0;font-family:inherit}
+
+  /* 底部操作菜单 */
+  .sheet{position:fixed;inset:0;background:rgba(0,0,0,.5);display:none;
+    align-items:flex-end;z-index:30}
+  .sheet.on{display:flex}
+  .sheetbox{width:100%;background:var(--card);border-radius:20px 20px 0 0;
+    padding:16px 14px calc(16px + env(safe-area-inset-bottom));
+    animation:up .18s ease-out}
+  @keyframes up{from{transform:translateY(20px);opacity:.7}to{transform:none;opacity:1}}
+  .sheet-title{font-size:12.5px;color:var(--muted);padding:4px 8px 10px}
+  .sheet-item{padding:15px 12px;font-size:16px;color:var(--text);border-radius:10px;
+    display:flex;align-items:center;gap:12px}
+  .sheet-item:active{background:var(--hover)}
+  .sheet-item.danger{color:#E5484D}
+  .sheet-cancel{margin-top:6px;padding:15px;text-align:center;font-size:16px;
+    color:var(--muted);background:var(--card2);border-radius:12px}
+
+  /* 确认框 */
+  .dlgmask{position:fixed;inset:0;background:rgba(0,0,0,.62);display:none;
+    align-items:center;justify-content:center;z-index:40;padding:0 28px}
+  .dlgmask.on{display:flex}
+  .dlg{width:100%;max-width:380px;background:var(--card);border-radius:18px;
+    padding:22px 20px 16px;text-align:center}
+  .dlg h3{margin:0 0 10px;font-size:17px;color:var(--text)}
+  .dlg p{margin:0 0 6px;font-size:14px;color:var(--muted);line-height:1.6}
+  .dlg .tgt{color:#E5737A;font-weight:600;word-break:break-all}
+  .dlgbtns{display:flex;gap:10px;margin-top:18px}
+  .dlgbtns button{flex:1;padding:13px;border:0;border-radius:12px;font-size:15px;
+    font-family:inherit;font-weight:600}
+  .btn-cancel{background:var(--card2);color:var(--text)}
+  .btn-danger{background:#E5484D;color:#fff}
+</style>
+</head>
+<body>
+
+<div class="head">
+  <div class="grow">
+    <h1>脚本</h1>
+    <div class="sub"><span class="dot" id="dot"></span><span id="conn">连接中…</span></div>
+  </div>
+  <button class="themebtn" data-theme-btn onclick="MintvTheme.cycle()">跟随系统</button>
+</div>
+
+<div class="navtabs">
+  <a href="/">订阅</a>
+  <a class="on">脚本</a>
+  <a href="/logs">日志</a>
+  <a href="channels.html">频道</a>
+  <a href="remote">遥控</a>
+</div>
+
+<!-- ══════════ 列表视图 ══════════ -->
+<div id="listView">
+  <p class="sect"><span>添加脚本</span></p>
+  <div class="card" style="padding:12px">
+    <div class="addrow">
+      <button class="p" onclick="newScript()">粘贴代码</button>
+      <button onclick="pickFile()">上传文件</button>
+      <button onclick="importUrl()">从 URL</button>
+    </div>
+    <p class="hint" style="margin-bottom:0">
+      脚本丢进来就生效。订阅里写 <code>http://本机地址:端口/脚本路径</code> 即可使用。
+    </p>
+  </div>
+
+  <p class="sect"><span>脚本</span><span id="cnt"></span></p>
+  <div id="list"></div>
+</div>
+
+<!-- ══════════ 编辑视图 ══════════ -->
+<div id="editView">
+  <div class="edhead">
+    <button class="btn-back" onclick="closeEdit()">‹ 返回</button>
+    <div class="fn" id="edName">untitled.js</div>
+    <button class="btn-save" id="btnSave" onclick="saveScript()" disabled>保存</button>
+  </div>
+
+  <div class="status wait" id="edStatus"><span>输入后自动检查语法</span></div>
+
+  <div class="editor">
+    <div class="gutter" id="gutter"></div>
+    <textarea id="code" spellcheck="false" autocapitalize="off"
+      autocorrect="off" placeholder="// exports.path = &quot;/xxx/:id&quot;;"></textarea>
+  </div>
+
+  <div id="errBox"></div>
+  <p class="hint" id="routesHint"></p>
+</div>
+
+<input type="file" id="filePick" accept=".js,text/javascript" style="display:none">
+
+<!-- 长按菜单 -->
+<div class="sheet" id="sheet" onclick="if(event.target===this)closeSheet()">
+  <div class="sheetbox">
+    <div class="sheet-title" id="sheetTitle"></div>
+    <div class="sheet-item" onclick="doEdit()">✏️ 编辑代码</div>
+    <div class="sheet-item" onclick="doRename()">🔤 重命名</div>
+    <div class="sheet-item" onclick="doCopy()">📋 复制源码</div>
+    <div class="sheet-item danger" onclick="doDelete()">🗑 删除</div>
+    <div class="sheet-cancel" onclick="closeSheet()">取消</div>
+  </div>
+</div>
+
+<!-- 删除确认 -->
+<div class="dlgmask" id="dlg" onclick="if(event.target===this)closeDlg()">
+  <div class="dlg">
+    <h3>删除脚本</h3>
+    <p>确定要删除 <span class="tgt" id="dlgName"></span> 吗？</p>
+    <p style="font-size:13px;color:var(--dim)" id="dlgHint"></p>
+    <div class="dlgbtns">
+      <button class="btn-cancel" onclick="closeDlg()">取消</button>
+      <button class="btn-danger" onclick="confirmDelete()">删除</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script src="theme.js"></script>
+<script>
+var ITEMS = [];
+var cur = null;          // 当前长按的项
+var editing = null;      // 正在编辑的文件名
+var dirty = false;
+var checkTimer = null;
+
+// ═══════ 通用 ═══════
+function toast(msg) {
+  var t = document.getElementById('toast');
+  t.textContent = msg; t.classList.add('on');
+  clearTimeout(t._h); t._h = setTimeout(function(){ t.classList.remove('on'); }, 1800);
+}
+
+/** 复制：HTTP 页面下 navigator.clipboard 不可用，必须降级 */
+function copyText(text) {
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(text).then(function(){ toast('已复制'); },
+      function(){ legacyCopy(text); });
+    return;
+  }
+  legacyCopy(text);
+}
+function legacyCopy(text) {
+  var ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.cssText = 'position:fixed;opacity:0;top:0;left:0';
+  document.body.appendChild(ta);
+  ta.select();
+  var ok = false;
+  try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+  document.body.removeChild(ta);
+  toast(ok ? '已复制' : '复制失败，请长按选择');
+}
+
+function esc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"]/g, function(c){
+    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];
+  });
+}
+
+// ═══════ 列表 ═══════
+function load() {
+  fetch('/api/scripts').then(function(r){ return r.json(); }).then(function(d){
+    document.getElementById('dot').className = 'dot ok';
+    document.getElementById('conn').textContent = '已连接';
+    ITEMS = (d && d.items) || [];
+    render();
+  }).catch(function(){
+    document.getElementById('dot').className = 'dot warn';
+    document.getElementById('conn').textContent = '连接断开';
+  });
+}
+
+function render() {
+  var box = document.getElementById('list');
+  if (!ITEMS.length) {
+    box.innerHTML = '<div class="card empty">还没有脚本<br>点上面的按钮加一个</div>';
+    document.getElementById('cnt').textContent = '';
+    return;
+  }
+  document.getElementById('cnt').textContent = ITEMS.length + ' 个';
+
+  var html = '';
+  for (var i = 0; i < ITEMS.length; i++) {
+    var it = ITEMS[i];
+    var kindCls = it.kind || 'unknown';
+    var kindTxt = { script:'脚本', headers:'请求头', module:'模块', unknown:'待修' }[kindCls] || '?';
+
+    var meta = [];
+    if (it.routes && it.routes.length) meta.push(it.routes.length + ' 条路由');
+    if (it.hosts && it.hosts.length) meta.push(it.hosts.length + ' 个域名');
+    if (it.guard) meta.push('守卫');
+    if (it.priority) meta.push('P' + it.priority);
+    meta.push(Math.round(it.size / 102.4) / 10 + ' KB');
+
+    html += '<div class="card" style="padding:13px 15px" data-i="' + i + '">'
+      + '<div class="row">'
+      +   '<div class="grow">'
+      +     '<div class="nm">' + esc(it.name) + '</div>'
+      +     '<div class="meta"><span class="kind ' + kindCls + '">' + kindTxt + '</span>'
+      +       '<span>' + esc(meta.join(' · ')) + '</span></div>'
+      +     (it.error ? '<div class="errline">' + esc(it.error) + '</div>' : '')
+      +   '</div>'
+      + '</div></div>';
+  }
+  box.innerHTML = html;
+
+  // 点击进编辑，长按出菜单
+  var cards = box.querySelectorAll('.card[data-i]');
+  for (var j = 0; j < cards.length; j++) {
+    bindLongPress(cards[j], ITEMS[+cards[j].getAttribute('data-i')]);
+  }
+}
+
+function bindLongPress(el, item) {
+  var timer = null, moved = false, fired = false;
+
+  el.addEventListener('touchstart', function(e) {
+    moved = false; fired = false;
+    timer = setTimeout(function() {
+      fired = true; cur = item; openSheet(item);
+    }, 500);
+  }, {passive:true});
+
+  el.addEventListener('touchmove', function() { moved = true; clearTimeout(timer); }, {passive:true});
+  el.addEventListener('touchend', function(e) {
+    clearTimeout(timer);
+    if (!fired && !moved) { e.preventDefault(); openEditor(item.name); }
+  });
+  el.addEventListener('click', function(e) {
+    if (fired) { e.preventDefault(); }
+  });
+
+  // 桌面/鼠标：右键出菜单
+  el.addEventListener('contextmenu', function(e) {
+    e.preventDefault(); cur = item; openSheet(item);
+  });
+}
+
+// ═══════ 长按菜单 ═══════
+function openSheet(item) {
+  document.getElementById('sheetTitle').textContent =
+    item.name + ' · ' + (Math.round(item.size / 102.4) / 10) + ' KB';
+  document.getElementById('sheet').classList.add('on');
+}
+function closeSheet() { document.getElementById('sheet').classList.remove('on'); }
+
+function doEdit() { closeSheet(); openEditor(cur.name); }
+
+function doRename() {
+  closeSheet();
+  var n = prompt('新文件名（.js 结尾）', cur.name);
+  if (!n || n === cur.name) return;
+  fetch('/api/scripts?name=' + encodeURIComponent(cur.name)).then(function(){
+    return fetch('/api/scripts?name=' + encodeURIComponent(cur.name),
+      { method: 'DELETE' });
+  }).then(function() {
+    return fetch('/api/scripts?name=' + encodeURIComponent(n));
+  }).then(function(){
+    // 上面的删除已执行，这里重新写入内容到新名字
+    return fetch('/api/scripts?name=' + encodeURIComponent(n))
+      .then(function(r){ return r.json(); })
+      .then(function(d){
+        return fetch('/api/scripts', {
+          method: 'POST',
+          headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({ name: n, content: d.content || '' })
+        });
+      });
+  }).then(function(){
+    toast('已重命名'); load();
+  }).catch(function(){ toast('重命名失败'); });
+}
+
+function doCopy() {
+  closeSheet();
+  fetch('/api/scripts?name=' + encodeURIComponent(cur.name))
+    .then(function(r){ return r.json(); })
+    .then(function(d){ copyText(d.content || ''); });
+}
+
+function doDelete() {
+  closeSheet();
+  var n = (cur.routes ? cur.routes.length : 0) + (cur.hosts ? cur.hosts.length : 0);
+  document.getElementById('dlgName').textContent = cur.name;
+  document.getElementById('dlgHint').textContent =
+    n > 0 ? ('它的 ' + n + ' 条路由会立即失效') : '';
+  document.getElementById('dlg').classList.add('on');
+}
+function closeDlg() { document.getElementById('dlg').classList.remove('on'); }
+
+function confirmDelete() {
+  closeDlg();
+  fetch('/api/scripts?name=' + encodeURIComponent(cur.name), { method:'DELETE' })
+    .then(function(r){ return r.json(); })
+    .then(function(d){ toast(d.ok ? '已删除' : '删除失败'); load(); })
+    .catch(function(){ toast('删除失败'); });
+}
+
+// ═══════ 新建 / 上传 / URL ═══════
+function newScript() {
+  var n = prompt('文件名（.js 结尾）', 'my-script.js');
+  if (!n) return;
+  if (n.indexOf('.js') < 0) n += '.js';
+  fetch('/api/scripts', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ name: n, content:
+      '// ' + n + '\n' +
+      'exports.name     = "我的脚本";\n' +
+      'exports.path     = "/demo/:id";\n\n' +
+      'async function main(item) {\n' +
+      '    // item.id 是路径参数\n' +
+      '    return null;\n' +
+      '}\n' })
+  }).then(function(r){ return r.json(); }).then(function(d){
+    if (!d.ok) { toast(d.msg || '创建失败'); return; }
+    load(); openEditor(n);
+  });
+}
+
+function pickFile() {
+  var f = document.getElementById('filePick');
+  f.value = '';
+  f.onchange = function() {
+    var file = f.files && f.files[0];
+    if (!file) return;
+    var fr = new FileReader();
+    fr.onload = function() {
+      fetch('/api/scripts', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ name: file.name, content: String(fr.result) })
+      }).then(function(r){ return r.json(); }).then(function(d){
+        toast(d.ok ? '已上传' : (d.msg || '失败')); load();
+      });
+    };
+    fr.readAsText(file);
+  };
+  f.click();
+}
+
+function importUrl() {
+  var u = prompt('脚本 URL（需要能直接访问到 .js 原文）');
+  if (!u) return;
+  var name = u.split('/').pop().split('?')[0];
+  if (!/\.js$/i.test(name)) name = 'imported.js';
+  fetch(u).then(function(r){ return r.text(); }).then(function(txt){
+    return fetch('/api/scripts', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ name: name, content: txt })
+    });
+  }).then(function(r){ return r.json(); }).then(function(d){
+    toast(d.ok ? '已导入' : (d.msg || '失败')); load();
+  }).catch(function(){ toast('拉取失败'); });
+}
+
+// ═══════ 编辑 ═══════
+function openEditor(name) {
+  fetch('/api/scripts?name=' + encodeURIComponent(name))
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      if (!d.ok) { toast('读取失败'); return; }
+      editing = name;
+      document.getElementById('edName').textContent = name;
+      document.getElementById('code').value = d.content || '';
+      document.getElementById('listView').style.display = 'none';
+      document.getElementById('editView').style.display = 'block';
+      document.getElementById('errBox').innerHTML = '';
+      setStatus('wait', '输入后自动检查语法');
+      document.getElementById('btnSave').disabled = true;
+      updateGutter();
+      window.scrollTo(0, 0);
+    });
+}
+
+function closeEdit() {
+  if (dirty && !confirm('有未保存的修改，确定离开？')) return;
+  editing = null; dirty = false;
+  document.getElementById('editView').style.display = 'none';
+  document.getElementById('listView').style.display = 'block';
+  load();
+}
+
+function setStatus(cls, text) {
+  var el = document.getElementById('edStatus');
+  el.className = 'status ' + cls;
+  el.innerHTML = '<span>' + esc(text) + '</span>';
+}
+
+function updateGutter() {
+  var v = document.getElementById('code').value;
+  var n = v.split('\n').length;
+  var g = '';
+  for (var i = 1; i <= Math.max(n, 20); i++) g += '<div>' + i + '</div>';
+  document.getElementById('gutter').innerHTML = g;
+}
+
+document.getElementById('code').addEventListener('input', function() {
+  dirty = true;
+  updateGutter();
+  document.getElementById('btnSave').disabled = false;
+  clearTimeout(checkTimer);
+  checkTimer = setTimeout(checkSyntax, 800);
+});
+
+/**
+ * 语法检查。
+ *
+ * 没有 JS 引擎时这里只能做括号配平之类的粗检；等 QuickJS 接进来后
+ * 换成真正的 compile()，就能精确到行列。
+ * 现在先把"明显不配平"的情况挡掉，这已经能拦住大部分手误。
+ */
+function checkSyntax() {
+  var src = document.getElementById('code').value;
+  var box = document.getElementById('errBox');
+  box.innerHTML = '';
+
+  var stack = [], pairs = {'}':'{', ')':'(', ']':'['};
+  var inStr = null, inCmt = false, line = 1, col = 0;
+  var badLine = 0, badMsg = '';
+
+  for (var i = 0; i < src.length; i++) {
+    var c = src[i];
+    if (c === '\n') { line++; col = 0; } else { col++; }
+
+    if (inCmt) { if (c === '\n') inCmt = false; continue; }
+    if (inStr) {
+      if (c === '\\') { i++; continue; }
+      if (c === inStr) inStr = null;
+      continue;
+    }
+    if (c === '/' && src[i+1] === '/') { inCmt = true; i++; continue; }
+    if (c === '"' || c === "'" || c === '`') { inStr = c; continue; }
+    if (c === '{' || c === '(' || c === '[') { stack.push({c:c, line:line}); continue; }
+    if (pairs[c]) {
+      var top = stack.pop();
+      if (!top || top.c !== pairs[c]) {
+        badLine = line; badMsg = '多余的 ' + c; break;
+      }
+    }
+  }
+  if (!badLine && stack.length) {
+    var t = stack[stack.length-1];
+    badLine = t.line; badMsg = '缺少与 ' + t.c + ' 配对的闭合符号';
+  }
+
+  if (badLine) {
+    setStatus('err', '第 ' + badLine + ' 行附近有语法问题');
+    box.innerHTML = '<div class="errpanel">'
+      + '<div class="h"><span>语法检查</span>'
+      + '<button class="copy" onclick="copyText(document.getElementById(\'edName\').textContent '
+      + '+\' 第'+badLine+'行: '+esc(badMsg).replace(/'/g,"\\'")+'\')">复制</button></div>'
+      + '<pre>' + esc(badMsg) + '</pre></div>';
+    return;
+  }
+
+  // 抓路由声明，给个实时预览
+  var routes = [];
+  var m = src.match(/exports\.path\s*=\s*(\[[^\]]*\]|"[^"]*"|'[^']*')/);
+  if (m) {
+    var q = m[1].match(/["']([^"']+)["']/g) || [];
+    for (var k = 0; k < q.length; k++) routes.push(q[k].replace(/["']/g, ''));
+  }
+  var hasMain = /\bfunction\s+main\s*\(/.test(src) || /exports\.main\s*=/.test(src);
+  var hasGuard = /exports\.guard\s*=\s*true/.test(src);
+
+  if (!hasMain && !hasGuard) {
+    setStatus('err', '没有 main() 也没有 exports.guard，这个脚本不会生效');
+  } else {
+    setStatus('ok', '语法检查通过' + (routes.length ? ' · ' + routes.length + ' 条路由' : ''));
+  }
+  document.getElementById('routesHint').textContent = routes.length
+    ? ('会注册：' + routes.join('、'))
+    : '';
+}
+
+function saveScript() {
+  if (!editing) return;
+  var body = JSON.stringify({
+    name: editing,
+    content: document.getElementById('code').value
+  });
+  fetch('/api/scripts', {
+    method:'POST', headers:{'Content-Type':'application/json'}, body: body
+  }).then(function(r){ return r.json(); }).then(function(d){
+    if (!d.ok) { toast(d.msg || '保存失败'); return; }
+    dirty = false;
+    toast('已保存，立即生效');
+    document.getElementById('btnSave').disabled = true;
+  }).catch(function(){ toast('保存失败'); });
+}
+
+// 离开页面前提醒
+window.addEventListener('beforeunload', function(e) {
+  if (dirty) { e.preventDefault(); e.returnValue = ''; }
+});
+
+load();
+setInterval(load, 15000);
+</script>
+</body>
+</html>

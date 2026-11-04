@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>MinTV · 脚本日志</title>
+<link rel="stylesheet" href="app.css">
+<style>
+  /* 日志文字色必须跟着主题走，不能写死 —— 否则浅色主题下
+     深灰色的日志文字压在白底上几乎看不见 */
+  :root{ --log-msg:#C7CED6; --log-err:#E8B4B6; --log-stack:#B99A9C;
+         --log-warn-bg:#1A1611; --log-err-bg:#1B1214; }
+  @media (prefers-color-scheme: light){
+    :root{ --log-msg:#1F2429; --log-err:#B03030; --log-stack:#8A6A6C;
+           --log-warn-bg:#FFF7EA; --log-err-bg:#FFF2F2; }
+  }
+  :root[data-theme="dark"]{ --log-msg:#C7CED6; --log-err:#E8B4B6; --log-stack:#B99A9C;
+    --log-warn-bg:#1A1611; --log-err-bg:#1B1214; }
+  :root[data-theme="light"]{ --log-msg:#1F2429; --log-err:#B03030; --log-stack:#8A6A6C;
+    --log-warn-bg:#FFF7EA; --log-err-bg:#FFF2F2; }
+
+  .filters{display:flex;gap:7px;margin-bottom:12px;overflow-x:auto;padding-bottom:2px}
+  .filters::-webkit-scrollbar{display:none}
+  .f{flex:0 0 auto;font-size:13px;padding:8px 14px;border-radius:10px;
+     background:var(--card);color:var(--muted);border:0;font-family:inherit}
+  .f.on{background:var(--blue-dim);color:var(--blue);font-weight:600}
+  .f.err{color:#E5737A}
+
+  .logs{font-family:ui-monospace,Menlo,Consolas,monospace}
+  .row{background:var(--card);border-radius:10px;padding:9px 11px;margin-bottom:5px;
+       display:flex;gap:8px;font-size:12px;line-height:1.6;cursor:pointer}
+  .row:active{background:var(--hover)}
+  .tm{color:var(--dim);flex:0 0 auto;font-size:11px;padding-top:1px}
+  .lv{flex:0 0 auto;font-size:10px;font-weight:700;padding:1px 5px;border-radius:3px;
+      height:16px;line-height:14px;margin-top:1px}
+  .lv.info{background:rgba(138,147,156,.15);color:#98A2AC}
+  .lv.warn{background:rgba(217,138,43,.18);color:#E0A44E}
+  .lv.error{background:rgba(229,72,77,.18);color:#E5737A}
+  .msg{flex:1;color:var(--log-msg);word-break:break-word;min-width:0}
+  .row.warn{background:var(--log-warn-bg);border-left:2px solid #D98A2B}
+  .row.error{background:var(--log-err-bg);border-left:2px solid #E5484D}
+  .row.error .msg{color:var(--log-err)}
+
+  .stack{margin-top:6px;padding-top:6px;border-top:1px solid var(--line)}
+  .stack-head{display:flex;align-items:center;margin-bottom:5px}
+  .stack-head span{flex:1;font-size:11px;color:var(--dim)}
+  .stack pre{margin:0;font-size:11px;color:var(--log-stack);white-space:pre-wrap;
+             line-height:1.6;font-family:ui-monospace,monospace}
+  .copy{font-size:11px;color:var(--blue);background:var(--blue-dim);
+        padding:3px 9px;border-radius:6px;border:0;font-family:inherit}
+
+  .empty{text-align:center;color:var(--muted);font-size:14px;padding:48px 16px;
+         line-height:1.8}
+</style>
+</head>
+<body>
+
+<div class="head">
+  <div class="grow">
+    <h1>脚本日志</h1>
+    <div class="sub"><span class="dot" id="dot"></span><span id="conn">连接中…</span></div>
+  </div>
+  <button class="themebtn" data-theme-btn onclick="MintvTheme.cycle()">跟随系统</button>
+</div>
+
+<div class="navtabs">
+  <a href="/">订阅</a>
+  <a href="/scripts">脚本</a>
+  <a class="on">日志</a>
+  <a href="channels.html">频道</a>
+  <a href="remote">遥控</a>
+</div>
+
+<div class="filters" id="filters">
+  <button class="f on" data-lv="">全部 <span id="cAll">0</span></button>
+  <button class="f err" data-lv="error">错误 <span id="cErr">0</span></button>
+  <button class="f" data-lv="warn">警告 <span id="cWarn">0</span></button>
+</div>
+
+<div style="display:flex;gap:8px;margin-bottom:12px">
+  <button class="f" style="flex:1;background:var(--card2);color:var(--text)"
+    onclick="copyAll()">复制全部</button>
+  <button class="f" style="flex:1;background:var(--card2);color:#E5737A"
+    onclick="clearLogs()">清空</button>
+</div>
+
+<div class="logs" id="logs"></div>
+
+<div class="toast" id="toast"></div>
+
+<script src="theme.js"></script>
+<script>
+var LV = '';             // 当前筛选
+var DATA = [];
+var expanded = {};       // id -> true
+
+function toast(msg) {
+  var t = document.getElementById('toast');
+  t.textContent = msg; t.classList.add('on');
+  clearTimeout(t._h); t._h = setTimeout(function(){ t.classList.remove('on'); }, 1800);
+}
+
+/** HTTP 页面下 clipboard API 不可用，必须降级 */
+function copyText(text) {
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(text).then(function(){ toast('已复制'); },
+      function(){ legacyCopy(text); });
+    return;
+  }
+  legacyCopy(text);
+}
+function legacyCopy(text) {
+  var ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.cssText = 'position:fixed;opacity:0;top:0;left:0';
+  document.body.appendChild(ta);
+  ta.select();
+  var ok = false;
+  try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+  document.body.removeChild(ta);
+  toast(ok ? '已复制' : '复制失败，请手动选择');
+}
+
+function esc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"]/g, function(c){
+    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];
+  });
+}
+
+function load() {
+  var url = '/api/logs' + (LV ? ('?level=' + LV) : '');
+  fetch(url).then(function(r){ return r.json(); }).then(function(d){
+    document.getElementById('dot').className = 'dot ok';
+    document.getElementById('conn').textContent = '已连接';
+    DATA = (d && d.items) || [];
+    document.getElementById('cAll').textContent = d.total || 0;
+    document.getElementById('cErr').textContent = d.errors || 0;
+    document.getElementById('cWarn').textContent = d.warns || 0;
+    render();
+  }).catch(function(){
+    document.getElementById('dot').className = 'dot warn';
+    document.getElementById('conn').textContent = '连接断开';
+  });
+}
+
+function render() {
+  var box = document.getElementById('logs');
+  if (!DATA.length) {
+    box.innerHTML = '<div class="empty">'
+      + (LV ? '这个筛选下没有日志' : '还没有日志<br>播放一次就会产生')
+      + '</div>';
+    return;
+  }
+
+  var html = '';
+  for (var i = DATA.length - 1; i >= 0; i--) {   // 新的在上面
+    var e = DATA[i];
+    var open = expanded[e.id];
+    html += '<div class="row ' + e.level + '" data-id="' + e.id + '">'
+      + '<span class="tm">' + fmtTime(e.time) + '</span>'
+      + '<span class="lv ' + e.level + '">' + e.level.toUpperCase() + '</span>'
+      + '<span class="msg">' + esc(e.message)
+      + (e.stack ? '<div class="stack">'
+          + '<div class="stack-head"><span>' + (open ? '点标题收起' : '点标题展开') + '</span>'
+          + '<button class="copy" onclick="event.stopPropagation();copyOne(' + e.id + ')">复制</button></div>'
+          + (open ? '<pre>' + esc(e.stack) + '</pre>' : '')
+          + '</div>' : '')
+      + '</span></div>';
+  }
+  box.innerHTML = html;
+
+  var rows = box.querySelectorAll('.row');
+  for (var j = 0; j < rows.length; j++) {
+    rows[j].addEventListener('click', function() {
+      var id = +this.getAttribute('data-id');
+      if (expanded[id]) delete expanded[id]; else expanded[id] = true;
+      render();
+    });
+  }
+}
+
+function fmtTime(ms) {
+  var d = new Date(ms);
+  function p(n){ return n < 10 ? '0' + n : '' + n; }
+  return p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
+}
+
+function copyOne(id) {
+  for (var i = 0; i < DATA.length; i++) {
+    if (DATA[i].id !== id) continue;
+    var e = DATA[i];
+    var s = '[' + fmtTime(e.time) + '] ' + e.level.toUpperCase() + ' '
+          + (e.script ? '[' + e.script + '] ' : '') + e.message;
+    if (e.stack) s += '\n' + e.stack;
+    copyText(s);
+    return;
+  }
+}
+
+function copyAll() {
+  if (!DATA.length) { toast('没有日志'); return; }
+  var out = [];
+  for (var i = 0; i < DATA.length; i++) {
+    var e = DATA[i];
+    var s = '[' + fmtTime(e.time) + '] ' + e.level.toUpperCase() + ' '
+          + (e.script ? '[' + e.script + '] ' : '') + e.message;
+    if (e.stack) s += '\n' + e.stack;
+    out.push(s);
+  }
+  copyText(out.join('\n'));
+}
+
+function clearLogs() {
+  if (!confirm('清空所有日志？')) return;
+  fetch('/api/logs', { method:'DELETE' }).then(function(){
+    toast('已清空'); load();
+  });
+}
+
+var fs = document.querySelectorAll('.f[data-lv]');
+for (var i = 0; i < fs.length; i++) {
+  fs[i].addEventListener('click', function() {
+    for (var k = 0; k < fs.length; k++) fs[k].classList.remove('on');
+    this.classList.add('on');
+    LV = this.getAttribute('data-lv');
+    load();
+  });
+}
+
+load();
+setInterval(load, 3000);
+</script>
+</body>
+</html>

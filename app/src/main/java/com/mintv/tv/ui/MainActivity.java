@@ -57,6 +57,10 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     private static final int OUTPUT_TEXTURE = 0;
     private static final int OUTPUT_SURFACE = 1;
     private PlayerManager playerManager;
+    /** 根容器，弹层往这里加。 */
+    private android.widget.FrameLayout rootView;
+    /** 主题调色板（打开时非 null）。 */
+    private com.mintv.tv.ui.widget.ThemePickerView themePicker;
     private PlaybackBackend.Callback playerCallback;
     private PlaybackBackend player;
     private OsdView osd;
@@ -268,7 +272,8 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         // 不能等到用户去点"手机助手"那一页才有服务。
         startRemoteServer();
         loadHiddenCats();
-        Theme.applyPalette(getSharedPreferences(PREF, MODE_PRIVATE).getInt(KEY_UI_THEME, 0));
+        // 底色固定深色，强调色从设置里读（默认 0 = 盒子蓝）
+        Theme.applyAccent(getSharedPreferences(PREF, MODE_PRIVATE).getInt(KEY_ACCENT, 0));
 
         // 崩溃页点了「重新进入」：从最保守的状态开始，不恢复现场。
         // 崩溃后内存里留着坏的播放器句柄/Surface 绑定，直接接着用会二次崩溃。
@@ -291,6 +296,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         loadPlaylist();
 
         FrameLayout root = new FrameLayout(this);
+        this.rootView = root;
         // 底色必须跟随主题：这是屏幕最大的面积，
         // 写死黑色的话换主题看起来"完全没变"。
         root.setBackgroundColor(Theme.BG);
@@ -491,6 +497,43 @@ public class MainActivity extends Activity implements FocusEngine.Host {
      * 一条合成路径，低端机上直接掉帧。切的时候必须把播放器的输出面也一起换掉，
      * 只改 View 可见性是不生效的。
      */
+    /**
+     * 打开主题色选择。
+     *
+     * <p>选完要 recreate：颜色是 static 常量，已经画好的 View 不会自动
+     * 换色，重建界面最干净。重建前必须先停播放器 —— recreate 的顺序是
+     * 「新 Activity onCreate → 旧 Activity onDestroy」，新界面在 onCreate
+     * 里就开始播，等旧 Activity 释放会有一段两个实例同时出声。
+     */
+    private void openThemePicker() {
+        if (themePicker != null || rootView == null) return;
+        themePicker = new com.mintv.tv.ui.widget.ThemePickerView(this);
+        themePicker.setDismissAction(new Runnable() {
+            @Override public void run() {
+                if (themePicker != null && rootView != null) {
+                    rootView.removeView(themePicker);
+                    themePicker = null;
+                }
+            }
+        });
+        themePicker.setListener(new com.mintv.tv.ui.widget.ThemePickerView.Listener() {
+            @Override public void onPicked(int index) {
+                if (index == Theme.accentIndex) return;    // 没换色，别白重建
+                Theme.applyAccent(index);
+                getSharedPreferences(PREF, MODE_PRIVATE).edit()
+                        .putInt(KEY_ACCENT, index).apply();
+                if (player != null) { player.stop(); player.release(); player = null; }
+                if (playerManager != null) { playerManager.release(); playerManager = null; }
+                recreate();
+            }
+            @Override public void onCancelled() { }
+        });
+        rootView.addView(themePicker, new android.widget.FrameLayout.LayoutParams(
+                android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                android.view.ViewGroup.LayoutParams.MATCH_PARENT));
+        themePicker.requestFocus();
+    }
+
     private void applyOutputMode() {
         if (textureView == null || surfaceView == null) return;
         boolean tex = selections[ROW_OUTPUT] == OUTPUT_TEXTURE;
@@ -1547,6 +1590,8 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     private static final int ROW_GROUPMGR = com.mintv.tv.ui.setting.Settings.IDX_GROUP_MGR;
 
     private static final String KEY_UI_THEME    = "ui_theme";
+    /** 强调色序号（0~9），见 Theme.ACCENT_COLORS。 */
+    private static final String KEY_ACCENT      = "accent_color";
     private static final String KEY_SELECTIONS  = "selections";
     private static final String KEY_HIDDEN_CATS = "hidden_cats";
     private static final int ROW_GROUP_MGR= com.mintv.tv.ui.setting.Settings.IDX_GROUP_MGR;
@@ -4846,26 +4891,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         } else if (row == ROW_GROUP_MGR) {
             openGroupManager();
         } else if (row == ROW_THEME) {
-            getSharedPreferences(PREF, MODE_PRIVATE).edit()
-                    .putInt(KEY_UI_THEME, value).apply();
-            Theme.applyPalette(value);
-            // ⚠ 必须在 recreate 之前主动停播放器。
-            //
-            // recreate 的顺序是「新 Activity onCreate → 旧 Activity onDestroy」，
-            // 而新界面在 onCreate 里就会开始播放。如果等旧 Activity 的
-            // onDestroy 才 release，会有一段时间两个实例同时出声 ——
-            // 这就是"换主题后黑屏但有声音"、"换台还听见上一个台"的来源。
-            if (player != null) {
-                player.stop();
-                player.release();
-                player = null;
-            }
-            if (playerManager != null) {
-                playerManager.release();
-                playerManager = null;
-            }
-            // 整套界面按新配色重建。只换颜色不动布局，所以重建是安全的。
-            recreate();
+            openThemePicker();
         } else if (row == ROW_OUTPUT) {
             // 换渲染目标等于换输出管线：直接重建播放器最干净。
             // 不重建的话旧实例可能还持有已隐藏的 surface，

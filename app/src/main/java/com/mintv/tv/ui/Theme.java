@@ -73,6 +73,65 @@ public final class Theme {
     /** 当前主题 id：0 暗黑 / 1 盒子蓝 / 2 暖色 */
     public static int palette = 0;
 
+    // ══════════════════════════════════════════════════════════
+    //  强调色（Accent）
+    //
+    //  以前是三套完整配色（暗黑/盒子蓝/暖色），切换会连背景、卡片、
+    //  文字一起变。问题：
+    //    1. 加一种颜色 = 调一整套配色，成本高；
+    //    2. 非深色底在电视上会让画面发灰（尤其是暖色那套偏棕黄）。
+    //
+    //  改成：底色固定深色，只让强调色走色板。
+    //  强调色影响的是：焦点框、进度条、选中块、OSD 分类胶囊。
+    // ══════════════════════════════════════════════════════════
+
+    /** 预置强调色。新增颜色只要往这里加一行。 */
+    public static final int[] ACCENT_COLORS = {
+            0xFF2F7BFF,   // 0 盒子蓝
+            0xFF00B89C,   // 1 青绿
+            0xFF7C5CFF,   // 2 紫罗兰
+            0xFFFF8A3D,   // 3 暖橙
+            0xFFE5484D,   // 4 朱红
+            0xFFE85D9E,   // 5 桃粉
+            0xFFD4A017,   // 6 琥珀
+            0xFF5B7C99,   // 7 雾蓝
+            0xFF00C2D1,   // 8 湖青
+            0xFF8A8F99,   // 9 石墨
+    };
+
+    public static final String[] ACCENT_NAMES = {
+            "盒子蓝", "青绿", "紫罗兰", "暖橙", "朱红",
+            "桃粉", "琥珀", "雾蓝", "湖青", "石墨",
+    };
+
+    /** 当前强调色序号，持久化用。 */
+    public static int accentIndex = 0;
+
+    /**
+     * 应用强调色。所有派生色都在这里算，不要散到别处。
+     */
+    public static void applyAccent(int index) {
+        if (index < 0 || index >= ACCENT_COLORS.length) index = 0;
+        accentIndex = index;
+        int c = ACCENT_COLORS[index];
+        FOCUS_BLUE = c;
+        FOCUS_BG = alpha(c, 0.16f);
+        PANEL_ACTIVE = alpha(c, 0.22f);
+        EPG_LIVE_BG = alpha(c, 0.20f);
+        OSD_CAT_BG = mix(c, 0xFF101216, 0.74f);       // 压暗当底
+        OSD_CAT_TXT = mix(c, 0xFFFFFFFF, 0.52f);      // 提亮当字
+    }
+
+    /** 线性混色：t=0 全取 a，t=1 全取 b。 */
+    public static int mix(int a, int b, float t) {
+        int ar = (a >> 16) & 0xFF, ag = (a >> 8) & 0xFF, ab = a & 0xFF;
+        int br = (b >> 16) & 0xFF, bg = (b >> 8) & 0xFF, bb = b & 0xFF;
+        int r = Math.round(ar * (1 - t) + br * t);
+        int g = Math.round(ag * (1 - t) + bg * t);
+        int bl = Math.round(ab * (1 - t) + bb * t);
+        return 0xFF000000 | (r << 16) | (g << 8) | bl;
+    }
+
     /**
      * 切换调色板。
      *

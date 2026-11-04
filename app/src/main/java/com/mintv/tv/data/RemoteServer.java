@@ -228,6 +228,85 @@ public final class RemoteServer {
             return;
         }
 
+        // ---- 脚本 ----
+        if ("/api/scripts".equals(path)) {
+            ScriptStore store = new ScriptStore(appCtx);
+            try {
+                if ("POST".equals(method)) {
+                    String name = jsonField(body, "name");
+                    String content = jsonField(body, "content");
+                    if (name == null || name.isEmpty()) {
+                        send(out, 400, "application/json; charset=utf-8",
+                                "{\"ok\":false,\"msg\":\"缺少 name\"}");
+                        return;
+                    }
+                    if (!store.write(name, content == null ? "" : content)) {
+                        send(out, 400, "application/json; charset=utf-8",
+                                "{\"ok\":false,\"msg\":\"文件名不合法\"}");
+                        return;
+                    }
+                    ScriptLog.info(name, "已保存");
+                    send(out, 200, "application/json; charset=utf-8", "{\"ok\":true}");
+                    return;
+                }
+                if ("DELETE".equals(method)) {
+                    String name = qparam(query, "name");
+                    boolean ok = store.delete(name);
+                    if (ok) ScriptLog.info(name, "已删除");
+                    send(out, 200, "application/json; charset=utf-8",
+                            "{\"ok\":" + ok + "}");
+                    return;
+                }
+                // GET
+                String name = qparam(query, "name");
+                if (name != null && !name.isEmpty()) {
+                    String content = store.read(name);
+                    org.json.JSONObject o = new org.json.JSONObject();
+                    o.put("ok", true);
+                    o.put("name", name);
+                    o.put("content", content);
+                    send(out, 200, "application/json; charset=utf-8", o.toString());
+                    return;
+                }
+                org.json.JSONObject o = new org.json.JSONObject();
+                o.put("ok", true);
+                o.put("items", store.toJson(store.list()));
+                o.put("dir", store.dir().getAbsolutePath());
+                send(out, 200, "application/json; charset=utf-8", o.toString());
+            } catch (Exception e) {
+                send(out, 500, "application/json; charset=utf-8",
+                        "{\"ok\":false,\"msg\":\"" + esc(e.getMessage()) + "\"}");
+            }
+            return;
+        }
+
+        // ---- 脚本日志 ----
+        if ("/api/logs".equals(path)) {
+            if ("DELETE".equals(method)) {
+                ScriptLog.clear();
+                send(out, 200, "application/json; charset=utf-8", "{\"ok\":true}");
+                return;
+            }
+            long since = 0;
+            try { since = Long.parseLong(qparam(query, "since")); } catch (Exception ignored) { }
+            String lv = qparam(query, "level");
+            ScriptLog.Level min = "error".equals(lv) ? ScriptLog.Level.ERROR
+                    : "warn".equals(lv) ? ScriptLog.Level.WARN : null;
+            java.util.List<ScriptLog.Entry> list =
+                    ScriptLog.query(since, min, qparam(query, "script"));
+            org.json.JSONObject o = new org.json.JSONObject();
+            try {
+                o.put("ok", true);
+                o.put("items", ScriptLog.toJson(list));
+                o.put("total", ScriptLog.size());
+                o.put("errors", ScriptLog.countOf(ScriptLog.Level.ERROR));
+                o.put("warns", ScriptLog.countOf(ScriptLog.Level.WARN));
+                o.put("text", ScriptLog.exportText(list));
+            } catch (Exception ignored) { }
+            send(out, 200, "application/json; charset=utf-8", o.toString());
+            return;
+        }
+
         // ---- 静态页 ----
         // 扫码进来先看到订阅管理 —— 用户扫这个码的目的通常是"把源加进去"，
         // 不是"拿手机当遥控器"。遥控页放在 /remote。
@@ -236,6 +315,10 @@ public final class RemoteServer {
             name = "subscriptions.html";
         } else if (path.equals("/remote") || path.equals("/control")) {
             name = "index.html";
+        } else if (path.equals("/scripts")) {
+            name = "scripts.html";
+        } else if (path.equals("/logs")) {
+            name = "logs.html";
         } else if (path.equals("/channels")) {
             name = "channels.html";
         } else {
@@ -325,6 +408,27 @@ public final class RemoteServer {
     }
 
     /** 极简 JSON 取值（够读手机发来的小对象）。 */
+    /** 取查询参数，没找到返回 null。 */
+    private static String qparam(String query, String key) {
+        if (query == null || query.isEmpty() || key == null) return null;
+        for (String p : query.split("&")) {
+            int i = p.indexOf('=');
+            String k = i < 0 ? p : p.substring(0, i);
+            if (!k.equals(key)) continue;
+            String v = i < 0 ? "" : p.substring(i + 1);
+            try { return java.net.URLDecoder.decode(v, "UTF-8"); }
+            catch (Exception e) { return v; }
+        }
+        return null;
+    }
+
+    /** JSON 字符串转义。 */
+    private static String esc(String s) {
+        if (s == null) return "";
+        return s.replace("\\", "\\\\").replace("\"", "\\\"")
+                .replace("\n", "\\n").replace("\r", "");
+    }
+
     private static String jsonField(String json, String key) {
         if (json == null) return null;
         try {
