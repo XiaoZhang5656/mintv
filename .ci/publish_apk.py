@@ -52,13 +52,28 @@ def read_version_code(apk_path):
     return m.group(1) if m else '?'
 
 
-def target_name(apk_path):
-    """保持原文件名。
+def read_version_name():
+    """从 public/version.json 读 versionName，读不到返回空串。"""
+    try:
+        with open('public/version.json', encoding='utf-8') as f:
+            return str(json.load(f).get('versionName') or '')
+    except Exception:
+        return ''
 
-    <p>下载链接一直是 public/apk/app-arm64-v8a-debug.apk，
-    改成 mintv-<abi>.apk 会让所有已发出去的链接 404。
+def target_name(apk_path):
+    """文件名带上版本号：mintv-2.51.0-arm64-v8a.apk
+
+    同时保留一份不带版本号的固定名，老链接继续可用。
+    返回 (带版本号路径, 固定名路径)。
     """
-    return 'public/apk/' + os.path.basename(apk_path)
+    base = os.path.basename(apk_path)              # app-arm64-v8a-debug.apk
+    abi = base.replace('app-', '').replace('-debug.apk', '')
+    ver = read_version_name()
+    fixed = 'public/apk/' + base
+    if not ver:
+        return fixed, None
+    versioned = 'public/apk/mintv-%s-%s.apk' % (ver, abi)
+    return versioned, fixed
 
 def publish(apk_path, repo_path):
     """用 Git Data API 上传，不用 Contents API。
@@ -109,7 +124,11 @@ def main():
     if not apks:
         raise SystemExit('no apk found')
     for a in apks:
-        publish(a, target_name(a))
+        versioned, fixed = target_name(a)
+        publish(a, versioned)
+        # 同时发一份固定名，老的下载链接不会断
+        if fixed and fixed != versioned:
+            publish(a, fixed)
     # version.json 也要发：git push 失败时它没有上去，
     # 客户端靠它判断有没有新版本
     vj = 'public/version.json'

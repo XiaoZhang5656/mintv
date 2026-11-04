@@ -76,6 +76,15 @@ public class MainActivity extends Activity implements FocusEngine.Host {
 
     // ---- 三栏 ----
     private final List<NavItemView> navViews = new ArrayList<>();
+
+    /**
+     * navViews 里前 subItemCount 个是「订阅」，后面才是「分类」。
+     *
+     * <p>两个层级共用同一个列表，是为了不改焦点引擎 —— navIndex 仍然
+     * 是 0..n-1 的连续下标，只是语义分两段。改动集中在
+     * rebuildCategoryColumn（构建）和 onCategoryClicked（分发）两处。
+     */
+    private int subItemCount = 0;
     private final List<ChannelView> chanViews = new ArrayList<>();
     private FrameLayout chanColumn;   // 频道行池容器（绝对定位）
     private View navPanel, chanPanel, railView, scrim, navDivider;
@@ -440,7 +449,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         loadLinePrefs();
         loadFavorites();
         applyOutputMode();
-        focus.setNavCount(categories.size());
+        focus.setNavCount(navViews.size());
         focus.setChannelCount(channels.size());
         bindChannels();
         updateNavFocus(1);
@@ -886,39 +895,36 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     /**
      * 一行分组标题。
      *
-     * <p>文字用 Theme.TEXT，**不用主题色** —— 主题色可能很暗
-     * （比如盒子蓝 #2F6BFF 在深底上对比度只有 1.8:1），当文字色直接看不见。
-     * 之前"只看到横线"就是这么来的：横线是半透明色还能看见，
-     * 文字是同色实心，糊在背景里。
+     * <p>**文字用灰白，主题色放在左侧竖条上。**
      *
-     * <p>主题色改用左侧一条短竖条表达，既保留品牌感又不影响可读性。
+     * <p>试过用主题色当文字色（v2.51.0），在你的设备上完全看不见 ——
+     * 同样的字号、同样的宽度，只改颜色就消失。原因没查出来（颜色本身
+     * 有 FF alpha、对比度也够），所以回到 v2.50.0 这个验证过能显示的方案。
+     *
+     * <p>结构也保持最简：竖条 + 单行 TextView，不加横线、不用 weight，
+     * 避免再踩布局测量的坑。
      */
     private LinearLayout buildGroupHeader(String title) {
         LinearLayout h = new LinearLayout(this);
         h.setOrientation(LinearLayout.HORIZONTAL);
         h.setGravity(Gravity.CENTER_VERTICAL);
-        h.setPadding(Theme.px(6), Theme.px(18), Theme.px(6), Theme.px(4));
+        h.setPadding(Theme.px(6), Theme.px(18), Theme.px(6), Theme.px(6));
 
-        // 文字直接用主题色。
-        //
-        // Theme.FOCUS_BLUE 已经是 ensureReadable() 处理过的
-        // （明度下限 0.62），深底上读得清 —— 之前看不见是布局问题
-        // （WRAP_CONTENT 被算成 0 宽），不是对比度问题，我当时判断错了。
+        View bar = new View(this);
+        bar.setBackgroundColor(Theme.FOCUS_BLUE);
+        LinearLayout.LayoutParams barLp = new LinearLayout.LayoutParams(
+                Theme.px(3), Theme.px(15));
+        barLp.rightMargin = Theme.px(10);
+        h.addView(bar, barLp);
+
         TextView t = new TextView(this);
         t.setText(title);
-        t.setTextColor(Theme.FOCUS_BLUE);
+        t.setTextColor(Theme.TEXT);        // 灰白 —— 唯一验证过一定可见的颜色
         t.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, Theme.sp(14));
         t.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
         t.setGravity(Gravity.CENTER_VERTICAL);
         h.addView(t, new LinearLayout.LayoutParams(
                 Theme.px(84), Theme.px(24)));
-
-        View line = new View(this);
-        line.setBackgroundColor(0x14FFFFFF);
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                0, Theme.px(1), 1f);
-        lp.leftMargin = Theme.px(10);
-        h.addView(line, lp);
         return h;
     }
 
@@ -1569,6 +1575,55 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                 LinearLayout list = (LinearLayout) ((ScrollView) scroll).getChildAt(0);
                 list.removeAllViews();
                 navViews.clear();
+
+                // ---- 第一段：订阅 ----
+                // 关闭「显示订阅列」时这一段不出现，索引自然就少了，
+                // 下面的分类索引从 0 开始 —— 不需要额外的偏移逻辑。
+                java.util.List<com.mintv.tv.data.SubscriptionStore.Sub> subs =
+                        com.mintv.tv.data.SubscriptionStore.list(this);
+                String activeSubId = com.mintv.tv.data.SubscriptionStore.activeId(this);
+
+                if (selections[ROW_SHOW_SUBS] == 1 && subs.size() > 0) {
+                    TextView subHd = new TextView(this);
+                    subHd.setText("订阅");
+                    subHd.setTextColor(Theme.TEXT);
+                    subHd.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, Theme.sp(14));
+                    subHd.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+                    subHd.setPadding(Theme.px(12), Theme.px(12), 0, Theme.px(6));
+                    list.addView(subHd);
+
+                    for (int i = 0; i < subs.size(); i++) {
+                        final com.mintv.tv.data.SubscriptionStore.Sub sub = subs.get(i);
+                        int cnt = channelCache.containsKey(sub.id)
+                                ? channelCache.get(sub.id).size() : 0;
+                        NavItemView v = new NavItemView(MainActivity.this);
+                        v.bind(sub.name, cnt, (char) 0);
+                        v.setClickable(true);
+                        v.setOnClickListener(new View.OnClickListener() {
+                            @Override public void onClick(View view) {
+                                onSubClicked(sub.id);
+                            }
+                        });
+                        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(
+                                ViewGroup.LayoutParams.MATCH_PARENT, Theme.px(Theme.NAV_ITEM_H));
+                        p.bottomMargin = Theme.px(2);
+                        list.addView(v, p);
+                        navViews.add(v);
+                    }
+
+                    View sep = new View(this);
+                    sep.setBackgroundColor(0x1AFFFFFF);
+                    LinearLayout.LayoutParams sepLp = new LinearLayout.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT, Theme.px(1));
+                    sepLp.topMargin = Theme.px(10);
+                    sepLp.bottomMargin = Theme.px(8);
+                    sepLp.leftMargin = Theme.px(12);
+                    sepLp.rightMargin = Theme.px(12);
+                    list.addView(sep, sepLp);
+                }
+                subItemCount = navViews.size();
+
+                // ---- 第二段：分类 ----
                 for (int i = 0; i < categories.size(); i++) {
                     DemoData.Category cat = categories.get(i);
                     NavItemView v = new NavItemView(MainActivity.this);
@@ -1585,8 +1640,9 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                     list.addView(v, p);
                     navViews.add(v);
                 }
-                focus.setNavCount(categories.size());
-                updateNavFocus(Math.min(focus.navIndex(), categories.size() - 1));
+                focus.setNavCount(navViews.size());
+                // 用 navViews 的长度，不是 categories —— 前面还有订阅段
+                updateNavFocus(Math.min(focus.navIndex(), Math.max(0, navViews.size() - 1)));
             }
         }
     }
@@ -1872,6 +1928,30 @@ public class MainActivity extends Activity implements FocusEngine.Host {
 
 
     /** 点分类：切分类，焦点交给频道列。 */
+    /** 订阅项是否等于当前激活订阅。 */
+    private boolean isCurrentSub(List<NavItemView> ignored, int navIdx) {
+        try {
+            java.util.List<com.mintv.tv.data.SubscriptionStore.Sub> subs =
+                    com.mintv.tv.data.SubscriptionStore.list(this);
+            return navIdx >= 0 && navIdx < subs.size()
+                    && subs.get(navIdx).id.equals(
+                            com.mintv.tv.data.SubscriptionStore.activeId(this));
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    /** 点了订阅：切源，焦点留在订阅列不动。 */
+    private void onSubClicked(String subId) {
+        String cur = com.mintv.tv.data.SubscriptionStore.activeId(this);
+        if (subId != null && subId.equals(cur)) return;      // 已经是它了
+        switchSubscription(subId);
+        // 切完分类全变了，重建列表并把焦点落在第一个分类
+        rebuildCategoryColumn();
+        focus.setNavIndexSilently(Math.min(subItemCount, Math.max(0, navViews.size() - 1)));
+        updateNavFocus(focus.navIndex());
+    }
+
     private void onCategoryClicked(int index) {
         clearRestorePending();
         switchCategory(index);
@@ -1903,7 +1983,12 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         boolean navZone = focus.zone() == FocusEngine.Zone.NAV;
         for (int i = 0; i < navViews.size(); i++) {
             NavItemView v = navViews.get(i);
-            v.setActive(i == activeCategory);
+            // 前 subItemCount 个是订阅：用「当前订阅」判断高亮
+            // 后面是分类：用 activeCategory（相对分类段的偏移）
+            boolean active = i < subItemCount
+                    ? isCurrentSub(navViews, i)
+                    : (i - subItemCount) == activeCategory;
+            v.setActive(active);
             v.setFocused(navZone && i == index, true);
         }
     }
@@ -2116,6 +2201,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     private static final int ROW_SCRIPT_DIR = com.mintv.tv.ui.setting.Settings.IDX_SCRIPT_DIR;
     private static final int ROW_LOCAL_IMPORT = com.mintv.tv.ui.setting.Settings.IDX_LOCAL_IMPORT;
     private static final int ROW_NET_PROXY = com.mintv.tv.ui.setting.Settings.IDX_NET_PROXY;
+    private static final int ROW_SHOW_SUBS = com.mintv.tv.ui.setting.Settings.IDX_SHOW_SUBS;
 
     /**
      * 分组标题。索引必须和 Settings.ALL 的顺序对上。
@@ -2792,7 +2878,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         rebuildCategories();
         rebuildCategoryColumn();
         int nav = Math.min(focus.navIndex(), Math.max(0, categories.size() - 1));
-        focus.setNavCount(categories.size());
+        focus.setNavCount(navViews.size());
         focus.setNavIndexSilently(nav);
         updateNavFocus(nav);
         switchCategory(nav);

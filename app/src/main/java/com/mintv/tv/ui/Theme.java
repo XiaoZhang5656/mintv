@@ -116,6 +116,15 @@ public final class Theme {
      * <p>用户可能选「石墨」这种很灰的颜色，直接当文字色会糊在深底上。
      * 亮度低于阈值时按比例提亮，不改变色相。
      */
+    /** 往白色方向混 t（0~1），保留色相、提高亮度。 */
+    public static int mixLight(int c, float t) {
+        int r = (c >> 16) & 0xFF, g = (c >> 8) & 0xFF, b = c & 0xFF;
+        r = (int) (r + (255 - r) * t);
+        g = (int) (g + (255 - g) * t);
+        b = (int) (b + (255 - b) * t);
+        return 0xFF000000 | (r << 16) | (g << 8) | b;
+    }
+
     public static int ensureReadable(int c) {
         float[] hsv = new float[3];
         android.graphics.Color.colorToHSV(c, hsv);
