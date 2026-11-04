@@ -41,12 +41,16 @@ public final class NetProxy {
 
     /** 解析成 java.net.Proxy；没配或格式不对返回 null（直连）。 */
     public static Proxy get(Context c) {
+        return parse(url(c));
+    }
+
+    /** 把 "socks5://ip:port" 解析成 Proxy。空串或格式不对返回 null。 */
+    public static Proxy parse(String s) {
         try {
-            String s = url(c);
             if (s == null || s.isEmpty()) return null;
 
             Proxy.Type type = Proxy.Type.HTTP;
-            String rest = s;
+            String rest = s.trim();
             int sep = s.indexOf("://");
             if (sep > 0) {
                 String scheme = s.substring(0, sep).toLowerCase(java.util.Locale.US);

@@ -1,133 +1,264 @@
-# TVUI — 纯 Java 的 Android TV 直播播放器界面
+# MinTV — Android TV 直播播放器
 
-一个**零 UI 第三方依赖**的 Android TV 直播播放器界面实现，面向低性能电视盒子（1GB RAM / 早期 ARM SoC）。
+全 Java、零第三方 UI 控件的电视直播播放器。单内核 libVLC，支持脚本扩展、本地源导入、局域网手机遥控。
 
-- 全部代码 **纯 Java**，无 Kotlin、无协程、无 Compose、无数据绑定
-- 所有控件 **继承 `android.view.View` 自绘**，不引 Material Components / Leanback / ConstraintLayout
-- 焦点自己算（`FocusEngine`），不依赖 `nextFocusDown` 那套 XML 猜测
-- 播放内核走 Media3，接口抽象，可换 IJK / LibVLC
+---
 
-## 界面
+## 功能
 
-| 三栏主界面 | 播放设置 | 纯播放态 |
+| 能力 | 说明 |
+|---|---|
+| 播放 | libVLC 3.5.1 单内核，解码三档（自动 / 内置硬解 / 软件解码） |
+| 源格式 | M3U / M3U8 / TXT，多线路（`#` 分隔）、`#EXTVLCOPT` 请求头 |
+| 协议 | HTTP(S) / HLS / UDP / RTP / RTSP（组播已申请 MulticastLock） |
+| 本地源 | 从本机 / U 盘导入，内容复制到 App 目录，不依赖网络 |
+| 脚本 | QuickJS 引擎，自定义路由、签名、解密、转发 |
+| 网络代理 | HTTP / SOCKS5，可全局也可按请求指定 |
+| EPG | XMLTV，按 `tvg-id` 匹配 |
+| 自愈 | 超时换源、卡顿换源、低速换源（速度低于 0.9 持续 N 秒） |
+| 遥控 | 局域网 HTTP 服务，手机浏览器扫码控制 |
+| 主题 | 深色 + 10 种强调色 |
+
+---
+
+## 脚本引擎
+
+### 脚本放哪
+
+```
+设置 → 脚本目录     选一个外部目录（SAF），文件管理器可见
+                    不选则用 Android/data/<包名>/files/scripts
+```
+
+目录下的 `.js` 文件自动加载，`lib/` 子目录放公共模块（不会被当成路由脚本）。
+
+### 引擎限制
+
+基于 QuickJS，**不是 Node**：
+
+```
+没有 require('fs') / require('https') / Buffer / process
+没有 setTimeout
+第三方库只能把源码打包进脚本
+```
+
+而且**不能写 async/await** —— 引擎不驱动微任务，`async` 函数返回的 Promise 永远 pending。
+所有 API 都是同步返回。
+
+### 声明
+
+```js
+exports.name     = "央视系";      // 显示名
+exports.guard    = false;         // true = 全局守卫，所有请求都先过它
+exports.priority = 100;           // 越大越先匹配，默认 0
+
+// 路由：四种写法可以混用
+exports.path     = "/cctv/:id";                    // 单条
+exports.path     = ["/a/:id", "/b/:id"];           // 数组，共用 main
+exports.host     = ["*.example.com"];              // 按域名
+exports.urlRegex = "\\.m3u8";
+
+// 或者逐条配置
+exports.routes = [
+    { path: "/demo/:id" },
+    { path: "/demo/hd/:id", handler: "mainHd", priority: 90 },
+    { host: ["*.cdn.com"], headers: { "Referer": "..." } },   // 纯请求头，不跑 JS
+];
+```
+
+### 三种处理函数
+
+```js
+// 1. main —— 返回播放地址（302 给播放器）
+function main(item) {
+    return "https://cdn/x.m3u8";
+}
+
+// 2. handler —— 自己造内容
+function handler(req) {
+    return {
+        status: 200,
+        contentType: "application/vnd.apple.mpegurl",
+        body: "#EXTM3U\n..."
+    };
+}
+
+// 3. proxy —— 返回真实地址，由框架拉取并转发二进制
+function proxy(req) {
+    return {
+        url: decrypt(req.params.token),
+        headers: { "Referer": "https://site/" },
+        proxy: "socks5://10.0.0.1:1080"      // 可选，不填用全局设置
+    };
+}
+```
+
+`proxy` 模式的关键：**播放器永远不知道真实地址**。适合分片要解密、要带防盗链、要走代理的场景。
+
+### 能用的 API
+
+```js
+fetch(url, {
+    headers: { "Referer": "..." },
+    method: "GET",              // GET / POST / PUT
+    body: "...",                // POST/PUT 的正文
+    proxy: "socks5://ip:port"   // 单次代理；"" = 强制直连；不填用全局
+})
+  → { ok, status, url, headers.get(k), text(), json() }
+
+md5(text)
+storage.get(key) / set(key, value, ttlMs) / delete(key)
+console.log / info / warn / error
+require("./lib/util.js")        // CommonJS，同一文件只执行一次
+
+// 标准 JS：JSON / Math / Date / RegExp / Map / Set / URL 等
+```
+
+框架**不塞任何默认请求头** —— 有些源恰恰不允许带 UA。带什么头是脚本的决定。
+
+### 返回值
+
+```js
+return "https://cdn/x.m3u8";                    // 地址
+return { url, headers, ttlSec, proxy };         // 带请求头
+return { urls: [...] };                         // 多个候选
+return "#EXTM3U\n..." ;                         // m3u8 文本
+return { status, contentType, body };           // 自定义响应
+return null;                                    // 解析失败
+```
+
+### 在订阅里用
+
+```
+CCTV-3,http://127.0.0.1:18899/cctv/cctv3
+```
+
+`18899` 是手机助手的端口（被占用时自动切 18900，见设置页显示的地址）。
+
+### 示例：签名 + 请求头
+
+```js
+exports.name = "某源";
+exports.path = "/src/:id";
+
+const sign = require("./lib/sign.js");
+
+function main(item) {
+    const r = fetch("https://api.example.com/live?id=" + item.id, {
+        headers: {
+            "Referer": "https://www.example.com/",
+            "User-Agent": "Mozilla/5.0 (Linux; Android 12)"
+        }
+    });
+    if (!r.ok) return null;
+
+    const data = r.json();
+    const ts = String(Date.now()).substring(0, 10);
+    return {
+        url: data.url + "&t=" + ts + "&sign=" + sign.make(item.id, ts, data.salt),
+        headers: { "Referer": "https://www.example.com/" },
+        ttlSec: 60
+    };
+}
+```
+
+---
+
+## 网络代理
+
+```
+设置 → 网络代理    socks5://192.168.1.2:1080
+                  http://192.168.1.2:8080
+                  留空 = 直连
+```
+
+三层优先级：
+
+```
+单次请求指定（脚本里的 proxy 参数） > 全局设置 > 直连
+```
+
+用于：源只对特定出口 IP 开放、源在内网深处。
+
+**注意**：组播（udp/rtp）不走代理，那是另一条链路。
+
+---
+
+## 设置项
+
+| 项 | 说明 |
+|---|---|
+| 切源 | 手动切下一条线路 |
+| 画面比例 | 自动 / 16:9 / 4:3 / 原始 / 铺满 |
+| 超时换源 | 关闭 / 5 / 8 / 12 / 20 秒 |
+| 解码方式 | 自动 / 内置硬解码 / 软件解码 |
+| 画面输出 | TextureView / SurfaceView |
+| 网络代理 | HTTP / SOCKS5 |
+| 脚本目录 | SAF 选目录 |
+| 导入本地源 | SAF 选文件 |
+| 主题颜色 | 10 种强调色 |
+| 频道分组管理 | 隐藏不看的分类 |
+
+---
+
+## 构建
+
+```bash
+./gradlew assembleDebug
+# 产物 app/build/outputs/apk/debug/app-debug.apk
+```
+
+CI 自动出包，产物在 `public/apk/`。
+
+### 环境
+
+```
+JDK 17
+Android SDK 34
+minSdk 19 / targetSdk 34
+```
+
+---
+
+## 按键
+
+| 键 | 播放态 | 面板态 |
 |---|---|---|
-| 左侧分类 + 频道列 + 竖排信息轨 + 横向压暗遮罩 | 分段选择器 + 行焦点白框 | 面板收起，只剩画面与时钟 |
+| 上 / 下 | 上一个 / 下一个频道 | 移动焦点 |
+| 左 / 右 | 查看 EPG 回看 / 切源 | 移动焦点 / 改值 |
+| OK | 唤回面板 | 确认 |
+| BACK | 收面板 | 返回上一级 |
+| 数字键 | 直接输入台号 | 同 |
 
-可交互原型：[`preview/proto.html`](preview/proto.html) —— 浏览器打开，方向键操作，
-`E` 开设置页，`Esc` 收起面板 / 返回。
-
-## 技术要点
-
-### 1. 为什么不用 Leanback
-Leanback 的 `Presenter` 层层封装 + 每帧 `findNextFocus` 遍历，在两栏网格上落点不可控。
-本项目用 400 行的 `FocusEngine` 把焦点建模成「区域 + 索引」，按键只做算术：
-
-```java
-focus.onKey(KEYCODE_DPAD_DOWN);   // 一次算术，一次 requestFocus，零 layout 遍历
-```
-
-### 2. 为什么不用 MaterialCardView
-`MaterialCardView` 在 focus 变化时会 `setLayerType(SOFTWARE)` 建离屏 buffer，
-早期盒子（S905 一代）上焦点一动就掉到 20fps。这里纯粹在宿主 canvas 上画两个圆角矩形：
-
-```java
-drawBg(c, Theme.PANEL_ITEM, Theme.FOCUS_BG);   // 底色插值
-drawFocusStroke(c, Theme.FOCUS_BLUE);          // 2px 内缩描边
-```
-
-### 3. 播放画面与 UI 完全分离
-`SurfaceView` 走独立图层，列表滚动时视频层不参与重绘，这是低端盒子不卡的根本原因。
-
-### 4. 直播调参
-```java
-new DefaultLoadControl.Builder().setBufferDurationsMs(
-        3_000,   // minBufferMs
-        8_000,   // maxBufferMs  —— 直播要快，不是要稳
-        500,     // bufferForPlaybackMs
-        800);    // bufferForPlaybackAfterRebufferMs
-```
-
-切台必须 `stop → clearMediaItems → setMediaSource → prepare`，
-**不要用 `seekTo` 换源**，低端机必卡 2 秒。
-
-### 5. 尺寸不写死
-所有视觉常量集中在一个 `Theme.java`，以 1920×1080 为基准设计，
-运行时按 `widthPx / 1920` 等比缩放，720p 盒子自动适配。
+---
 
 ## 目录
 
 ```
-app/src/main/java/com/gg/tv/
+app/src/main/java/com/mintv/tv/
+├── data/          数据与网络
+│   ├── PlaylistParser      M3U / TXT 解析
+│   ├── ScriptEngine        QuickJS 封装
+│   ├── ScriptRouter        脚本路由分发
+│   ├── ScriptStore         脚本文件读写
+│   ├── ScriptDir           脚本目录（File / SAF 双后端）
+│   ├── NetProxy            上游代理
+│   ├── PlaybackAttempt     播放状态机（可单测）
+│   └── RemoteServer        手机助手 HTTP 服务
 ├── ui/
-│   ├── MainActivity.java        播放器 + 三栏覆盖层 + 设置弹窗
-│   ├── Theme.java               全部尺寸/颜色/动画时长常量
-│   ├── DemoData.java            演示数据（换成你的 ChannelStore 即可）
-│   ├── OsdView.java             换台 OSD、缓冲状态、网速
-│   ├── focus/FocusEngine.java   焦点引擎
-│   └── widget/
-│       ├── BaseCardView.java    自绘圆角卡片基类（统一焦点动画）
-│       ├── NavItemView.java     分类项（图标 + 名称 + 计数胶囊）
-│       ├── ChannelView.java     频道行（台号 + 台名 + 徽标 + 节目）
-│       ├── ScrimView.java       横向压暗遮罩
-│       ├── RailView.java        竖排「节目 » 信息」
-│       ├── ClockView.java       右上角时钟
-│       ├── SegmentedView.java   分段选择器
-│       └── SettingRowView.java  设置行
-└── player/
-    ├── PlaybackBackend.java     播放内核接口
-    └── Media3Backend.java       Media3 实现
+│   ├── MainActivity        主界面
+│   ├── OsdView             OSD
+│   ├── Theme               配色
+│   ├── player/             播放内核封装
+│   └── widget/             自绘控件
+└── assets/remote/          手机端网页
 ```
 
-## 构建
-
-**Android Studio**：直接打开根目录，Sync 后 Run。
-
-**命令行**：
-```bash
-./gradlew assembleDebug
-# 产物 app/build/outputs/apk/debug/app-debug.apk
-adb install -r app/build/outputs/apk/debug/app-debug.apk
-```
-
-也可以直接推到 GitHub，`.github/workflows/build.yml` 会在 Actions 里出 debug APK。
-
-### 环境
-
-| 项 | 值 |
-|---|---|
-| minSdk | 21（Android 5.0） |
-| targetSdk | 34 |
-| AGP | 8.5.2 |
-| JDK | 17 |
-| 语言 | Java 8 语法（无 lambda 以外的语法糖） |
-
-## 按键
-
-| 键 | 行为 |
-|---|---|
-| ↑ ↓ | 当前栏内移动 |
-| ← → | 栏之间切换 / 设置行内选项切换 |
-| OK / Enter | 选分类 / 切台 / 改设置 |
-| Menu | 打开设置页 |
-| Back | 收起面板 → 再按退出 |
-| 面板收起时任意方向键 | 唤出面板 |
-
-## 接入自己的源
-
-只需实现一个 `List<Channel>` 数据源，替换 `DemoData`：
-
-```java
-public final class Channel {
-    public final String no, name, now, badge, url;
-}
-```
-
-`MainActivity.bindChannels()` 会把这些字段喂给 `ChannelView`。
-频道数超过 200 时，把 `chanColumn` 换成 `RecyclerView` + `setItemAnimator(null)` 即可，
-`bindChannels()` 之外的代码一行不用改。
+---
 
 ## 授权
 
-代码以 [MIT](LICENSE) 发布。第三方依赖与素材归属见 [NOTICE.md](NOTICE.md)。
+见 [NOTICE.md](NOTICE.md)。
 
-本项目只提供播放器界面与播放框架，不附带任何直播源。
+本应用仅为本地播放工具，不提供、不存储、不分发任何音视频内容。
+所有直播源、EPG 数据与脚本均由用户自行添加。

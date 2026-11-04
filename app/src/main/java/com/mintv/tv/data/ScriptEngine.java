@@ -105,7 +105,8 @@ public final class ScriptEngine {
     public static final class Result {
         public boolean ok;
         public String url;                 // main 返回的播放地址
-        public Map<String,String> headers; // main 返回的请求头
+        public Map<String,String> headers; // 返回的请求头
+        public String proxy;               // 这次转发用哪个代理（可空）
         public int ttlSec;
         public String body;                // handler 返回的正文
         public String contentType;
@@ -315,7 +316,21 @@ public final class ScriptEngine {
 
             // 上游代理：脚本里的 fetch 和本地 HLS 代理共用同一个配置。
             // 有些源只对特定出口开放，不挂代理直接 403。
-            java.net.Proxy proxy = NetProxy.get(ctx);
+            // 代理优先级：单次请求指定 > 全局设置 > 直连。
+            //
+            // 单次指定写在 init 里：
+            //   fetch(url, { proxy: "socks5://10.0.0.1:1080" })
+            //   fetch(url, { proxy: "" })          ← 强制直连，忽略全局
+            //
+            // 为什么要 per-request：同一次解析里经常要打两个不同的接口，
+            // 一个内网一个公网，全局一个代理应付不了。
+            java.net.Proxy proxy;
+            if (init != null && init.has("proxy")) {
+                String pv = init.optString("proxy", "");
+                proxy = pv.isEmpty() ? null : NetProxy.parse(pv);   // "" = 强制直连
+            } else {
+                proxy = NetProxy.get(ctx);
+            }
             java.net.URL u = new URL(url);
             conn = proxy != null
                     ? (HttpURLConnection) u.openConnection(proxy)
@@ -380,6 +395,9 @@ public final class ScriptEngine {
         r.status = o.optInt("status", 200);
         r.ttlSec = o.optInt("ttlSec", 0);
         r.rewriteSegments = o.optBoolean("rewriteSegments", false);
+        // 单次转发可以用自己的代理，不填就沿用全局设置
+        String px = o.optString("proxy", "");
+        if (!px.isEmpty()) r.proxy = px;
 
         JSONObject h = o.optJSONObject("headers");
         if (h != null) {

@@ -178,7 +178,7 @@ public final class ScriptRouter {
 
         // 代理模式：流式拉取并原样吐回去
         if (isProxy && res.url != null) {
-            streamBinary(res.url, res.headers, out);
+            streamBinary(res.url, res.headers, res.proxy, out);
             return;
         }
 
@@ -201,10 +201,13 @@ public final class ScriptRouter {
      *
      * <p>请求头只带脚本给的那几个 —— 框架不塞任何默认 UA。
      */
-    private void streamBinary(String url, Map<String, String> headers, OutputStream out) {
+    private void streamBinary(String url, Map<String, String> headers,
+                              String proxySpec, OutputStream out) {
         java.net.HttpURLConnection conn = null;
         try {
-            java.net.Proxy proxy = NetProxy.get(ctx);
+            // 代理优先用脚本这次指定的，否则用全局设置
+            java.net.Proxy proxy = proxySpec == null || proxySpec.isEmpty()
+                    ? NetProxy.get(ctx) : NetProxy.parse(proxySpec);
             java.net.URL u = new java.net.URL(url);
             conn = proxy != null
                     ? (java.net.HttpURLConnection) u.openConnection(proxy)

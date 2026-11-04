@@ -727,8 +727,22 @@ public final class VlcBackend implements PlaybackBackend {
         emit(State.IDLE);
     }
 
-    @Override
-    public void release() {
+    /**
+     * 只解绑渲染目标，不销毁实例。
+     *
+     * <p>给 PlaybackSession 用：拆内核时要先解绑再 release，
+     * 否则旧实例会继续往已销毁的 Surface 上刷帧 —— use-after-free。
+     * 必须幂等。
+     */
+    public void detachOutputForSession() {
+        final org.videolan.libvlc.MediaPlayer p = player;
+        if (viewsAttached && p != null) {
+            viewsAttached = false;
+            try { p.getVLCVout().detachViews(); } catch (Throwable ignored) { }
+        }
+    }
+
+    @Override public void release() {
         released = true;
         main.removeCallbacks(tick);
         final org.videolan.libvlc.MediaPlayer p = player;
