@@ -55,8 +55,10 @@ public final class ScriptStore {
     }
 
     private final File dir;
+    private final Context appCtx;
 
     public ScriptStore(Context ctx) {
+        this.appCtx = ctx.getApplicationContext();
         File base = ctx.getExternalFilesDir(null);
         if (base == null) base = ctx.getFilesDir();
         dir = new File(base, "scripts");
@@ -73,11 +75,15 @@ public final class ScriptStore {
 
     public File dir() { return dir; }
 
+    /** 给人看的目录路径（SAF 模式返回用户选的目录名）。 */
+    public String displayPath() { return ScriptDir.displayPath(appCtx); }
+
     // ================= 读 =================
 
     /** 列出所有脚本（含 lib/ 下的模块），按目录 + 文件名排序。 */
     public List<Item> list() {
         List<Item> out = new ArrayList<>();
+        if (ScriptDir.isSaf(appCtx)) return listSaf();
         File[] files = dir.listFiles();
         if (files != null) {
             for (File f : files) {
@@ -105,8 +111,37 @@ public final class ScriptStore {
         return out;
     }
 
+    /** SAF 模式下列表：文件在用户自选目录里。 */
+    private List<Item> listSaf() {
+        List<Item> out = new ArrayList<>();
+        for (String name : ScriptDir.listNames(appCtx)) {
+            Item it = new Item();
+            it.name = name;
+            it.size = ScriptDir.sizeOf(appCtx, name);
+            it.modified = ScriptDir.modifiedOf(appCtx, name);
+            String src;
+            try { src = ScriptDir.read(appCtx, name); }
+            catch (Exception e) { it.parseError = "读不到文件"; out.add(it); continue; }
+            analyze(it, src, name.startsWith("lib/"));
+            out.add(it);
+        }
+        Collections.sort(out, new java.util.Comparator<Item>() {
+            @Override public int compare(Item a, Item b) {
+                if ((a.kind == Kind.MODULE) != (b.kind == Kind.MODULE)) {
+                    return a.kind == Kind.MODULE ? 1 : -1;
+                }
+                return a.name.compareTo(b.name);
+            }
+        });
+        return out;
+    }
+
     /** 读一个脚本的源码。name 支持 "x.js" 和 "lib/x.js"。 */
     public String read(String name) throws IOException {
+        if (ScriptDir.isSaf(appCtx)) {
+            try { return ScriptDir.read(appCtx, name); }
+            catch (Exception e) { throw new IOException(e.getMessage()); }
+        }
         File f = resolve(name);
         if (f == null || !f.isFile()) throw new IOException("脚本不存在: " + name);
         return new String(readAll(f), StandardCharsets.UTF_8);
@@ -122,6 +157,11 @@ public final class ScriptStore {
     /** 新建或覆盖。返回 false 表示名字非法。 */
     public boolean write(String name, String content) throws IOException {
         if (!isSafeName(name)) return false;
+        if (ScriptDir.isSaf(appCtx)) {
+            boolean ok = ScriptDir.write(appCtx, name, content, System.currentTimeMillis());
+            if (ok) Log.i(TAG, "写入脚本 " + name + " (" + content.length() + " 字符)");
+            return ok;
+        }
         File f = resolve(name);
         if (f == null) return false;
         File parent = f.getParentFile();
@@ -140,6 +180,11 @@ public final class ScriptStore {
     }
 
     public boolean delete(String name) {
+        if (ScriptDir.isSaf(appCtx)) {
+            boolean ok = ScriptDir.delete(appCtx, name);
+            Log.i(TAG, "删除脚本 " + name + " -> " + ok);
+            return ok;
+        }
         File f = resolve(name);
         if (f == null || !f.isFile()) return false;
         boolean ok = f.delete();
@@ -180,7 +225,6 @@ public final class ScriptStore {
         it.size = f.length();
         it.modified = f.lastModified();
         it.displayName = f.getName();
-
         String src;
         try {
             src = new String(readAll(f), StandardCharsets.UTF_8);
@@ -188,21 +232,29 @@ public final class ScriptStore {
             it.parseError = "读不到文件";
             return it;
         }
+        analyze(it, src, defaultKind == Kind.MODULE && prefix != null);
+        return it;
+    }
 
-        // 去掉注释和字符串里的干扰（粗略：至少去掉块注释）
+    /**
+     * 静态解析源码，填 Item 的类型和路由信息。
+     *
+     * <p>不执行 JS —— 管理界面要能立刻显示"这个脚本管哪些路径"，
+     * 为这个启动一次引擎太重了。
+     */
+    private void analyze(Item it, String src, boolean isLib) {
+        if (it.displayName == null) it.displayName = it.name;
+
         String code = src.replaceAll("(?s)/\\*.*?\\*/", " ");
 
-        // ---- 类型判定 ----
         boolean hasMain = Pattern.compile("\\bfunction\\s+main\\s*\\(").matcher(code).find()
                 || Pattern.compile("exports\\.main\\s*=").matcher(code).find();
         boolean hasGuard = Pattern.compile("exports\\.guard\\s*=\\s*true").matcher(code).find();
         boolean hasHeaders = Pattern.compile("exports\\.headers\\s*=").matcher(code).find();
 
-        if (defaultKind == Kind.MODULE && prefix != null) {
+        if (isLib) {
             it.kind = Kind.MODULE;
-        } else if (hasGuard) {
-            it.kind = Kind.SCRIPT;      // 守卫也是脚本
-        } else if (hasMain) {
+        } else if (hasGuard || hasMain) {
             it.kind = Kind.SCRIPT;
         } else if (hasHeaders) {
             it.kind = Kind.HEADERS;
@@ -211,22 +263,19 @@ public final class ScriptStore {
         }
         it.guard = hasGuard;
 
-        // ---- 简单字段 ----
         it.priority = readInt(code, "exports\\.priority");
         it.displayName = readString(code, "exports\\.name", it.displayName);
 
-        // ---- 路由 ----
         collectStrings(code, "exports\\.path", it.routes);
         collectStrings(code, "exports\\.host", it.hosts);
 
-        // exports.routes = [ { path: "..." }, ... ]
         Matcher rm = Pattern.compile("\\bpath\\s*:\\s*[\"']([^\"']+)[\"']").matcher(code);
         while (rm.find()) it.routes.add(rm.group(1));
 
-        if (it.routes.isEmpty() && it.hosts.isEmpty() && it.kind == Kind.SCRIPT && !hasGuard) {
+        if (it.routes.isEmpty() && it.hosts.isEmpty()
+                && it.kind == Kind.SCRIPT && !hasGuard) {
             it.parseError = "没有声明 exports.path 或 exports.host";
         }
-        return it;
     }
 
     /** 从 "exports.path = "x"" 或 "exports.path = ["a","b"]" 里抠所有字符串。 */

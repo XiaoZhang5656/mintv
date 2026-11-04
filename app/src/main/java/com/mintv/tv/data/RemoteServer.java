@@ -279,7 +279,8 @@ public final class RemoteServer {
                 org.json.JSONObject o = new org.json.JSONObject();
                 o.put("ok", true);
                 o.put("items", store.toJson(store.list()));
-                o.put("dir", store.dir().getAbsolutePath());
+                o.put("dir", store.displayPath());
+                o.put("saf", com.mintv.tv.data.ScriptDir.isSaf(appCtx));
                 send(out, 200, "application/json; charset=utf-8", o.toString());
             } catch (Exception e) {
                 send(out, 500, "application/json; charset=utf-8",

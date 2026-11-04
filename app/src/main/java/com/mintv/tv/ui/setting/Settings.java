@@ -58,6 +58,8 @@ public final class Settings {
             // 选项数量会变，不适合用定长数组表达。
             SettingDef.action("theme", "主题颜色",
                     "调的是强调色：选中框、进度、按钮。背景保持深色", "选择…"),
+            SettingDef.action("script_dir", "脚本目录",
+                    "选一个外部目录放脚本，文件管理器可见；不选则用 App 私有目录", "选择…"),
             SettingDef.action("group_mgr", "频道分组管理",
                     "隐藏不看的分类，只留常用的", "打开管理"),
     };
@@ -84,6 +86,7 @@ public final class Settings {
     public static final int IDX_CLOCK = indexOf("clock");
     public static final int IDX_OUTPUT = indexOf("output");
     public static final int IDX_THEME = indexOf("theme");
+    public static final int IDX_SCRIPT_DIR = indexOf("script_dir");
     public static final int IDX_GROUP_MGR = indexOf("group_mgr");
 
     /** 按 id 查行号。找不到直接抛 —— 说明常量名和总表里的 id 对不上。 */

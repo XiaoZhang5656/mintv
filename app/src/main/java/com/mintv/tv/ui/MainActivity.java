@@ -505,6 +505,43 @@ public class MainActivity extends Activity implements FocusEngine.Host {
      * 「新 Activity onCreate → 旧 Activity onDestroy」，新界面在 onCreate
      * 里就开始播，等旧 Activity 释放会有一段两个实例同时出声。
      */
+    private static final int REQ_SCRIPT_DIR = 4001;
+
+    /**
+     * 让用户选脚本目录。
+     *
+     * <p>为什么用 SAF 而不是直接读写 /sdcard：Android 11+ 之后
+     * 访问 Android/data 以外的目录要么申请 MANAGE_EXTERNAL_STORAGE
+     * （电视盒子上经常没有这个设置页），要么走 SAF。SAF 是系统标准，
+     * 手机和盒子都能用。
+     */
+    private void pickScriptDir() {
+        try {
+            android.content.Intent i = new android.content.Intent(
+                    android.content.Intent.ACTION_OPEN_DOCUMENT_TREE);
+            i.addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
+                    | android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                    | android.content.Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+            startActivityForResult(i, REQ_SCRIPT_DIR);
+        } catch (Throwable t) {
+            osd.toast("这台设备没有文件选择器");
+        }
+    }
+
+    @Override
+    protected void onActivityResult(int req, int res, android.content.Intent data) {
+        if (req == REQ_SCRIPT_DIR) {
+            if (res == RESULT_OK && data != null && data.getData() != null) {
+                com.mintv.tv.data.ScriptDir.setTreeUri(this, data.getData());
+                com.mintv.tv.data.ScriptLog.info("系统", "脚本目录已设置: "
+                        + com.mintv.tv.data.ScriptDir.displayPath(this));
+                osd.toast("脚本目录已设置");
+            }
+            return;
+        }
+        super.onActivityResult(req, res, data);
+    }
+
     private void openThemePicker() {
         if (themePicker != null || rootView == null) return;
         themePicker = new com.mintv.tv.ui.widget.ThemePickerView(this);
@@ -1595,6 +1632,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     private static final String KEY_SELECTIONS  = "selections";
     private static final String KEY_HIDDEN_CATS = "hidden_cats";
     private static final int ROW_GROUP_MGR= com.mintv.tv.ui.setting.Settings.IDX_GROUP_MGR;
+    private static final int ROW_SCRIPT_DIR = com.mintv.tv.ui.setting.Settings.IDX_SCRIPT_DIR;
 
     /** 被用户隐藏的分类名（「全部」和「我的收藏」不允许隐藏）。 */
     private final java.util.LinkedHashSet<String> hiddenCats = new java.util.LinkedHashSet<>();
@@ -4888,6 +4926,8 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         } else if (row == ROW_AUTOPLAY) {
             saveAutoStartFlag();
             if (value == 0) showAutoStartGuide();
+        } else if (row == ROW_SCRIPT_DIR) {
+            pickScriptDir();
         } else if (row == ROW_GROUP_MGR) {
             openGroupManager();
         } else if (row == ROW_THEME) {
