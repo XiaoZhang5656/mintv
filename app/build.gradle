@@ -29,8 +29,8 @@ android {
         // 方法数已超 64K（media3 + libvlc + zxing + androidx.core）
         multiDexEnabled true
         targetSdk 34
-        versionCode 124
-        versionName "2.28.0"
+        versionCode 125
+        versionName "2.29.0"
 
         // 注意：这里不能再写 ndk { abiFilters ... }。
         // AGP 会直接报 "Conflicting configuration : 'arm64-v8a,armeabi-v7a'
@@ -115,4 +115,6 @@ dependencies {
     // 现在的 AGP 8.5.2 只到 34，要连 Gradle 一起升 —— 那是独立的构建链改动，
     // 不跟"降到 4.4"混在一起做，两件事分两次验证。
     implementation 'org.videolan.android:libvlc-all:3.5.1'
+    // QuickJS：脚本引擎。AAR 自带 arm64-v8a / armeabi-v7a / x86 / x86_64 全 ABI
+    implementation 'io.github.taoweiji.quickjs:quickjs-android:1.4.6'
 }

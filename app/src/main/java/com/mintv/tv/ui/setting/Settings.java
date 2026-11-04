@@ -57,7 +57,7 @@ public final class Settings {
             // 改成 action：原本是 3 选 1，现在点开是调色板网格，
             // 选项数量会变，不适合用定长数组表达。
             SettingDef.action("theme", "主题颜色",
-                    "调的是强调色：选中框、进度、按钮。背景保持深色", null),
+                    "调的是强调色：选中框、进度、按钮。背景保持深色", "选择…"),
             SettingDef.action("group_mgr", "频道分组管理",
                     "隐藏不看的分类，只留常用的", "打开管理"),
     };

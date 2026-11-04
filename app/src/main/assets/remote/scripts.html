@@ -372,10 +372,14 @@ function newScript() {
     method:'POST', headers:{'Content-Type':'application/json'},
     body: JSON.stringify({ name: n, content:
       '// ' + n + '\n' +
-      'exports.name     = "我的脚本";\n' +
-      'exports.path     = "/demo/:id";\n\n' +
-      'async function main(item) {\n' +
+      '// 注意：不要写 async/await。QuickJS 不驱动微任务，\n' +
+      '// async 函数返回的 Promise 永远 pending，取不到结果。\n' +
+      'exports.name = "我的脚本";\n' +
+      'exports.path = "/demo/:id";\n\n' +
+      'function main(item) {\n' +
       '    // item.id 是路径参数\n' +
+      '    // var r = fetch("https://api.example.com/live?id=" + item.id);\n' +
+      '    // return { url: r.json().data.url };\n' +
       '    return null;\n' +
       '}\n' })
   }).then(function(r){ return r.json(); }).then(function(d){
@@ -526,13 +530,19 @@ function checkSyntax() {
     var q = m[1].match(/["']([^"']+)["']/g) || [];
     for (var k = 0; k < q.length; k++) routes.push(q[k].replace(/["']/g, ''));
   }
+  var isAsync = /async\s+function\s+(main|handler|proxy)\b/.test(src)
+             || /exports\.(main|handler|proxy)\s*=\s*async/.test(src);
   var hasMain = /\bfunction\s+main\s*\(/.test(src) || /exports\.main\s*=/.test(src);
   var hasGuard = /exports\.guard\s*=\s*true/.test(src);
 
   if (!hasMain && !hasGuard) {
     setStatus('err', '没有 main() 也没有 exports.guard，这个脚本不会生效');
   } else {
-    setStatus('ok', '语法检查通过' + (routes.length ? ' · ' + routes.length + ' 条路由' : ''));
+    if (isAsync) {
+      setStatus('err', '不要用 async/await：引擎不驱动微任务，结果拿不到');
+    } else {
+      setStatus('ok', '语法检查通过' + (routes.length ? ' · ' + routes.length + ' 条路由' : ''));
+    }
   }
   document.getElementById('routesHint').textContent = routes.length
     ? ('会注册：' + routes.join('、'))

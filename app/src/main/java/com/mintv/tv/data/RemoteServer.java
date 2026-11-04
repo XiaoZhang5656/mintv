@@ -59,6 +59,8 @@ public final class RemoteServer {
 
     private final Context appCtx;
     private final Host host;
+    /** 脚本路由，第一次用到时才建（省启动时间）。 */
+    private ScriptRouter scriptRouter;
     private ServerSocket server;
     private int port = -1;
     private volatile boolean running = false;
@@ -69,6 +71,12 @@ public final class RemoteServer {
     public RemoteServer(Context ctx, Host host) {
         this.appCtx = ctx.getApplicationContext();
         this.host = host;
+    }
+
+    /** 取脚本路由，顺带懒加载。 */
+    private synchronized ScriptRouter router() {
+        if (scriptRouter == null) scriptRouter = new ScriptRouter(appCtx);
+        return scriptRouter;
     }
 
     public int port() { return port; }
@@ -305,6 +313,21 @@ public final class RemoteServer {
             } catch (Exception ignored) { }
             send(out, 200, "application/json; charset=utf-8", o.toString());
             return;
+        }
+
+        // ---- 脚本路由 ----
+        // 放在静态页之前：脚本声明的 /cctv/:id 这类路径优先，
+        // 都不匹配时才去找 assets 里的静态文件。
+        if (!path.startsWith("/api/") && path.length() > 1) {
+            try {
+                ScriptRouter sr = router();
+                if (sr.canHandle(path)) {
+                    sr.handle(path, query, out);
+                    return;
+                }
+            } catch (Throwable t) {
+                android.util.Log.w(TAG, "脚本路由异常: " + t.getMessage());
+            }
         }
 
         // ---- 静态页 ----
