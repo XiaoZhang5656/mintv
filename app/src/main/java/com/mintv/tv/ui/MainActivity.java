@@ -4692,10 +4692,18 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             @Override public void run() {
                 if (!epgPanelOpen) return;
                 navPanel.setVisibility(View.GONE);
-                if (subColumn != null) subColumn.setVisibility(View.GONE);
+                // INVISIBLE 不是 GONE：GONE 会让 LinearLayout 重新排布，
+            // 后面的列自动前移，而 chanContainer 的 translationX 是按
+            // "订阅列还占着 200px"算的 —— 结果频道列被推出屏幕，
+            // 看起来就是抽屉态左边一片空白。
+            if (subColumn != null) subColumn.setVisibility(View.INVISIBLE);
                 navDivider.setVisibility(View.GONE);
                 railView.setVisibility(View.GONE);
-                if (subColumn != null) subColumn.setVisibility(View.GONE);
+                // INVISIBLE 不是 GONE：GONE 会让 LinearLayout 重新排布，
+            // 后面的列自动前移，而 chanContainer 的 translationX 是按
+            // "订阅列还占着 200px"算的 —— 结果频道列被推出屏幕，
+            // 看起来就是抽屉态左边一片空白。
+            if (subColumn != null) subColumn.setVisibility(View.INVISIBLE);
             }
         }, Theme.T_PANEL + 40);
         // 频道列左移补位
@@ -4789,7 +4797,9 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                 navPanel.postDelayed(new Runnable() {
                     @Override public void run() {
                         if (subColumn != null && !panelVisible) {
-                            subColumn.setVisibility(View.GONE);
+                            // 同样是 INVISIBLE：GONE 会让后面的列前移，
+                            // 而位移动画是按"订阅列占位"算的
+                            subColumn.setVisibility(View.INVISIBLE);
                         }
                     }
                 }, Theme.T_PANEL + 40);
@@ -4817,7 +4827,11 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                     if (panelVisible) return;      // 期间又被唤出
                     setPanelsInteractive(false);
                     navPanel.setVisibility(View.GONE);
-                    if (subColumn != null) subColumn.setVisibility(View.GONE);
+                    // INVISIBLE 不是 GONE：GONE 会让 LinearLayout 重新排布，
+            // 后面的列自动前移，而 chanContainer 的 translationX 是按
+            // "订阅列还占着 200px"算的 —— 结果频道列被推出屏幕，
+            // 看起来就是抽屉态左边一片空白。
+            if (subColumn != null) subColumn.setVisibility(View.INVISIBLE);
                     navDivider.setVisibility(View.GONE);
                     chanContainer.setVisibility(View.GONE);
                     railView.setVisibility(View.GONE);
