@@ -4627,6 +4627,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             @Override public void run() {
                 if (!epgPanelOpen) return;
                 navPanel.setVisibility(View.GONE);
+                if (subColumn != null) subColumn.setVisibility(View.GONE);
                 navDivider.setVisibility(View.GONE);
                 railView.setVisibility(View.GONE);
                 if (subColumn != null) subColumn.setVisibility(View.GONE);
@@ -4651,6 +4652,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                 }).start();
 
         navPanel.setVisibility(View.VISIBLE);
+        if (subColumn != null) subColumn.setVisibility(View.VISIBLE);
         navDivider.setVisibility(View.VISIBLE);
         railView.setVisibility(View.VISIBLE);
         navPanel.animate()
@@ -4702,6 +4704,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             // 先恢复可见，再做淡入
             setPanelsInteractive(true);
             navPanel.setVisibility(View.VISIBLE);
+            if (subColumn != null) subColumn.setVisibility(View.VISIBLE);
             navDivider.setVisibility(View.VISIBLE);
             chanContainer.setVisibility(View.VISIBLE);
             railView.setVisibility(View.VISIBLE);
@@ -4749,6 +4752,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                     if (panelVisible) return;      // 期间又被唤出
                     setPanelsInteractive(false);
                     navPanel.setVisibility(View.GONE);
+                    if (subColumn != null) subColumn.setVisibility(View.GONE);
                     navDivider.setVisibility(View.GONE);
                     chanContainer.setVisibility(View.GONE);
                     railView.setVisibility(View.GONE);
