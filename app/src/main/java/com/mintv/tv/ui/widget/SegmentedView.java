@@ -85,28 +85,39 @@ public class SegmentedView extends android.view.View {
         return w;
     }
 
-    @Override
-    protected void onDraw(Canvas c) {
+    /** 选中态底色：主题色 30% 透明，每次绘制现算。 */
+    private static int selectionBg() {
+        int c = Theme.FOCUS_BLUE;
+        return (c & 0x00FFFFFF) | 0x4D000000;   // 0x4D ≈ 30%
+    }
+
+    @Override protected void onDraw(Canvas c) {
         float x = 0;
         float top = (getHeight() - h) / 2f;
         for (int i = 0; i < labels.length; i++) {
             boolean sel = i == selected;
             boolean foc = i == focusedOpt;
 
-            bg.setColor(sel ? Theme.DLG_OPT_SEL : Theme.DLG_OPT_BG);
+            // 实时从 Theme.FOCUS_BLUE 现算，不用 DLG_OPT_SEL。
+            //
+            // DLG_OPT_SEL 是静态字段，被 applyPalette / applyAccent
+            // 两处赋值，谁后跑谁赢 —— 出过"主题色变了但按钮还是绿的"
+            // 和"按钮完全没有底色"两次事故。这里改成每次绘制时算，
+            // 只依赖 FOCUS_BLUE 一个源头，不再可能出现两边不同步。
+            bg.setColor(sel ? selectionBg() : Theme.DLG_OPT_BG);
             rect.set(x, top, x + widths[i], top + h);
             path.reset();
             path.addRoundRect(rect, Theme.px(4), Theme.px(4), android.graphics.Path.Direction.CW);
             c.drawPath(path, bg);
 
             t.setTextSize(size);
-            t.setColor(sel ? Theme.DLG_OPT_TXT_ON : 0xFFE6E6E8);
+            t.setColor(sel ? 0xFFFFFFFF : 0xFFE6E6E8);
             float textX = x + padX;
             if (sel) {
-                t.setColor(Theme.DLG_CHECK);
+                t.setColor(Theme.FOCUS_BLUE);
                 c.drawText("✓", textX, top + h / 2f - (t.descent() + t.ascent()) / 2f, t);
                 textX += t.measureText("✓ ") ;
-                t.setColor(Theme.DLG_OPT_TXT_ON);
+                t.setColor(0xFFFFFFFF);
             }
             c.drawText(labels[i], textX, top + h / 2f - (t.descent() + t.ascent()) / 2f, t);
 

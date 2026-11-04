@@ -879,7 +879,12 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         t.setText(title);
         t.setTextColor(Theme.FOCUS_BLUE);
         t.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, Theme.sp(13));
-        t.setLetterSpacing(0.18f);
+        // 不用 letterSpacing：它会让 TextView 的测量宽度偏小，
+        // 配合 WRAP_CONTENT 在 LinearLayout 里可能被算成 0 宽 ——
+        // 表现就是"只看到横线，标题字不见了"。用 padding 拉开字距。
+        t.setPadding(0, 0, Theme.px(2), 0);
+        t.setMinWidth(Theme.px(56));
+        t.setGravity(Gravity.CENTER_VERTICAL);
         t.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
         // 不要 setIncludeFontPadding(false)：去掉字体 padding 之后
         // TextView 的测量高度会小于实际行高，文字被父布局裁掉 ——
