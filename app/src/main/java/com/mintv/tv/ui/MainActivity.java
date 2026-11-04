@@ -790,7 +790,8 @@ public class MainActivity extends Activity implements FocusEngine.Host {
      * 之后永久黑屏，只能手动切台。而绝大多数"无响应"是临时的
      * （服务端重启、切片还没生成），重连几次往往就好了。
      *
-     * <p>退避间隔 2s→4s→8s→16s→封顶 30s，避免疯狂重连把源打死。
+     * <p>间隔就是用户在「超时换源」里设的秒数 —— 设 8 秒就每 8 秒重连一次，
+     * 不做指数退避（用户设了个数，不该被程序偷偷改掉）。
      * 出画面后计数清零。
      */
     private void scheduleReconnect() {

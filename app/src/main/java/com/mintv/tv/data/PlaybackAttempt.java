@@ -228,11 +228,16 @@ public final class PlaybackAttempt {
         lowSpeedSince = -1;
     }
 
-    /** 退避间隔：2s → 4s → 8s → 封顶 30s。 */
+    /**
+     * 重连间隔 = 用户在「超时换源」里设的秒数。
+     *
+     * <p>不做指数退避：用户设了 8 秒，就是每 8 秒重连一次。
+     * 退避会让间隔一路涨到 30 秒 —— 用户设了个数，不该被程序
+     * 偷偷改掉。想让它等更久，去改设置。
+     */
     public long nextReconnectDelayMs() {
-        reconnectCount = Math.min(reconnectCount + 1, 10);
-        long d = 2000L << Math.min(reconnectCount - 1, 4);   // 2/4/8/16/32
-        return Math.min(d, 30000L);
+        reconnectCount++;
+        return timeoutMs > 0 ? timeoutMs : 8000;
     }
 
     public int reconnectCount() { return reconnectCount; }
