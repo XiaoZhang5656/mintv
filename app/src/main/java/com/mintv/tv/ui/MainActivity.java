@@ -187,11 +187,11 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     private TextView infoPageText;
     /** 关于页的免责声明块，独立成形，不混在正文里。 */
     private LinearLayout disclaimerBox;
-    /** 当前设置页的 Tab：0 账户登录 / 1 播放设置 / 2 手机助手 */
+    /** 当前设置页的 Tab：0 登录 / 1 设置 / 2 关于 / 3 订阅 */
     private int currentTab = 1;
     /** 焦点是否在顶部 Tab 条上。第一行按「上」进入，左右切页，下回列表。 */
     private boolean tabFocus = false;
-    /** Tab 下标：0 账户登录 / 1 播放设置 / 2 关于 / 3 手机助手 */
+    /** Tab 下标：0 登录 / 1 设置 / 2 关于 / 3 订阅 */
     private static final int TAB_SETTINGS = 1;
     private static final int TAB_ABOUT    = 2;
     private static final int TAB_HELPER   = 3;

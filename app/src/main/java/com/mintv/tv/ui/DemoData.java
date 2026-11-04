@@ -50,7 +50,13 @@ public final class DemoData {
         return 5;
     }
 
-    public static final String[] TABS = {"账户登录", "播放设置", "关于", "手机助手"};
+    /**
+     * 设置页的四个标签。
+     *
+     * <p>「手机助手」改叫「订阅」—— 那一页里是二维码 + 订阅列表，
+     * 用户找的是"我的源在哪"，不是"手机怎么连"。
+     */
+    public static final String[] TABS = {"登录", "设置", "关于", "订阅"};
 
     /**
      * 三张旧表保留成"视图"，内容从 {@link com.mintv.tv.ui.setting.Settings}
