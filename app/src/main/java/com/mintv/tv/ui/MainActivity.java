@@ -829,11 +829,29 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             @Override public void onPicked(int index) {
                 if (index == Theme.accentIndex) return;    // 没换色，别白重建
                 Theme.applyAccent(index);
+                // 用 commit 不用 apply：recreate 紧接着就要读这个值，
+                // apply 是异步落盘，虽然内存里已经更新，但换成 commit
+                // 能排除掉"重建时读到旧值"这一整类可能。
                 getSharedPreferences(PREF, MODE_PRIVATE).edit()
-                        .putInt(KEY_ACCENT, index).apply();
-                if (player != null) { player.stop(); player.release(); player = null; }
-                if (playerManager != null) { playerManager.release(); playerManager = null; }
-                recreate();
+                        .putInt(KEY_ACCENT, index).commit();
+
+                // 先停播放器再重建。不先停的话 recreate 期间新旧两个
+                // Activity 会各持一个播放器，出现"两个台同时出声"。
+                try {
+                    if (playerManager != null) playerManager.release();
+                } catch (Throwable ignored) { }
+                playerManager = null;
+                player = null;
+
+                android.util.Log.i("MinTV", "accent -> " + index + "，准备重建界面");
+                // 停一个事件循环再重建：让 release 先把渲染目标交出去，
+                // 立刻 recreate 有概率撞上 Surface 销毁回调。
+                new android.os.Handler(android.os.Looper.getMainLooper())
+                        .postDelayed(new Runnable() {
+                            @Override public void run() {
+                                if (!isFinishing()) recreate();
+                            }
+                        }, 150);
             }
             @Override public void onCancelled() { }
         });
