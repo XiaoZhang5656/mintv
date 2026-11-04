@@ -4680,6 +4680,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             navDivider.setVisibility(View.VISIBLE);
             chanContainer.setVisibility(View.VISIBLE);
             railView.setVisibility(View.VISIBLE);
+            if (subColumn != null) subColumn.setVisibility(View.VISIBLE);
             scrim.setVisibility(View.VISIBLE);
         }
 
@@ -4687,6 +4688,20 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         navDivider.animate().alpha(to).setDuration(Theme.T_PANEL).start();
         chanContainer.animate().alpha(to).setDuration(Theme.T_PANEL).start();
         railView.animate().alpha(to).setDuration(Theme.T_PANEL).start();
+        // 订阅列在主面板里，跟着一起显隐。
+        // 之前漏了它：全屏播放时订阅列留在左边占着 200px。
+        if (subColumn != null) {
+            subColumn.animate().alpha(to).setDuration(Theme.T_PANEL).start();
+            if (!visible) {
+                navPanel.postDelayed(new Runnable() {
+                    @Override public void run() {
+                        if (subColumn != null && !panelVisible) {
+                            subColumn.setVisibility(View.GONE);
+                        }
+                    }
+                }, Theme.T_PANEL + 40);
+            }
+        }
         scrim.animate().alpha(visible ? 1f : 0f).setDuration(Theme.T_PANEL).start();
         // 时钟以前完全不参与面板显隐，所以纯播放态右上角一直挂着日期时间。
         // 现在按设置项决定：时钟显示=显示 时随面板一起淡出，=常显 时始终可见。
