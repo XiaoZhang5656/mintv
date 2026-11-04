@@ -65,6 +65,41 @@
   .copy{font-size:11px;color:var(--blue);background:var(--blue-dim);
     padding:3px 9px;border-radius:6px;border:0;font-family:inherit}
 
+  /* 子 tab：代码 / 日志 */
+  .subtabs{display:flex;gap:8px;margin-bottom:12px}
+  .stab{flex:1;padding:10px 0;border-radius:10px;border:1px solid var(--line);
+    background:var(--card);color:var(--muted);font-size:14px;font-family:inherit;
+    position:relative}
+  .stab.on{background:var(--blue-dim);color:var(--blue);border-color:var(--blue-dim);
+    font-weight:600}
+  .stab .badge{display:inline-block;min-width:16px;padding:0 5px;border-radius:8px;
+    background:#E5484D;color:#fff;font-size:10px;line-height:16px;margin-left:4px;
+    vertical-align:1px}
+
+  .logacts{display:flex;gap:8px;margin-bottom:10px}
+  .lact{flex:1;padding:10px 0;border-radius:10px;border:1px solid var(--line);
+    background:var(--card);color:var(--text);font-size:13px;font-family:inherit}
+  .lact.danger{color:#D9484D;border-color:rgba(229,72,77,.35);background:rgba(229,72,77,.06)}
+
+  .logs{font-family:ui-monospace,Menlo,monospace}
+  .lrow{background:var(--card);border-radius:10px;padding:9px 11px;margin-bottom:5px;
+    display:flex;gap:8px;font-size:12px;line-height:1.6;cursor:pointer}
+  .lrow:active{background:var(--hover)}
+  .ltm{color:var(--dim);flex:0 0 auto;font-size:11px;padding-top:1px}
+  .llv{flex:0 0 auto;font-size:10px;font-weight:700;padding:1px 5px;border-radius:3px;
+    height:16px;line-height:14px;margin-top:1px}
+  .llv.info{background:rgba(138,147,156,.15);color:#6B7684}
+  .llv.warn{background:rgba(217,138,43,.18);color:#B87417}
+  .llv.error{background:rgba(229,72,77,.18);color:#C33}
+  .lmsg{flex:1;color:var(--text);word-break:break-word;min-width:0}
+  .lrow.warn{background:#FFF7EA;border-left:2px solid #D98A2B}
+  .lrow.error{background:#FFF2F2;border-left:2px solid #E5484D}
+  .lrow.error .lmsg{color:#B03030}
+  .lstack{margin-top:6px;padding-top:6px;border-top:1px solid var(--line)}
+  .lstack pre{margin:0;font-size:11px;color:var(--dim);white-space:pre-wrap;
+    line-height:1.6;font-family:ui-monospace,monospace}
+  .lempty{text-align:center;color:var(--muted);font-size:14px;padding:44px 16px;line-height:1.8}
+
   /* 底部操作菜单 */
   .sheet{position:fixed;inset:0;background:rgba(0,0,0,.5);display:none;
     align-items:flex-end;z-index:30}
@@ -110,7 +145,6 @@
 <div class="navtabs">
   <a href="/">订阅</a>
   <a class="on">脚本</a>
-  <a href="/logs">日志</a>
   <a href="channels.html">频道</a>
   <a href="remote">遥控</a>
 </div>
@@ -141,6 +175,12 @@
     <button class="btn-save" id="btnSave" onclick="saveScript()" disabled>保存</button>
   </div>
 
+  <div class="subtabs">
+    <button class="stab on" data-pane="code" onclick="switchPane('code')">代码</button>
+    <button class="stab" data-pane="log" onclick="switchPane('log')">日志 <span id="errBadge"></span></button>
+  </div>
+
+  <div id="codePane">
   <div class="status wait" id="edStatus"><span>输入后自动检查语法</span></div>
 
   <div class="editor">
@@ -151,6 +191,16 @@
 
   <div id="errBox"></div>
   <p class="hint" id="routesHint"></p>
+  </div><!-- /codePane -->
+
+  <div id="logPane" style="display:none">
+    <div class="logacts">
+      <button class="lact" onclick="loadLogs(true)">刷新</button>
+      <button class="lact" onclick="copyLogs()">复制</button>
+      <button class="lact danger" onclick="clearLogs()">清空</button>
+    </div>
+    <div class="logs" id="logList"></div>
+  </div>
 </div>
 
 <input type="file" id="filePick" accept=".js,text/javascript" style="display:none">
@@ -438,6 +488,8 @@ function openEditor(name) {
       setStatus('wait', '输入后自动检查语法');
       document.getElementById('btnSave').disabled = true;
       updateGutter();
+      switchPane('code');          // 进来默认看代码
+      loadLogs(true);              // 顺便把这个脚本的日志拉下来
       window.scrollTo(0, 0);
     });
 }
@@ -563,6 +615,91 @@ function saveScript() {
     toast('已保存，立即生效');
     document.getElementById('btnSave').disabled = true;
   }).catch(function(){ toast('保存失败'); });
+}
+
+// ═══════ 子页切换：代码 / 日志 ═══════
+function switchPane(pane) {
+  var stabs = document.querySelectorAll('.stab');
+  for (var i = 0; i < stabs.length; i++) {
+    stabs[i].classList.toggle('on', stabs[i].getAttribute('data-pane') === pane);
+  }
+  document.getElementById('codePane').style.display = pane === 'code' ? 'block' : 'none';
+  document.getElementById('logPane').style.display  = pane === 'log'  ? 'block' : 'none';
+  if (pane === 'log') loadLogs(false);
+}
+
+// ═══════ 当前脚本的日志 ═══════
+var LOGS = [];
+var LOG_EXPAND = {};
+
+function loadLogs(force) {
+  if (!editing) return;
+  var url = '/api/logs?script=' + encodeURIComponent(editing);
+  fetch(url).then(function(r){ return r.json(); }).then(function(d){
+    LOGS = (d && d.items) || [];
+    // 错误数放在 tab 上，不用点进去看
+    var errs = 0;
+    for (var i = 0; i < LOGS.length; i++) if (LOGS[i].level === 'error') errs++;
+    var b = document.getElementById('errBadge');
+    b.className = errs > 0 ? 'badge' : '';
+    b.textContent = errs > 0 ? String(errs) : '';
+    renderLogs();
+  }).catch(function(){});
+}
+
+function renderLogs() {
+  var box = document.getElementById('logList');
+  if (!LOGS.length) {
+    box.innerHTML = '<div class="lempty">这个脚本还没有日志<br>播放一次它的路由就会产生</div>';
+    return;
+  }
+  var html = '';
+  for (var i = LOGS.length - 1; i >= 0; i--) {
+    var e = LOGS[i], open = LOG_EXPAND[e.id];
+    html += '<div class="lrow ' + e.level + '" data-id="' + e.id + '">'
+      + '<span class="ltm">' + fmtT(e.time) + '</span>'
+      + '<span class="llv ' + e.level + '">' + e.level.toUpperCase() + '</span>'
+      + '<span class="lmsg">' + esc(e.message)
+      + (e.stack ? '<div class="lstack"><pre>' + esc(open ? e.stack : '') + '</pre>'
+          + (open ? '' : '<span style="font-size:11px;color:var(--dim)">点标题展开</span>')
+          + '</div>' : '')
+      + '</span></div>';
+  }
+  box.innerHTML = html;
+  var rows = box.querySelectorAll('.lrow');
+  for (var j = 0; j < rows.length; j++) {
+    rows[j].addEventListener('click', function() {
+      var id = +this.getAttribute('data-id');
+      if (LOG_EXPAND[id]) delete LOG_EXPAND[id]; else LOG_EXPAND[id] = true;
+      renderLogs();
+    });
+  }
+}
+
+function fmtT(ms) {
+  var d = new Date(ms);
+  function p(n){ return n < 10 ? '0' + n : '' + n; }
+  return p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
+}
+
+function copyLogs() {
+  if (!LOGS.length) { toast('没有日志'); return; }
+  var out = [];
+  for (var i = 0; i < LOGS.length; i++) {
+    var e = LOGS[i];
+    var line = '[' + fmtT(e.time) + '] ' + e.level.toUpperCase() + ' ' + e.message;
+    if (e.stack) line += '\n' + e.stack;
+    out.push(line);
+  }
+  copyText(out.join('\n'));
+}
+
+function clearLogs() {
+  if (!editing) return;
+  if (!confirm('清空所有日志？')) return;
+  fetch('/api/logs', { method:'DELETE' }).then(function(){
+    toast('已清空'); loadLogs(true);
+  });
 }
 
 // 离开页面前提醒

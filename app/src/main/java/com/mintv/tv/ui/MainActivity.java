@@ -153,7 +153,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     private com.mintv.tv.data.RemoteServer remote;
     private int remotePort = -1;
     private LinearLayout helperPage;
-    private LinearLayout infoPageWrap;
+    private View infoPageWrap;
 
     /**
      * 系统 AlertDialog 正在显示。
@@ -176,6 +176,8 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     private TextView helperState;
     private LinearLayout helperSubs;
     private TextView infoPageText;
+    /** 关于页的免责声明块，独立成形，不混在正文里。 */
+    private LinearLayout disclaimerBox;
     /** 当前设置页的 Tab：0 账户登录 / 1 播放设置 / 2 手机助手 */
     private int currentTab = 1;
     /** 焦点是否在顶部 Tab 条上。第一行按「上」进入，左右切页，下回列表。 */
@@ -297,6 +299,8 @@ public class MainActivity extends Activity implements FocusEngine.Host {
 
         FrameLayout root = new FrameLayout(this);
         this.rootView = root;
+        // 统一通知条：顶部居中，全应用只有这一个提示入口
+        com.mintv.tv.ui.widget.NotifyBar.attach(root);
         // 底色必须跟随主题：这是屏幕最大的面积，
         // 写死黑色的话换主题看起来"完全没变"。
         root.setBackgroundColor(Theme.BG);
@@ -1029,6 +1033,37 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     }
 
     /** 后台拉源，成功后重建界面。失败就继续用缓存/示范。 */
+    /**
+     * 把网络异常翻译成人话。
+     *
+     * <p>原来直接把异常 toString() 拼进 toast，用户看到的是
+     * 「java.net.ConnectException: Failed to connect to xxx.com/...:443」
+     * —— 类名、域名、端口号，对用户零信息量，而且长到横跨半个屏幕。
+     *
+     * <p>技术细节走 Log，界面上只留「能不能解决、怎么解决」。
+     */
+    private static String friendlySourceError(String err) {
+        if (err == null || err.isEmpty()) return "源拉取失败";
+        String e = err.toLowerCase(java.util.Locale.US);
+        if (e.contains("connectexception") || e.contains("failed to connect")
+                || e.contains("unknownhost") || e.contains("unreachable")
+                || e.contains("no route")) {
+            return "源拉取失败：网络连不上，检查网络或换个源地址";
+        }
+        if (e.contains("timeout") || e.contains("timed out")) {
+            return "源拉取失败：连接超时，稍后重试";
+        }
+        if (e.contains("404")) return "源拉取失败：地址不存在（404）";
+        if (e.contains("403")) return "源拉取失败：没有访问权限（403）";
+        if (e.contains("ssl") || e.contains("certificate")) {
+            return "源拉取失败：证书校验不通过";
+        }
+        if (e.contains("cleartext")) {
+            return "源拉取失败：该地址不允许明文 HTTP";
+        }
+        return "源拉取失败";
+    }
+
     private void fetchSourceAsync(final String url) {
         new Thread(new Runnable() {
             @Override public void run() {
@@ -1067,7 +1102,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                     ui.post(new Runnable() {
                         @Override public void run() {
                             if (osd != null) {
-                                osd.toast(err == null ? "源拉取失败" : "源拉取失败：" + err);
+                                osd.toast(friendlySourceError(err));
                             }
                         }
                     });
@@ -4302,6 +4337,12 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         // 非「播放设置」两个 Tab 的说明页，和列表占同一个位置
         infoPage = new LinearLayout(this);
         infoPage.setOrientation(LinearLayout.VERTICAL);
+        // 内容不满一屏时垂直居中，别顶在上面留一大片空。
+        // 超过一屏时 ScrollView 的 fillViewport 不起作用，gravity 也失效，
+        // 自然回到顶对齐 + 滚动 —— 不会切掉顶部。
+        // 只有垂直方向居中：内容不满一屏时别顶在上面。
+        // 水平方向保持左对齐 —— 版本号、条款这类文字居中后换行会参差。
+        infoPage.setGravity(Gravity.CENTER_VERTICAL);
         infoPage.setPadding(Theme.px(28), Theme.px(20), Theme.px(28), Theme.px(20));
         infoPage.setVisibility(View.GONE);
         infoPageText = new TextView(this);
@@ -4310,13 +4351,61 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         infoPageText.setLineSpacing(Theme.px(6), 1f);
         infoPage.addView(infoPageText);
 
+        // 免责声明。
+        //
+        // 之前是「淡背景块 + 左侧竖条」，那个 5% 白叠在深色底上会发灰，
+        // 看起来像一块没洗干净的补丁。现在改成一条通栏细线 + 左对齐文字，
+        // 也就是微信/B站那种法律条款的排法：不加框，靠留白和分隔线区分。
+        disclaimerBox = new LinearLayout(this);
+        disclaimerBox.setOrientation(LinearLayout.VERTICAL);
+        disclaimerBox.setVisibility(View.GONE);
+
+        View dRule = new View(this);
+        dRule.setBackgroundColor(0x1FFFFFFF);
+        LinearLayout.LayoutParams ruleLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, Theme.px(1));
+        ruleLp.topMargin = Theme.px(26);
+        ruleLp.bottomMargin = Theme.px(20);
+        disclaimerBox.addView(dRule, ruleLp);
+
+        TextView dTitle = new TextView(this);
+        dTitle.setText("免责声明");
+        dTitle.setTextColor(Theme.FOCUS_BLUE);
+        dTitle.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, Theme.sp(17));
+        dTitle.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+        dTitle.setLetterSpacing(0.08f);
+        disclaimerBox.addView(dTitle);
+
+        TextView dBody = new TextView(this);
+        dBody.setText("一、本应用仅为本地播放工具，不提供、不存储、不分发任何音视频内容。\n"
+                + "二、所有直播源、EPG 数据与脚本均由用户自行添加，其来源与本应用无关。\n"
+                + "三、用户应确保所添加内容的来源合法，并自行承担使用过程中的全部责任。\n"
+                + "四、本应用按「现状」提供，不对可用性、稳定性及适用性作任何担保。\n"
+                + "五、使用本应用即表示已阅读并同意以上条款。");
+        dBody.setTextColor(0xFF8A939C);
+        dBody.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, Theme.sp(15));
+        dBody.setLineSpacing(Theme.px(9), 1.1f);
+        LinearLayout.LayoutParams dbLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        dbLp.topMargin = Theme.px(12);
+        disclaimerBox.addView(dBody, dbLp);
+
+        infoPage.addView(disclaimerBox, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
         // 只有「关于」页才显示的检测更新按钮
         updateBtn = new TextView(this);
         updateBtn.setText("检测更新");
-        updateBtn.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, Theme.sp(19));
+        updateBtn.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, Theme.sp(15));
         updateBtn.setGravity(Gravity.CENTER);
-        updateBtn.setPadding(Theme.px(28), Theme.px(14), Theme.px(28), Theme.px(14));
-        updateBtn.setBackgroundColor(Theme.DLG_OPT_BG);
+        updateBtn.setPadding(Theme.px(22), Theme.px(11), Theme.px(22), Theme.px(11));
+        // 圆角 + 细边框：原来是纯色方块，贴在免责声明下面像块补丁
+        android.graphics.drawable.GradientDrawable ubBg =
+                new android.graphics.drawable.GradientDrawable();
+        ubBg.setCornerRadius(Theme.px(11));
+        ubBg.setColor(0x16FFFFFF);
+        ubBg.setStroke(Theme.px(1), 0x2AFFFFFF);
+        updateBtn.setBackground(ubBg);
         updateBtn.setTextColor(Theme.TEXT);
         updateBtn.setFocusable(true);
         updateBtn.setClickable(true);
@@ -4326,18 +4415,20 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         });
         LinearLayout.LayoutParams ubLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        ubLp.topMargin = Theme.px(24);
+        ubLp.topMargin = Theme.px(28);
+        ubLp.bottomMargin = Theme.px(8);
         infoPage.addView(updateBtn, ubLp);
 
-        // 内容在整页里垂直居中：外面套一层 LinearLayout，上下各加弹性空白。
-        // 之前是顶部对齐，内容少的时候下面一大片空，看起来像"没居中"。
-        LinearLayout infoWrap = new LinearLayout(this);
-        infoWrap.setOrientation(LinearLayout.VERTICAL);
+        // 内容可能超出一屏（关于页加了免责声明之后就超了），所以必须能滚。
+        //
+        // 原来这里是 LinearLayout + 上下弹性空白做垂直居中，
+        // 内容是裁在固定高度里的 —— 一屏放不下就直接看不见，还不报错。
+        // 换成 ScrollView 之后，顶部对齐、超出滚动，内容再长也不会丢。
+        android.widget.ScrollView infoWrap = new android.widget.ScrollView(this);
         infoWrap.setVisibility(View.GONE);
-        infoWrap.addView(new View(this), new LinearLayout.LayoutParams(1, 0, 1f));
-        infoWrap.addView(infoPage, new LinearLayout.LayoutParams(
+        infoWrap.setFillViewport(true);
+        infoWrap.addView(infoPage, new android.view.ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-        infoWrap.addView(new View(this), new LinearLayout.LayoutParams(1, 0, 1f));
         infoPageWrap = infoWrap;
         card.addView(infoWrap, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, rowsLp.height));
@@ -4825,8 +4916,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                     + "（API " + android.os.Build.VERSION.SDK_INT + "）\n"
                     + "播放内核  libVLC 3.7.7\n"
                     + "界面      全部自绘，零第三方 UI 控件\n\n"
-                    + "本应用不收集任何数据，不做联网统计。\n"
-                    + "直播源由你自行配置，播放内容与本应用无关。";
+                    + "本应用不收集任何数据，不做联网统计。";
         }
         return "手机助手\n\n"
                 + "同一 Wi-Fi 下用手机浏览器遥控这台盒子。\n\n"
@@ -4840,6 +4930,10 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     private void fillInfoPage(int tab) {
         if (infoPageText == null) return;
         infoPageText.setText(infoText(tab));
+        // 免责声明只在「关于」页出现
+        if (disclaimerBox != null) {
+            disclaimerBox.setVisibility(tab == TAB_ABOUT ? View.VISIBLE : View.GONE);
+        }
     }
 
     private void openSettings() {

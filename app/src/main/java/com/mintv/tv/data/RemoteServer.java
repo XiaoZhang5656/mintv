@@ -341,8 +341,6 @@ public final class RemoteServer {
             name = "index.html";
         } else if (path.equals("/scripts")) {
             name = "scripts.html";
-        } else if (path.equals("/logs")) {
-            name = "logs.html";
         } else if (path.equals("/channels")) {
             name = "channels.html";
         } else {

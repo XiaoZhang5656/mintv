@@ -222,12 +222,16 @@ public class OsdView extends View {
         }
     };
 
-    /** 一次性提示，2 秒后自动消失，不会像状态文本那样一直挂着。 */
+    /**
+     * 一次性提示。
+     *
+     * <p>现在统一走 {@link com.mintv.tv.ui.widget.NotifyBar} —— 顶部居中、
+     * 四种语义、宽度随内容。以前在 OSD 自己画，位置在底部，会和进度条撞；
+     * 而且 OSD 淡出时它会跟着消失，用户经常没看见。
+     */
     public void toast(String text) {
-        toastText = text;
-        removeCallbacks(toastTask);
-        postDelayed(toastTask, 2000);
-        invalidate();
+        if (text == null || text.isEmpty()) return;
+        com.mintv.tv.ui.widget.NotifyBar.info(text);
     }
 
     public void setStatus(String s) {
