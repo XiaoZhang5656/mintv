@@ -342,6 +342,10 @@ public class MainActivity extends Activity implements FocusEngine.Host {
 
         buildPlayer(root);
         buildOverlay(root);
+        // buildOverlay 里才创建 subColumn，而 loadPlaylist 在它之前就跑了 ——
+        // 那次 fillSubColumn 撞上 subColumn==null 直接返回，
+        // 导致订阅列只剩标题、列表永远是空的。这里补一次。
+        fillSubColumn();
         buildDialog(root);
         // 开屏：极简一屏，App 名 + 版本，900ms 后淡出。
         // 作用不是"好看"，是把"正在加载列表/EPG"这段不可避免的等待遮住，
