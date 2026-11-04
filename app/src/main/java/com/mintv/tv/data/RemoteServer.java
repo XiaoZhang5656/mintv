@@ -236,6 +236,48 @@ public final class RemoteServer {
             return;
         }
 
+        // ---- 本地源上传 ----
+        // 把手机选的文件内容写成一份本地源，返回 {ok, url:"local://xxx"}
+        // 前端拿到 url 之后调 /api/subs 的 add 动作建订阅。
+        if ("/api/subs/local".equals(path)) {
+            if (!"POST".equals(method)) {
+                send(out, 405, "application/json; charset=utf-8", "{\"ok\":false}");
+                return;
+            }
+            try {
+                String name = jsonField(body, "name");
+                String content = jsonField(body, "content");
+                if (name == null || name.isEmpty() || content == null) {
+                    send(out, 400, "application/json; charset=utf-8",
+                            "{\"ok\":false,\"msg\":\"缺少 name 或 content\"}");
+                    return;
+                }
+                // 文件名只留安全字符，避免路径穿越
+                String safe = name.replaceAll("[^\\w.\\-\\u4e00-\\u9fa5]", "_");
+                if (safe.length() > 120) safe = safe.substring(0, 120);
+                java.io.File base = appCtx.getExternalFilesDir(null);
+                if (base == null) base = appCtx.getFilesDir();
+                java.io.File dir = new java.io.File(base, "sources");
+                if (!dir.exists()) {
+                    //noinspection ResultOfMethodCallIgnored
+                    dir.mkdirs();
+                }
+                java.io.File f = new java.io.File(dir, safe);
+                java.io.FileOutputStream fos = new java.io.FileOutputStream(f);
+                try { fos.write(content.getBytes("UTF-8")); } finally { fos.close(); }
+
+                org.json.JSONObject o = new org.json.JSONObject();
+                o.put("ok", true);
+                o.put("url", "local://" + safe);
+                o.put("size", f.length());
+                send(out, 200, "application/json; charset=utf-8", o.toString());
+            } catch (Exception e) {
+                send(out, 500, "application/json; charset=utf-8",
+                        "{\"ok\":false,\"msg\":\"" + esc(e.getMessage()) + "\"}");
+            }
+            return;
+        }
+
         // ---- 脚本 ----
         if ("/api/scripts".equals(path)) {
             ScriptStore store = new ScriptStore(appCtx);

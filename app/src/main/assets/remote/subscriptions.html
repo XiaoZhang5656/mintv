@@ -66,6 +66,16 @@
   <input id="fEpgNew" placeholder="https://…/e.xml.gz">
   <p class="hint">每个订阅可以绑不同的 EPG。留空表示用下面的全局默认。</p>
   <button class="primary big" onclick="addSub()">添加</button>
+
+  <div style="display:flex;align-items:center;gap:10px;margin:14px 0 4px">
+    <div style="flex:1;height:1px;background:var(--line)"></div>
+    <span style="font-size:12.5px;color:var(--dim)">或者</span>
+    <div style="flex:1;height:1px;background:var(--line)"></div>
+  </div>
+  <button class="primary" style="background:var(--card2);color:var(--text)"
+    onclick="pickLocalSource()">上传本地文件（m3u / txt）</button>
+  <p class="hint">文件存在盒子上，不走网络。适合放到 GitHub 拉不动、或者想固定住一份源不再变的情况。</p>
+  <input type="file" id="fLocal" accept=".m3u,.m3u8,.txt,text/plain" style="display:none">
 </div>
 
 <p class="sect">全局默认 EPG</p>
@@ -178,6 +188,44 @@ function load() {
     document.getElementById('dot').className = 'dot';
     document.getElementById('conn').textContent = '连接断开';
   });
+}
+
+/** 选一个本地文件，上传到盒子，然后建成 local:// 订阅 */
+function pickLocalSource() {
+  var f = document.getElementById('fLocal');
+  f.value = '';
+  f.onchange = function () {
+    var file = f.files && f.files[0];
+    if (!file) return;
+    var name = document.getElementById('fName').value.trim();
+    if (!name) name = file.name.replace(/\.[^.]+$/, '');
+    toast('上传中…');
+    var fr = new FileReader();
+    fr.onload = function () {
+      fetch('/api/subs/local', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: file.name, content: String(fr.result) })
+      }).then(function (r) { return r.json(); })
+        .then(function (d) {
+          if (!d.ok) { toast(d.msg || '上传失败'); return null; }
+          return MintvApi.subsAction('save', {
+            name: name, url: d.url, headers: '', epgUrl: ''
+          });
+        })
+        .then(function (r) {
+          if (!r) return;
+          if (r.ok) {
+            toast('已导入 ' + name);
+            document.getElementById('fName').value = '';
+            load();
+          } else toast((r.msg) || '添加失败');
+        })
+        .catch(function () { toast('上传失败'); });
+    };
+    fr.readAsText(file);
+  };
+  f.click();
 }
 
 function addSub() {

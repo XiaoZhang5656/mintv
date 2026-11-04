@@ -340,6 +340,9 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         sName.setTextColor(Theme.TEXT);
         sName.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, Theme.sp(52));
         sName.setLetterSpacing(0.1f);
+        // letterSpacing 在部分 ROM 上不计入测量宽度，最后一个字会被裁掉
+        // （MinTV 显示成 MinT）。右边补一段内边距把余量让出来。
+        sName.setPadding(0, 0, Theme.px(14), 0);
         splashBox.addView(sName);
 
         // 短线：用强调色，换主题色它跟着变
@@ -373,15 +376,19 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         // 也显得像在求人同意。
         android.widget.TextView sDisc = new android.widget.TextView(this);
         sDisc.setText("本软件仅为本地播放工具，不提供、不存储任何音视频内容。\n"
-                + "所有直播源由用户自行添加，请确保来源合法。");
+                + "所有直播源由用户自行添加，请确保来源合法。\n"
+                + "不主张任何频道内容的著作权，权利归原权利人所有。\n"
+                + "如不接受上述条款，请停止使用并卸载本应用。");
         sDisc.setGravity(android.view.Gravity.CENTER);
-        sDisc.setTextColor(0xFF4D5560);
-        sDisc.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, Theme.sp(14));
-        sDisc.setLineSpacing(Theme.px(6), 1.1f);
+        // 原来 #4D5560 在深色底上几乎看不见，等于没写。
+        // 但也不能用正文色 —— 它是告知，不该和品牌名争注意力。
+        sDisc.setTextColor(0xFF9AA3AE);
+        sDisc.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, Theme.sp(15));
+        sDisc.setLineSpacing(Theme.px(8), 1.15f);
         FrameLayout.LayoutParams discLp = new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         discLp.gravity = android.view.Gravity.BOTTOM;
-        discLp.bottomMargin = Theme.px(104);
+        discLp.bottomMargin = Theme.px(76);
         splash.addView(sDisc, discLp);
 
         root.addView(splash, new FrameLayout.LayoutParams(
@@ -612,6 +619,93 @@ public class MainActivity extends Activity implements FocusEngine.Host {
      * 里就开始播，等旧 Activity 释放会有一段两个实例同时出声。
      */
     private static final int REQ_SCRIPT_DIR = 4001;
+    private static final int REQ_LOCAL_SOURCE = 4002;
+
+    /**
+     * 从本机 / U 盘导入一份源文件。
+     *
+     * <p>读完之后内容会**复制**到 App 目录，不是引用原文件 ——
+     * 否则拔了 U 盘源就没了。
+     */
+    private void pickLocalSource() {
+        try {
+            android.content.Intent i = new android.content.Intent(
+                    android.content.Intent.ACTION_OPEN_DOCUMENT);
+            i.addCategory(android.content.Intent.CATEGORY_OPENABLE);
+            i.setType("*/*");
+            i.putExtra(android.content.Intent.EXTRA_MIME_TYPES,
+                    new String[]{"text/plain", "text/x-mpegurl", "application/x-mpegurl",
+                                 "audio/mpegurl", "application/octet-stream"});
+            startActivityForResult(i, REQ_LOCAL_SOURCE);
+        } catch (Throwable t) {
+            osd.toast("这台设备没有文件选择器");
+        }
+    }
+
+    /** 读 SAF 选中的文件 → 存进 sources/ → 建订阅并切过去。 */
+    private void importLocalSource(final android.net.Uri uri) {
+        if (uri == null) return;
+        new Thread(new Runnable() {
+            @Override public void run() {
+                String display = "imported.m3u";
+                String content = null;
+                try {
+                    android.database.Cursor c = getContentResolver().query(uri,
+                            new String[]{android.provider.OpenableColumns.DISPLAY_NAME},
+                            null, null, null);
+                    if (c != null) {
+                        if (c.moveToFirst()) {
+                            String n = c.getString(0);
+                            if (n != null && !n.isEmpty()) display = n;
+                        }
+                        c.close();
+                    }
+                    java.io.InputStream in = getContentResolver().openInputStream(uri);
+                    if (in != null) {
+                        java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+                        byte[] buf = new byte[8192];
+                        int n;
+                        while ((n = in.read(buf)) > 0) bos.write(buf, 0, n);
+                        in.close();
+                        content = new String(bos.toByteArray(),
+                                java.nio.charset.StandardCharsets.UTF_8);
+                    }
+                } catch (Throwable ignored) { }
+
+                final String bodyText = content;
+                final String fileName = display;
+                ui.post(new Runnable() {
+                    @Override public void run() {
+                        if (bodyText == null || bodyText.trim().isEmpty()) {
+                            osd.toast("文件读不到内容");
+                            return;
+                        }
+                        try {
+                            String safe = fileName.replaceAll("[^\\w.\\-\\u4e00-\\u9fa5]", "_");
+                            java.io.File f = new java.io.File(localSourceDir(), safe);
+                            java.io.FileOutputStream fos = new java.io.FileOutputStream(f);
+                            try { fos.write(bodyText.getBytes("UTF-8")); } finally { fos.close(); }
+
+                            com.mintv.tv.data.SubscriptionStore.Sub sub =
+                                    new com.mintv.tv.data.SubscriptionStore.Sub(
+                                            "local" + System.currentTimeMillis(),
+                                            fileName.replaceAll("\\.[^.]+$", ""),
+                                            "local://" + safe);
+                            com.mintv.tv.data.SubscriptionStore.upsert(MainActivity.this, sub);
+                            com.mintv.tv.data.SubscriptionStore.setActive(
+                                    MainActivity.this, sub.id);
+
+                            applyPlaylist(bodyText);
+                            saveSelections();
+                            osd.toast("已导入 " + fileName + " · " + channels.size() + " 个频道");
+                        } catch (Throwable t) {
+                            osd.toast("导入失败：" + t.getClass().getSimpleName());
+                        }
+                    }
+                });
+            }
+        }, "local-import").start();
+    }
 
     /**
      * 让用户选脚本目录。
@@ -636,6 +730,12 @@ public class MainActivity extends Activity implements FocusEngine.Host {
 
     @Override
     protected void onActivityResult(int req, int res, android.content.Intent data) {
+        if (req == REQ_LOCAL_SOURCE) {
+            if (res == RESULT_OK && data != null) {
+                importLocalSource(data.getData());
+            }
+            return;
+        }
         if (req == REQ_SCRIPT_DIR) {
             if (res == RESULT_OK && data != null && data.getData() != null) {
                 com.mintv.tv.data.ScriptDir.setTreeUri(this, data.getData());
@@ -1166,7 +1266,64 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         return "源拉取失败";
     }
 
+    /** 本地源的存放目录：Android/data/<包名>/files/sources */
+    private java.io.File localSourceDir() {
+        java.io.File base = getExternalFilesDir(null);
+        if (base == null) base = getFilesDir();
+        java.io.File d = new java.io.File(base, "sources");
+        if (!d.exists()) {
+            //noinspection ResultOfMethodCallIgnored
+            d.mkdirs();
+        }
+        return d;
+    }
+
+    /**
+     * 本地源：直接从文件读，不走网络、不发 HTTP。
+     *
+     * <p>地址形如 {@code local://我的源.m3u}。文件名限制在 sources 目录内，
+     * 拦 ".." 和斜杠，避免这个协议被用来读任意文件。
+     */
+    private String readLocalSource(String url) {
+        try {
+            String name = url.substring("local://".length());
+            if (name.isEmpty() || name.contains("..") || name.contains("/") || name.contains("\\")) {
+                return null;
+            }
+            java.io.File f = new java.io.File(localSourceDir(), name);
+            if (!f.isFile()) return null;
+            java.io.FileInputStream in = new java.io.FileInputStream(f);
+            try {
+                java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+                byte[] buf = new byte[8192];
+                int n;
+                while ((n = in.read(buf)) > 0) bos.write(buf, 0, n);
+                return new String(bos.toByteArray(), java.nio.charset.StandardCharsets.UTF_8);
+            } finally {
+                try { in.close(); } catch (Exception ignored) { }
+            }
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
     private void fetchSourceAsync(final String url) {
+        // 本地源：不联网，直接读文件，走完同样的解析和落库流程
+        if (url != null && url.startsWith("local://")) {
+            final String body = readLocalSource(url);
+            ui.post(new Runnable() {
+                @Override public void run() {
+                    if (body == null || body.trim().isEmpty()) {
+                        if (osd != null) osd.toast("本地源读不到内容");
+                        return;
+                    }
+                    applyPlaylist(body);
+                    SourceStore.saveBody(MainActivity.this, body, null, 0);
+                    if (osd != null) osd.toast("已加载本地源：" + channels.size() + " 个频道");
+                }
+            });
+            return;
+        }
         new Thread(new Runnable() {
             @Override public void run() {
                 // 统一走 Http：结构不对（HTML/JSON）在读的时候就中止
@@ -1772,6 +1929,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     private static final String KEY_HIDDEN_CATS = "hidden_cats";
     private static final int ROW_GROUP_MGR= com.mintv.tv.ui.setting.Settings.IDX_GROUP_MGR;
     private static final int ROW_SCRIPT_DIR = com.mintv.tv.ui.setting.Settings.IDX_SCRIPT_DIR;
+    private static final int ROW_LOCAL_IMPORT = com.mintv.tv.ui.setting.Settings.IDX_LOCAL_IMPORT;
 
     /** 被用户隐藏的分类名（「全部」和「我的收藏」不允许隐藏）。 */
     private final java.util.LinkedHashSet<String> hiddenCats = new java.util.LinkedHashSet<>();
@@ -5234,6 +5392,8 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         } else if (row == ROW_AUTOPLAY) {
             saveAutoStartFlag();
             if (value == 0) showAutoStartGuide();
+        } else if (row == ROW_LOCAL_IMPORT) {
+            pickLocalSource();
         } else if (row == ROW_SCRIPT_DIR) {
             pickScriptDir();
         } else if (row == ROW_GROUP_MGR) {
