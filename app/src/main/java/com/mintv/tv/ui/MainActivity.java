@@ -109,6 +109,21 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     private final FocusEngine focus = new FocusEngine();
     private List<DemoData.Category> categories;
     private PlaylistParser.Playlist playlist;
+
+    /**
+     * 每个订阅解析后的结果缓存。
+     *
+     * <p>有了它，切换订阅不用重新拉网络 —— 直接换内存里的列表，
+     * 几百毫秒内完成。远程源尤其明显：以前切一次要等几秒空白。
+     *
+     * <p>失效靠手动刷新（长按订阅 → 重新拉取）或重启 App。
+     * 不做 TTL：源本来就是长期不变的，过期自动重拉反而会让用户
+     * 在关键时刻等待网络。
+     */
+    private final java.util.Map<String, PlaylistParser.Playlist> sourceCache =
+            new java.util.HashMap<>();
+    private final java.util.Map<String, java.util.List<PlaylistParser.Channel>> channelCache =
+            new java.util.HashMap<>();
     private List<PlaylistParser.Channel> channels;
     private final LogoLoader logos = new LogoLoader();
     private boolean panelVisible = true;
@@ -868,39 +883,44 @@ public class MainActivity extends Activity implements FocusEngine.Host {
      * selections 也存下来了，但从来没有代码读它，改了完全没效果。
      * 比没有这个功能更糟：用户以为调好了，其实没变。
      */
-    /** 一行分组标题：主题色文字 + 同色淡横线。 */
+    /**
+     * 一行分组标题。
+     *
+     * <p>文字用 Theme.TEXT，**不用主题色** —— 主题色可能很暗
+     * （比如盒子蓝 #2F6BFF 在深底上对比度只有 1.8:1），当文字色直接看不见。
+     * 之前"只看到横线"就是这么来的：横线是半透明色还能看见，
+     * 文字是同色实心，糊在背景里。
+     *
+     * <p>主题色改用左侧一条短竖条表达，既保留品牌感又不影响可读性。
+     */
     private LinearLayout buildGroupHeader(String title) {
         LinearLayout h = new LinearLayout(this);
         h.setOrientation(LinearLayout.HORIZONTAL);
         h.setGravity(Gravity.CENTER_VERTICAL);
-        h.setPadding(Theme.px(6), Theme.px(16), Theme.px(6), Theme.px(6));
+        h.setPadding(Theme.px(6), Theme.px(18), Theme.px(6), Theme.px(4));
+
+        // 主题色竖条
+        View bar = new View(this);
+        bar.setBackgroundColor(Theme.FOCUS_BLUE);
+        LinearLayout.LayoutParams barLp = new LinearLayout.LayoutParams(
+                Theme.px(3), Theme.px(14));
+        barLp.rightMargin = Theme.px(10);
+        h.addView(bar, barLp);
 
         TextView t = new TextView(this);
         t.setText(title);
-        t.setTextColor(Theme.FOCUS_BLUE);
-        t.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, Theme.sp(13));
-        // 不用 letterSpacing：它会让 TextView 的测量宽度偏小，
-        // 配合 WRAP_CONTENT 在 LinearLayout 里可能被算成 0 宽 ——
-        // 表现就是"只看到横线，标题字不见了"。用 padding 拉开字距。
-        t.setPadding(0, 0, Theme.px(2), 0);
-        t.setGravity(Gravity.CENTER_VERTICAL);
+        t.setTextColor(Theme.TEXT);          // 灰白，任何主题下都读得清
+        t.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, Theme.sp(14));
         t.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
-        // 不要 setIncludeFontPadding(false)：去掉字体 padding 之后
-        // TextView 的测量高度会小于实际行高，文字被父布局裁掉 ——
-        // 表现就是"只看见横线，标题字不见了"。
-        // 给它一个明确的高度更保险。
-        // 用固定宽度，不用 WRAP_CONTENT。
-        //
-        // WRAP_CONTENT 在这个组合下（HORIZONTAL + 后面跟一个 weight=1 的
-        // View）会被算成 0 宽，文字整个消失 —— 现象就是"只看见横线"。
-        // 已经踩过一次，这次直接给死宽度，不再依赖测量。
+        t.setGravity(Gravity.CENTER_VERTICAL);
         h.addView(t, new LinearLayout.LayoutParams(
-                Theme.px(78), Theme.px(24)));
+                Theme.px(84), Theme.px(24)));
 
         View line = new View(this);
-        line.setBackgroundColor((Theme.FOCUS_BLUE & 0x00FFFFFF) | 0x38000000);
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, Theme.px(1), 1f);
-        lp.leftMargin = Theme.px(14);
+        line.setBackgroundColor(0x14FFFFFF);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                0, Theme.px(1), 1f);
+        lp.leftMargin = Theme.px(10);
         h.addView(line, lp);
         return h;
     }
@@ -1330,6 +1350,13 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         playlist = PlaylistParser.parse(body);
         rebuildCategories();
         channels = playlist.all;
+
+        // 存进缓存，下次切回来直接取
+        String curSub = com.mintv.tv.data.SubscriptionStore.activeId(this);
+        if (curSub != null && channels != null && !channels.isEmpty()) {
+            sourceCache.put(curSub, playlist);
+            channelCache.put(curSub, channels);
+        }
 
         // 解析出 0 个频道，但内容明显不是空源 → 判定这份内容有问题，记下指纹。
         // 记下来之后下次启动会直接跳过，避免"一次填错地址，之后每次启动都崩"。
@@ -3442,6 +3469,26 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         com.mintv.tv.data.SubscriptionStore.setActive(this, id);
         com.mintv.tv.data.SubscriptionStore.Sub s = com.mintv.tv.data.SubscriptionStore.active(this);
         if (s == null) return;
+        // 命中缓存：直接换内存里的列表，不碰网络
+        PlaylistParser.Playlist cached = sourceCache.get(id);
+        java.util.List<PlaylistParser.Channel> cachedCh = channelCache.get(id);
+        if (cached != null && cachedCh != null && !cachedCh.isEmpty()) {
+            playlist = cached;
+            channels = cachedCh;
+            activeCategory = 0;
+            focus.setChanIndexSilently(0);
+            rebuildCategories();
+            rebuildCategoryColumn();
+            bindChannels();
+            updateChannelFocus(0);
+            epg = null;
+            loadEpgAsync();
+            rebuildHelperSubs();
+            osd.toast("已切换到 " + s.name + " · " + channels.size() + " 个频道");
+            return;
+        }
+
+        // 没缓存（第一次切过去）：走原来的联网流程
         osd.toast("正在切换到 " + s.name + "…");
         // 每个订阅绑自己的 EPG，切源必须重载节目单，否则还是上一家的
         epg = null;
@@ -5145,7 +5192,8 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             } else {
                 // 当前 tab 的底也要跟主题色走 —— 原来写死白色 6%，
                 // 换了主题色只有焦点态是新的，非焦点态还是灰白。
-                t.setTextColor(cur ? Theme.FOCUS_BLUE : 0xFFD6D6D8);
+                // 当前 tab 文字用白 —— 主题色可能很暗，当文字会看不见
+                t.setTextColor(cur ? 0xFFFFFFFF : 0xFFD6D6D8);
                 t.setBackgroundColor(cur
                         ? ((Theme.FOCUS_BLUE & 0x00FFFFFF) | 0x2E000000)
                         : Color.TRANSPARENT);

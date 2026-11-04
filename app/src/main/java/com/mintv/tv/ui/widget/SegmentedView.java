@@ -111,15 +111,27 @@ public class SegmentedView extends android.view.View {
             c.drawPath(path, bg);
 
             t.setTextSize(size);
-            t.setColor(sel ? 0xFFFFFFFF : 0xFFE6E6E8);
-            float textX = x + padX;
+
+            // 「✓ + 文字」整体在这个按钮里居中。
+            //
+            // 原来勾画在最左边、文字紧跟着往右推，但按钮宽度没变 ——
+            // 结果选中项的文字被推到右半边，视觉上明显不在中间。
+            // 现在先算出总宽，再从居中位置开始画。
+            float checkGap = Theme.px(7);
+            float checkW = sel ? t.measureText("✓") + checkGap : 0f;
+            float contentW = checkW + t.measureText(labels[i]);
+            float textX = x + Math.max(padX, (widths[i] - contentW) / 2f);
+            float baseline = top + h / 2f - (t.descent() + t.ascent()) / 2f;
+
             if (sel) {
                 t.setColor(Theme.FOCUS_BLUE);
-                c.drawText("✓", textX, top + h / 2f - (t.descent() + t.ascent()) / 2f, t);
-                textX += t.measureText("✓ ") ;
+                c.drawText("✓", textX, baseline, t);
+                textX += checkW;
                 t.setColor(0xFFFFFFFF);
+            } else {
+                t.setColor(0xFFE6E6E8);
             }
-            c.drawText(labels[i], textX, top + h / 2f - (t.descent() + t.ascent()) / 2f, t);
+            c.drawText(labels[i], textX, baseline, t);
 
             if (foc) {
                 stroke.setColor(0xFFFFFFFF);
