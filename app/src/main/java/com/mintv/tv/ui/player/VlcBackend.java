@@ -237,6 +237,21 @@ public final class VlcBackend implements PlaybackBackend {
         args.add("--network-caching=500");
         args.add("--live-caching=500");
         args.add("--file-caching=500");
+
+        // 起播加速：这两个是 VLC 直播起播慢的主要原因之一。
+        //
+        // clock-jitter 默认会给时钟做抖动补偿，起播前要采集一段样本；
+        // clock-synchro 默认会等系统时钟对齐。直播场景下这两步经常
+        // 白等 300~800ms，而用户要的是「按下按键就出画面」。
+        //
+        // 代价：源的时间戳极不规范时，音画同步可能略有偏差。
+        // 对直播来说这个取舍划算 —— 等一秒才出画面更难接受。
+        //
+        // 顺带说明：这不是 FCC。FCC（Fast Channel Change）是组播技术，
+        // 需要运营商部署 FCC 服务器 + RTP 单播 burst，HLS 源用不上，
+        // VLC 也没有实现那个协议。
+        args.add("--clock-jitter=0");
+        args.add("--clock-synchro=0");
         // 解码方式**不在这里设**，见 play() 里的 media option。
         //
         // 原因：--avcodec-hw 是实例级参数，改了必须重建 LibVLC。
@@ -248,7 +263,16 @@ public final class VlcBackend implements PlaybackBackend {
         args.add("--no-sub-autodetect-file");
         args.add("--no-osd");
         args.add("--no-video-title-show");
+        // RTSP 优先走 TCP：NAT 后面 UDP 经常拿不到包，
+        // 而 RTSP over TCP 穿透性最好，代价是延迟略高一点。
         args.add("--rtsp-tcp");
+
+        // 组播 / 单播流的超时。默认值偏长，源断了要等很久才报错，
+        // 表现就是"画面冻住但状态还显示正常"。
+        args.add("--udp-timeout=2000");
+        args.add("--rtp-timeout=2000");
+        args.add("--rtsp-timeout=8");
+
         try {
             libVlc = new LibVLC(ctx.getApplicationContext(), args);
         } catch (Throwable t) {

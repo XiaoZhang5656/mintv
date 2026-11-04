@@ -70,7 +70,9 @@ public final class NotifyBar extends View {
     }
 
     public static void info(String msg)   { show(Kind.INFO, msg, null); }
+    public static void info(String msg, String sub) { show(Kind.INFO, msg, sub); }
     public static void ok(String msg)     { show(Kind.OK, msg, null); }
+    public static void ok(String msg, String sub) { show(Kind.OK, msg, sub); }
     public static void warn(String msg)   { show(Kind.WARN, msg, null); }
     public static void warn(String msg, String sub) { show(Kind.WARN, msg, sub); }
     public static void error(String msg)  { show(Kind.ERROR, msg, null); }

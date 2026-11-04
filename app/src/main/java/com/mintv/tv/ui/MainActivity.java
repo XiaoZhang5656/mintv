@@ -57,6 +57,15 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     private static final int OUTPUT_TEXTURE = 0;
     private static final int OUTPUT_SURFACE = 1;
     private PlayerManager playerManager;
+    /**
+     * 组播接收锁。
+     *
+     * <p>Android 默认把组播包丢掉 —— 不申请这个锁，{@code udp://239.x.x.x}
+     * 一个字节都收不到，VLC 那边表现为永远"缓冲中"。这是和内网组播源
+     * 打交道时的头号坑，酷9 那类播放器同样是这么处理的。
+     */
+    private android.net.wifi.WifiManager.MulticastLock multicastLock;
+
     /** 根容器，弹层往这里加。 */
     private android.widget.FrameLayout rootView;
     /** 主题调色板（打开时非 null）。 */
@@ -308,7 +317,84 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         buildPlayer(root);
         buildOverlay(root);
         buildDialog(root);
+        // 开屏：极简一屏，App 名 + 版本，900ms 后淡出。
+        // 作用不是"好看"，是把"正在加载列表/EPG"这段不可避免的等待遮住，
+        // 否则用户看到的是空界面闪一下再出内容。
+        final FrameLayout splash = new FrameLayout(this);
+        splash.setBackgroundColor(Theme.BG);
+
+        LinearLayout splashBox = new LinearLayout(this);
+        splashBox.setOrientation(LinearLayout.VERTICAL);
+        splashBox.setGravity(android.view.Gravity.CENTER_HORIZONTAL);
+
+        // 应用名从包信息读 —— 改名、换图标之后这里自动跟上，
+        // 不用回头改代码。
+        CharSequence appLabel = "MinTV";
+        try {
+            appLabel = getApplicationInfo().loadLabel(getPackageManager());
+        } catch (Throwable ignored) { }
+
+        android.widget.TextView sName = new android.widget.TextView(this);
+        sName.setText(appLabel);
+        sName.setGravity(android.view.Gravity.CENTER);
+        sName.setTextColor(Theme.TEXT);
+        sName.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, Theme.sp(52));
+        sName.setLetterSpacing(0.1f);
+        splashBox.addView(sName);
+
+        // 短线：用强调色，换主题色它跟着变
+        View sLine = new View(this);
+        sLine.setBackgroundColor(Theme.FOCUS_BLUE);
+        LinearLayout.LayoutParams lineLp = new LinearLayout.LayoutParams(
+                Theme.px(56), Theme.px(2));
+        lineLp.topMargin = Theme.px(30);
+        lineLp.gravity = android.view.Gravity.CENTER_HORIZONTAL;
+        splashBox.addView(sLine, lineLp);
+
+        android.widget.TextView sSub = new android.widget.TextView(this);
+        sSub.setText("电视直播播放器");
+        sSub.setGravity(android.view.Gravity.CENTER);
+        sSub.setTextColor(0xFF7D8691);
+        sSub.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, Theme.sp(19));
+        sSub.setLetterSpacing(0.22f);
+        LinearLayout.LayoutParams subLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        subLp.topMargin = Theme.px(24);
+        subLp.gravity = android.view.Gravity.CENTER_HORIZONTAL;
+        splashBox.addView(sSub, subLp);
+
+        FrameLayout.LayoutParams boxLp = new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        boxLp.gravity = android.view.Gravity.CENTER;
+        splash.addView(splashBox, boxLp);
+
+        root.addView(splash, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        splash.postDelayed(new Runnable() {
+            @Override public void run() {
+                if (isFinishing()) return;
+                splash.animate().alpha(0f).setDuration(380)
+                        .withEndAction(new Runnable() {
+                            @Override public void run() {
+                                try { root.removeView(splash); } catch (Throwable ignored) { }
+                            }
+                        }).start();
+            }
+        }, 900);
+
         setContentView(root);
+
+        // 欢迎语：开屏淡出之后再出，免得两块东西叠在一起
+        root.postDelayed(new Runnable() {
+            @Override public void run() {
+                if (isFinishing() || osd == null) return;
+                String last = lastChannelName();
+                String sub = "已加载 " + channels.size() + " 个频道"
+                        + (last == null ? "" : " · 上次看到 " + last);
+                String welcome = "欢迎使用 " + appName();
+                com.mintv.tv.ui.widget.NotifyBar.ok(welcome, sub);
+            }
+        }, 1500);
 
         focus.attach(this);
         loadHeaders();
@@ -1620,6 +1706,8 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         // 原来要等播放器的 Buffering 回调才显示状态，中间一两秒屏幕
         // 一动不动，手感就是"按了没反应"。
         osd.setStatus("加载中…");
+        updateMulticastLock(src.url);
+        preResolveDns(src.url);
         playUrl(PlaylistParser.cleanUrl(src.url), src.headers, PlaybackBackend.Mode.LIVE);
     }
 
@@ -2455,6 +2543,64 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             if (u.startsWith(s)) return true;
         }
         return false;
+    }
+
+    /**
+     * DNS 预解析。
+     *
+     * <p>换台时 VLC 要先解析域名才能建连，第一次解析经常 100~300ms。
+     * 这里在起播前先把域名丢给系统解析器，结果进 netd 的缓存，
+     * VLC 后续的 getaddrinfo 直接命中。
+     *
+     * <p>只对域名生效：已经是 IP 的地址没有解析开销，跳过。
+     */
+    private void preResolveDns(String url) {
+        if (url == null || url.isEmpty()) return;
+        try {
+            String host = android.net.Uri.parse(url).getHost();
+            if (host == null || host.isEmpty()) return;
+            if (host.matches("[0-9.]+")) return;          // 纯 IP，不用解析
+            final String h = host;
+            new Thread(new Runnable() {
+                @Override public void run() {
+                    try { java.net.InetAddress.getByName(h); } catch (Throwable ignored) { }
+                }
+            }, "dns-prefetch").start();
+        } catch (Throwable ignored) { }
+    }
+
+    /**
+     * 按地址类型管理组播锁。
+     *
+     * <p>udp / rtp / rtsp 都是组播或单播流，需要这个锁；
+     * http(s) 的 HLS 不需要，且持有它会多耗一点电，所以切换时释放。
+     */
+    private void updateMulticastLock(String url) {
+        boolean need = url != null
+                && (url.startsWith("udp://") || url.startsWith("rtp://")
+                    || url.startsWith("rtsp://") || url.startsWith("igmp://"));
+        try {
+            if (need) {
+                if (multicastLock == null) {
+                    android.net.wifi.WifiManager wm =
+                            (android.net.wifi.WifiManager) getApplicationContext()
+                                    .getSystemService(android.content.Context.WIFI_SERVICE);
+                    if (wm != null) {
+                        multicastLock = wm.createMulticastLock("mintv-mcast");
+                        multicastLock.setReferenceCounted(false);
+                    }
+                }
+                if (multicastLock != null && !multicastLock.isHeld()) {
+                    multicastLock.acquire();
+                }
+            } else {
+                if (multicastLock != null && multicastLock.isHeld()) {
+                    multicastLock.release();
+                }
+            }
+        } catch (Throwable ignored) {
+            // 有些盒子没有 WifiManager（纯有线），拿不到就算了
+        }
     }
 
     private void playUrl(String url, java.util.Map<String, String> headers, PlaybackBackend.Mode mode) {
@@ -4287,8 +4433,12 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         for (int i = 0; i < DemoData.ROW_TITLES.length; i++) {
             final int rowIndex = i;
             SettingRowView row = new SettingRowView(this);
+            // 有些行右侧该显示「当前值」而不是固定文案：
+            //   主题颜色 → 现在选的色名
+            //   脚本目录 → 现在用的目录名
+            // 文案是 SettingDef 里写死的（"选择…"），这里替换掉。
             row.bind(DemoData.ROW_TITLES[i][0], DemoData.ROW_TITLES[i][1],
-                    DemoData.ROW_OPTIONS[i], selections[i]);
+                    optionLabelsFor(i), selections[i]);
             row.setClickable(true);
             row.setOnClickListener(new View.OnClickListener() {
                 @Override public void onClick(View v) {
@@ -4649,6 +4799,53 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         } catch (Throwable t) {
             return 0;
         }
+    }
+
+    /**
+     * 取这一行的按钮文案。
+     *
+     * <p>ACTION 行的按钮文字是 SettingDef 里写死的，永远不会变 ——
+     * 用户选了紫色，那行还写着「选择…」，看不出当前是什么。
+     * 对"有当前值"的行这里换成真实值。
+     */
+    private String[] optionLabelsFor(int rowIndex) {
+        String[] base = DemoData.ROW_OPTIONS[rowIndex];
+        String id;
+        try { id = com.mintv.tv.ui.setting.Settings.ALL[rowIndex].id; }
+        catch (Throwable t) { return base; }
+
+        if ("theme".equals(id)) {
+            String[] out = base.clone();
+            out[0] = Theme.ACCENT_NAMES[Theme.accentIndex];
+            return out;
+        }
+        if ("script_dir".equals(id)) {
+            String[] out = base.clone();
+            String p = new com.mintv.tv.data.ScriptStore(this).displayPath();
+            int slash = p.lastIndexOf('/');
+            out[0] = slash >= 0 ? p.substring(slash + 1) : p;
+            return out;
+        }
+        return base;
+    }
+
+    /** 应用名（从包信息读，改名自动跟随）。 */
+    private String appName() {
+        try {
+            return String.valueOf(getApplicationInfo().loadLabel(getPackageManager()));
+        } catch (Throwable t) {
+            return "MinTV";
+        }
+    }
+
+    /** 上次播放的频道名，没有就返回 null。 */
+    private String lastChannelName() {
+        try {
+            if (playingChannel >= 0 && playingChannel < channels.size()) {
+                return channels.get(playingChannel).name;
+            }
+        } catch (Throwable ignored) { }
+        return null;
     }
 
     private String versionName() {

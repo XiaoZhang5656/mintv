@@ -5,6 +5,8 @@
     <!-- 只用来读本机 Wi-Fi 地址，不读写任何网络配置 -->
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- 组播接收：udp://239.x.x.x 这类地址必须要有，否则收到 0 个包 -->
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <!-- 开机自启动：低版本(4.4~9)可直接拉起界面；Android 10+ 会被系统限制，
          失败时静默处理，不会崩 -->
