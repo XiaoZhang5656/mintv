@@ -883,15 +883,19 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         // 配合 WRAP_CONTENT 在 LinearLayout 里可能被算成 0 宽 ——
         // 表现就是"只看到横线，标题字不见了"。用 padding 拉开字距。
         t.setPadding(0, 0, Theme.px(2), 0);
-        t.setMinWidth(Theme.px(56));
         t.setGravity(Gravity.CENTER_VERTICAL);
         t.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
         // 不要 setIncludeFontPadding(false)：去掉字体 padding 之后
         // TextView 的测量高度会小于实际行高，文字被父布局裁掉 ——
         // 表现就是"只看见横线，标题字不见了"。
         // 给它一个明确的高度更保险。
+        // 用固定宽度，不用 WRAP_CONTENT。
+        //
+        // WRAP_CONTENT 在这个组合下（HORIZONTAL + 后面跟一个 weight=1 的
+        // View）会被算成 0 宽，文字整个消失 —— 现象就是"只看见横线"。
+        // 已经踩过一次，这次直接给死宽度，不再依赖测量。
         h.addView(t, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, Theme.px(22)));
+                Theme.px(78), Theme.px(24)));
 
         View line = new View(this);
         line.setBackgroundColor((Theme.FOCUS_BLUE & 0x00FFFFFF) | 0x38000000);
@@ -4762,7 +4766,10 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             tab.setTextColor(i == 1 ? Theme.TEXT : 0xFFD6D6D8);
             tab.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, Theme.sp(21));
             tab.setGravity(Gravity.CENTER);
-            tab.setBackgroundColor(i == 1 ? 0x0FFFFFFF : Color.TRANSPARENT);
+            // 初始色也跟主题走，避免首帧闪一下灰白
+            tab.setBackgroundColor(i == 1
+                    ? ((Theme.FOCUS_BLUE & 0x00FFFFFF) | 0x2E000000)
+                    : Color.TRANSPARENT);
             tab.setPadding(Theme.px(14), 0, Theme.px(14), 0);
             // 三个 Tab 以前是死的（只有「播放设置」画了个高亮底，点了不换页）。
             tab.setClickable(true);
@@ -5136,8 +5143,12 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                 t.setTextColor(cur ? 0xFFFFFFFF : 0xFFD6D6D8);
                 t.setBackgroundColor(cur ? Theme.FOCUS_BLUE : 0x1FFFFFFF);
             } else {
-                t.setTextColor(cur ? Theme.TEXT : 0xFFD6D6D8);
-                t.setBackgroundColor(cur ? 0x0FFFFFFF : Color.TRANSPARENT);
+                // 当前 tab 的底也要跟主题色走 —— 原来写死白色 6%，
+                // 换了主题色只有焦点态是新的，非焦点态还是灰白。
+                t.setTextColor(cur ? Theme.FOCUS_BLUE : 0xFFD6D6D8);
+                t.setBackgroundColor(cur
+                        ? ((Theme.FOCUS_BLUE & 0x00FFFFFF) | 0x2E000000)
+                        : Color.TRANSPARENT);
             }
         }
     }
