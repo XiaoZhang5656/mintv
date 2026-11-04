@@ -368,6 +368,22 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         boxLp.gravity = android.view.Gravity.CENTER;
         splash.addView(splashBox, boxLp);
 
+        // 开屏底部的告知。放两行最关键的就够 —— 完整条款在「关于」页。
+        // 位置选底部：中心是用户第一眼看的区域，法律文本放那儿会盖过品牌，
+        // 也显得像在求人同意。
+        android.widget.TextView sDisc = new android.widget.TextView(this);
+        sDisc.setText("本软件仅为本地播放工具，不提供、不存储任何音视频内容。\n"
+                + "所有直播源由用户自行添加，请确保来源合法。");
+        sDisc.setGravity(android.view.Gravity.CENTER);
+        sDisc.setTextColor(0xFF4D5560);
+        sDisc.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, Theme.sp(14));
+        sDisc.setLineSpacing(Theme.px(6), 1.1f);
+        FrameLayout.LayoutParams discLp = new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        discLp.gravity = android.view.Gravity.BOTTOM;
+        discLp.bottomMargin = Theme.px(104);
+        splash.addView(sDisc, discLp);
+
         root.addView(splash, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         splash.postDelayed(new Runnable() {
@@ -380,7 +396,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                             }
                         }).start();
             }
-        }, 900);
+        }, 1200);
 
         setContentView(root);
 
@@ -394,7 +410,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                 String welcome = "欢迎使用 " + appName();
                 com.mintv.tv.ui.widget.NotifyBar.ok(welcome, sub);
             }
-        }, 1500);
+        }, 1800);
 
         focus.attach(this);
         loadHeaders();
@@ -4531,7 +4547,8 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                 + "二、所有直播源、EPG 数据与脚本均由用户自行添加，其来源与本应用无关。\n"
                 + "三、用户应确保所添加内容的来源合法，并自行承担使用过程中的全部责任。\n"
                 + "四、本应用按「现状」提供，不对可用性、稳定性及适用性作任何担保。\n"
-                + "五、使用本应用即表示已阅读并同意以上条款。");
+                + "五、本应用不主张任何频道内容的著作权，相关权利归原权利人所有。\n"
+                + "六、使用本应用即表示已阅读并同意以上条款；如不接受，请停止使用并卸载。");
         dBody.setTextColor(0xFF8A939C);
         dBody.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, Theme.sp(15));
         dBody.setLineSpacing(Theme.px(9), 1.1f);
