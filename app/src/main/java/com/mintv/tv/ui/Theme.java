@@ -110,11 +110,27 @@ public final class Theme {
     /**
      * 应用强调色。所有派生色都在这里算，不要散到别处。
      */
+    /**
+     * 保证颜色在深色底上看得清。
+     *
+     * <p>用户可能选「石墨」这种很灰的颜色，直接当文字色会糊在深底上。
+     * 亮度低于阈值时按比例提亮，不改变色相。
+     */
+    public static int ensureReadable(int c) {
+        float[] hsv = new float[3];
+        android.graphics.Color.colorToHSV(c, hsv);
+        if (hsv[2] < 0.62f) hsv[2] = 0.62f;      // 明度下限
+        if (hsv[1] > 0.92f) hsv[1] = 0.92f;      // 别太刺眼
+        return android.graphics.Color.HSVToColor(alpha0(c), hsv);
+    }
+
+    private static int alpha0(int c) { return c & 0xFF000000; }
+
     public static void applyAccent(int index) {
         if (index < 0 || index >= ACCENT_COLORS.length) index = 0;
         accentIndex = index;
         int c = ACCENT_COLORS[index];
-        FOCUS_BLUE = c;
+        FOCUS_BLUE = ensureReadable(c);
         FOCUS_BG = alpha(c, 0.16f);
         PANEL_ACTIVE = alpha(c, 0.22f);
         EPG_LIVE_BG = alpha(c, 0.20f);

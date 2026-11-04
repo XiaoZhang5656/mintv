@@ -868,6 +868,30 @@ public class MainActivity extends Activity implements FocusEngine.Host {
      * selections 也存下来了，但从来没有代码读它，改了完全没效果。
      * 比没有这个功能更糟：用户以为调好了，其实没变。
      */
+    /** 一行分组标题：主题色文字 + 同色淡横线。 */
+    private LinearLayout buildGroupHeader(String title) {
+        LinearLayout h = new LinearLayout(this);
+        h.setOrientation(LinearLayout.HORIZONTAL);
+        h.setGravity(Gravity.CENTER_VERTICAL);
+        h.setPadding(Theme.px(6), Theme.px(16), Theme.px(6), Theme.px(6));
+
+        TextView t = new TextView(this);
+        t.setText(title);
+        t.setTextColor(Theme.FOCUS_BLUE);
+        t.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, Theme.sp(13));
+        t.setLetterSpacing(0.18f);
+        t.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+        t.setIncludeFontPadding(false);
+        h.addView(t);
+
+        View line = new View(this);
+        line.setBackgroundColor((Theme.FOCUS_BLUE & 0x00FFFFFF) | 0x38000000);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, Theme.px(1), 1f);
+        lp.leftMargin = Theme.px(14);
+        h.addView(line, lp);
+        return h;
+    }
+
     private void applyOsdPrefs() {
         if (osd == null) return;
         osd.setAlignLeft(selections[ROW_EPG_POS] == 0);
@@ -2055,6 +2079,17 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     private static final int ROW_SCRIPT_DIR = com.mintv.tv.ui.setting.Settings.IDX_SCRIPT_DIR;
     private static final int ROW_LOCAL_IMPORT = com.mintv.tv.ui.setting.Settings.IDX_LOCAL_IMPORT;
     private static final int ROW_NET_PROXY = com.mintv.tv.ui.setting.Settings.IDX_NET_PROXY;
+
+    /**
+     * 分组标题。索引必须和 Settings.ALL 的顺序对上。
+     *
+     * <p>用边界数组而不是给 SettingDef 加字段：分组是纯展示概念，
+     * 塞进数据类会让"设置项语义"和"排版位置"耦合。
+     * 代价是重排 Settings.ALL 时要同步这里。
+     */
+    private static final int[] GROUP_START = {0, 5, 10, 15, 17};
+    private static final String[] GROUP_NAME = {"频道源", "播放", "界面", "操作", "其它"};
+
 
     /** 被用户隐藏的分类名（「全部」和「我的收藏」不允许隐藏）。 */
     private final java.util.LinkedHashSet<String> hiddenCats = new java.util.LinkedHashSet<>();
@@ -4767,6 +4802,14 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         rowColumn.setPadding(Theme.px(24), Theme.px(18), Theme.px(24), Theme.px(10));
         for (int i = 0; i < DemoData.ROW_TITLES.length; i++) {
             final int rowIndex = i;
+
+            // 分组标题：滚动时能看出「这里换了一组」
+            for (int g = 0; g < GROUP_START.length; g++) {
+                if (GROUP_START[g] != i) continue;
+                rowColumn.addView(buildGroupHeader(GROUP_NAME[g]));
+                break;
+            }
+
             SettingRowView row = new SettingRowView(this);
             // 有些行右侧该显示「当前值」而不是固定文案：
             //   主题颜色 → 现在选的色名
