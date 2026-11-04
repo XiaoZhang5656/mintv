@@ -20,54 +20,64 @@ public final class Settings {
 
     /** 总表。下标即行号。 */
     public static final SettingDef[] ALL = {
+            // ════════ 频道源 ════════
+            // 用户最常动的两块放最前面：换订阅、切线路
+            SettingDef.value("show_subs", "显示订阅列",
+                    "开启后左侧多一列订阅，可在播放页直接切换源。默认关闭",
+                    new String[]{"已关闭", "开启"}, 0),
             SettingDef.action("source", "切源",
                     "同一频道多条线路时手动切换，左=上一条 右=下一条", null),
-            SettingDef.value("aspect", "画面比例", "",
-                    new String[]{"自动适应", "16:9", "4:3", "原始", "铺满"}, 0),
-            SettingDef.value("epg_pos", "EPG显示", "",
-                    new String[]{"居左", "居中"}, 0),
-            SettingDef.value("reverse", "上下换台反转",
-                    "当前：下键上一个，上键下一个",
-                    new String[]{"已开启 (ON)", "关闭"}, 0),
-            SettingDef.value("switch_ui", "换台显示",
-                    "换台时：台号和节目框 / 只台号 / 只节目框",
-                    new String[]{"台号+EPG", "台号", "EPG"}, 0),
-            SettingDef.value("left_key", "左右按键",
-                    "直播：左右键时移/出 EPG（默认）",
-                    new String[]{"查看 EPG 回看", "切源"}, 0),
-            SettingDef.value("speed", "网速显示", "",
-                    new String[]{"显示", "隐藏"}, 0),
-            SettingDef.value("autostart", "开机自启",
-                    "开机后自动拉起本应用",
-                    new String[]{"开启", "关闭"}, 0),
+            SettingDef.action("local_import", "导入本地源",
+                    "从本机或 U 盘导入 m3u / txt，内容复制到本机，不依赖网络", "选择文件…"),
+            SettingDef.action("headers", "请求头",
+                    "该源需要特定 UA/Referer 时才填，全局生效", "编辑…"),
+            SettingDef.action("group_mgr", "频道分组管理",
+                    "隐藏不看的分类，只留常用的", "打开管理"),
+
+            // ════════ 播放 ════════
             SettingDef.value("decoder", "解码方式",
                     "自动＝VLC 原生策略（硬解失败自动退软解）；内置硬解码＝强制 MediaCodec；软件解码＝不用显卡",
                     new String[]{"自动", "内置硬解码", "软件解码"}, 0),
-            SettingDef.value("timeout", "超时换源",
-                    "起播无画面 / 播放中卡住超过该秒数，自动切下一条线路",
-                    new String[]{"关闭", "5 秒", "8 秒", "12 秒", "20 秒"}, 2),
-            SettingDef.action("headers", "请求头",
-                    "该源需要特定 UA/Referer 时才填，全局生效", "编辑…"),
-            SettingDef.value("clock", "时钟显示",
-                    "面板收起看片时是否保留右上角日期时间",
-                    new String[]{"随面板隐藏", "始终显示"}, 0),
+            SettingDef.value("aspect", "画面比例", "",
+                    new String[]{"自动适应", "16:9", "4:3", "原始", "铺满"}, 0),
             SettingDef.value("output", "画面输出",
                     "黑屏只有声音时切到 SurfaceView 试试",
                     new String[]{"TextureView", "SurfaceView"}, 0),
-            // 改成 action：原本是 3 选 1，现在点开是调色板网格，
-            // 选项数量会变，不适合用定长数组表达。
-            SettingDef.action("theme", "主题颜色",
-                    "调的是强调色：选中框、进度、按钮。背景保持深色", "选择…"),
-            SettingDef.value("show_subs", "显示订阅列",
-                    "开启后左侧多一列订阅，可在播放页直接切换源。默认关闭", new String[]{"已关闭", "开启"}, 0),
-            SettingDef.action("script_dir", "脚本目录",
-                    "选一个外部目录放脚本，文件管理器可见；不选则用 App 私有目录", "选择…"),
+            SettingDef.value("timeout", "超时换源",
+                    "起播无画面 / 播放中卡住超过该秒数，自动切下一条线路",
+                    new String[]{"关闭", "5 秒", "8 秒", "12 秒", "20 秒"}, 2),
             SettingDef.action("net_proxy", "播放器代理",
                     "只作用于播放器连源。支持 http:// 或 socks5://，留空直连。脚本要代理需自己在脚本里写", "设置…"),
-            SettingDef.action("local_import", "导入本地源",
-                    "从本机或 U 盘导入 m3u / txt，内容复制到本机，不依赖网络", "选择文件…"),
-            SettingDef.action("group_mgr", "频道分组管理",
-                    "隐藏不看的分类，只留常用的", "打开管理"),
+
+            // ════════ 界面 ════════
+            SettingDef.value("switch_ui", "换台显示",
+                    "换台时：台号和节目框 / 只台号 / 只节目框",
+                    new String[]{"台号+EPG", "台号", "EPG"}, 0),
+            SettingDef.value("epg_pos", "EPG 位置",
+                    "信息条贴左（不挡画面中心）还是水平居中",
+                    new String[]{"居左", "居中"}, 0),
+            SettingDef.value("clock", "时钟显示",
+                    "面板收起看片时是否保留右上角日期时间",
+                    new String[]{"随面板隐藏", "始终显示"}, 0),
+            SettingDef.value("speed", "网速显示", "",
+                    new String[]{"显示", "隐藏"}, 0),
+            SettingDef.action("theme", "主题颜色",
+                    "调的是强调色：选中框、进度、按钮。背景保持深色", "选择…"),
+
+            // ════════ 操作 ════════
+            SettingDef.value("reverse", "上下换台反转",
+                    "当前：下键上一个，上键下一个",
+                    new String[]{"已开启 (ON)", "关闭"}, 0),
+            SettingDef.value("left_key", "左右按键",
+                    "直播：左右键时移/出 EPG（默认）",
+                    new String[]{"查看 EPG 回看", "切源"}, 0),
+
+            // ════════ 其它 ════════
+            SettingDef.value("autostart", "开机自启",
+                    "开机后自动拉起本应用",
+                    new String[]{"开启", "关闭"}, 0),
+            SettingDef.action("script_dir", "脚本目录",
+                    "选一个外部目录放脚本，文件管理器可见；不选则用 App 私有目录", "选择…"),
     };
 
     // ══════════════════════════════════════════════════════════
@@ -130,12 +140,19 @@ public final class Settings {
             }
         }
 
-        // 索引常量必须覆盖整张表，且不能越界
-        int maxIdx = Math.max(IDX_GROUP_MGR, Math.max(IDX_THEME, IDX_OUTPUT));
-        if (maxIdx != ALL.length - 1) {
-            throw new IllegalStateException(
-                    "索引常量与表长度不同步：最大索引 " + maxIdx + "，表长 " + ALL.length
-                    + "。加/删设置项时记得同步 Settings 里的 IDX_* 常量。");
+        // 索引常量必须在表范围内。
+        //
+        // 原来这里检查的是「最大索引必须等于最后一行」，那等于要求
+        // 最后一行必须是某个特定设置项 —— 重排一次就报错，而重排
+        // 本身是允许的（indexOf 会自动跟上）。改成只验范围。
+        int[] all = {IDX_SOURCE, IDX_ASPECT, IDX_EPG_POS, IDX_REVERSE, IDX_SWITCH_UI,
+                IDX_LEFT_KEY, IDX_SPEED, IDX_AUTOSTART, IDX_DECODER, IDX_TIMEOUT,
+                IDX_HEADERS, IDX_CLOCK, IDX_OUTPUT, IDX_THEME, IDX_SHOW_SUBS,
+                IDX_SCRIPT_DIR, IDX_NET_PROXY, IDX_LOCAL_IMPORT, IDX_GROUP_MGR};
+        for (int v : all) {
+            if (v < 0 || v >= ALL.length) {
+                throw new IllegalStateException("索引常量越界：" + v + "，表长 " + ALL.length);
+            }
         }
     }
 

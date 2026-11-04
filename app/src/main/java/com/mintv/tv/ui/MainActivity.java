@@ -2475,18 +2475,54 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     private void loadSelections() {
         String raw = getSharedPreferences(PREF, MODE_PRIVATE).getString(KEY_SELECTIONS, null);
         if (raw == null || raw.isEmpty()) return;
-        String[] parts = raw.split(",");
-        for (int i = 0; i < parts.length && i < selections.length; i++) {
-            try { selections[i] = Integer.parseInt(parts[i].trim()); }
-            catch (NumberFormatException ignored) { }
+
+        // 新格式：id=value;id=value
+        if (raw.indexOf('=') >= 0) {
+            for (String kv : raw.split(";")) {
+                int eq = kv.indexOf('=');
+                if (eq <= 0) continue;
+                String id = kv.substring(0, eq);
+                int v;
+                try { v = Integer.parseInt(kv.substring(eq + 1).trim()); }
+                catch (NumberFormatException e) { continue; }
+                for (int i = 0; i < com.mintv.tv.ui.setting.Settings.ALL.length; i++) {
+                    if (com.mintv.tv.ui.setting.Settings.ALL[i].id.equals(id)) {
+                        selections[i] = v;
+                        break;
+                    }
+                }
+            }
+            return;
         }
+
+        // 旧格式：逗号分隔的定长串。
+        //
+        // 设置表重排过，旧的行号已经对不上新的语义 —— 硬按位置套用
+        // 会让"解码方式"的值跑到"画面比例"上，比丢失更糟。
+        // 所以直接丢弃，全部回到默认值，并告诉用户一次。
+        android.util.Log.w("MinTV", "设置格式过旧（按行号存），已重置为默认值");
+        getSharedPreferences(PREF, MODE_PRIVATE).edit()
+                .remove(KEY_SELECTIONS).apply();
+        ui.post(new Runnable() {
+            @Override public void run() {
+                if (osd != null) osd.toast("设置项已重排，旧配置已重置为默认");
+            }
+        });
     }
 
+    /**
+     * 存设置。
+     *
+     * <p><b>按 id 存，不按行号</b>。以前存的是 "0,0,2,1,..." 这样的定长串，
+     * 行号一变（重排设置项）用户所有设置就整体错位 —— 比如"解码方式"
+     * 的值跑到"画面比例"上。改成 id=value 之后重排是安全的。
+     */
     private void saveSelections() {
         StringBuilder sb = new StringBuilder();
-        for (int i = 0; i < selections.length; i++) {
-            if (i > 0) sb.append(',');
-            sb.append(selections[i]);
+        for (int i = 0; i < selections.length && i < com.mintv.tv.ui.setting.Settings.ALL.length; i++) {
+            if (i > 0) sb.append(';');
+            sb.append(com.mintv.tv.ui.setting.Settings.ALL[i].id)
+              .append('=').append(selections[i]);
         }
         getSharedPreferences(PREF, MODE_PRIVATE).edit()
                 .putString(KEY_SELECTIONS, sb.toString()).apply();
