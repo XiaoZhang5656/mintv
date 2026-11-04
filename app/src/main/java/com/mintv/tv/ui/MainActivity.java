@@ -78,6 +78,8 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     private final List<NavItemView> navViews = new ArrayList<>();
     /** 最左侧的订阅列。开关关闭时为 null。 */
     private LinearLayout subColumn;
+    /** 四列的水平容器。加/删列只改这里。 */
+    private LinearLayout colsRow;
 
     /**
      * navViews 里前 subItemCount 个是「订阅」，后面才是「分类」。
@@ -971,6 +973,23 @@ public class MainActivity extends Activity implements FocusEngine.Host {
 
     private void buildOverlay(FrameLayout root) {
         int navW = Theme.px(Theme.NAV_W);
+
+        // 四列（订阅 / 分类 / 频道 / 竖轨）放进同一个水平容器。
+        //
+        // 以前每列都直接挂 root 并硬算 leftMargin，"前面所有列宽之和"。
+        // 加一列要改所有下游坐标，而且显隐/动画各写一套 ——
+        // 全屏时订阅列不消失就是这个结构造成的。
+        //
+        // 换容器之后位置完全不变（容器从 x=0 开始、MATCH_PARENT 宽），
+        // 但加/删列只改一行，其他列自动流式跟随。
+        // 容器在 scrim / osd 之后添加，保持原有 z-order。
+        LinearLayout colsRow = new LinearLayout(this);
+        colsRow.setOrientation(LinearLayout.HORIZONTAL);
+        this.colsRow = colsRow;
+        // 容器本身不消费触摸：空白区域的事件继续往下传给 OSD / 视频区。
+        // 否则它铺满全屏、又在 OSD 之上，会把整屏点击吞掉。
+        colsRow.setClickable(false);
+        colsRow.setFocusable(false);
         int chanW = chanWidth();
         int railW = Theme.px(Theme.RAIL_W);
         int scrimW = Theme.px(Theme.SCRIM_W);
@@ -1107,11 +1126,11 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         int subW = subColW();
         FrameLayout.LayoutParams navLp = new FrameLayout.LayoutParams(navW, FrameLayout.LayoutParams.MATCH_PARENT);
         navLp.leftMargin = subW;
-        root.addView(nav, navLp);
+        colsRow.addView(nav, new LinearLayout.LayoutParams(navW, ViewGroup.LayoutParams.MATCH_PARENT));
 
         FrameLayout.LayoutParams navLineLp = lineParams(navW);
         navLineLp.leftMargin += subW;
-        root.addView(navLine, navLineLp);
+        colsRow.addView(navLine, new LinearLayout.LayoutParams(Theme.px(1), ViewGroup.LayoutParams.MATCH_PARENT));
 
         // --- 订阅列 ---
         // 只在「显示订阅列」开启时创建。内容在 rebuildCategoryColumn 里刷新。
@@ -1132,7 +1151,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
 
             FrameLayout.LayoutParams subLp = new FrameLayout.LayoutParams(
                     subW, FrameLayout.LayoutParams.MATCH_PARENT);
-            root.addView(subCol, subLp);
+            colsRow.addView(subCol, new LinearLayout.LayoutParams(subW, ViewGroup.LayoutParams.MATCH_PARENT));
 
             // 分隔线
             View subLine = new View(this);
@@ -1140,7 +1159,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             FrameLayout.LayoutParams slLp = new FrameLayout.LayoutParams(
                     Theme.px(1), FrameLayout.LayoutParams.MATCH_PARENT);
             slLp.leftMargin = subW;
-            root.addView(subLine, slLp);
+            colsRow.addView(subLine, new LinearLayout.LayoutParams(Theme.px(1), ViewGroup.LayoutParams.MATCH_PARENT));
         }
 
         // --- 频道列 ---
@@ -1176,7 +1195,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                 chanW, FrameLayout.LayoutParams.MATCH_PARENT);
         chanLp.leftMargin = subW + navW + Theme.px(1);
         chanContainer = chan;
-        root.addView(chan, chanLp);
+        colsRow.addView(chan, new LinearLayout.LayoutParams(chanW, ViewGroup.LayoutParams.MATCH_PARENT));
 
         // 竖轨：EPG 收起时作为「节目 » 信息」入口，点它展开节目单
         View rail = new RailView(this);
@@ -1188,7 +1207,10 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         rail.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) { showEpgPanel(playingChannel >= 0 ? playingChannel : 0); }
         });
-        root.addView(rail, railLp);
+        colsRow.addView(rail, new LinearLayout.LayoutParams(railW, ViewGroup.LayoutParams.MATCH_PARENT));
+        // 剩余空间留给视频区（列容器本身铺满，视频区在它下面一层）
+        root.addView(colsRow, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
         // --- 时钟 ---
         clock = new ClockView(this);
