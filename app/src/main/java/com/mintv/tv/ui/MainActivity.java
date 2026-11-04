@@ -1399,6 +1399,8 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         playlist = PlaylistParser.parse(body);
         rebuildCategories();
         channels = playlist.all;
+        // 订阅列表的频道数要跟着更新；不刷新的话切完源订阅列还显示旧数字
+        fillSubColumn();
 
         // 存进缓存，下次切回来直接取
         String curSub = com.mintv.tv.data.SubscriptionStore.activeId(this);
@@ -4580,11 +4582,16 @@ public class MainActivity extends Activity implements FocusEngine.Host {
 
         // 分类栏滑出屏幕
         navPanel.animate()
-                .translationX(-Theme.px(Theme.NAV_W))
+                .translationX(-(subColW() + Theme.px(Theme.NAV_W)))
                 .alpha(0f)
                 .setDuration(Theme.T_PANEL).start();
         navDivider.animate().alpha(0f).setDuration(Theme.T_PANEL).start();
         railView.animate().alpha(0f).setDuration(Theme.T_PANEL).start();
+        // 订阅列不在导航面板里，得单独藏 —— 之前漏了这一步，
+        // 全屏播放时它留在左边占着 200px
+        if (subColumn != null) {
+            subColumn.animate().alpha(0f).setDuration(Theme.T_PANEL).start();
+        }
         // 滑出去的分类栏不能再吃点击
         for (NavItemView v : navViews) v.setClickable(false);
         ui.postDelayed(new Runnable() {
@@ -4593,11 +4600,12 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                 navPanel.setVisibility(View.GONE);
                 navDivider.setVisibility(View.GONE);
                 railView.setVisibility(View.GONE);
+                if (subColumn != null) subColumn.setVisibility(View.GONE);
             }
         }, Theme.T_PANEL + 40);
         // 频道列左移补位
         chanContainer.animate()
-                .translationX(-Theme.px(Theme.NAV_W))
+                .translationX(-(subColW() + Theme.px(Theme.NAV_W)))
                 .setDuration(Theme.T_PANEL).start();
         layoutVideoTap();
         updateOsdInset();
