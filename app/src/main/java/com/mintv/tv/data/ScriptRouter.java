@@ -108,6 +108,19 @@ public final class ScriptRouter {
         }
     }
 
+    /** 脚本有没有声明 exports.proxy —— 有的话它返回的是"真实地址"，由框架转发。 */
+    private static boolean hasProxyExport(File f) {
+        try {
+            byte[] b = new byte[(int) Math.min(f.length(), 65536)];
+            java.io.FileInputStream in = new java.io.FileInputStream(f);
+            try { in.read(b); } finally { in.close(); }
+            String src = new String(b, "UTF-8");
+            return src.contains("exports.proxy") || src.matches("(?s).*\\bfunction\\s+proxy\\s*\\(.*");
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
     // ================= 执行 =================
 
     /**
@@ -117,14 +130,6 @@ public final class ScriptRouter {
      * 失败写 502，并记一条脚本日志 —— 用户在手机页面上能看到原因。
      */
     public void handle(String path, String query, OutputStream out) {
-        // 分片转发：脚本把 m3u8 里的 ts 地址改写成 /seg/xxx?src=<真实地址>，
-        // 播放器来请求这里，宿主带代理去回源，原样吐回去。
-        // 播放器全程只跟 127.0.0.1 打交道，所以上游是 HTTP / SOCKS5 /
-        // 内网，对它都没区别。
-        if (path.startsWith("/seg/")) {
-            proxySegment(query, out);
-            return;
-        }
         Route r = match(path);
         if (r == null) {
             write(out, 404, "text/plain; charset=utf-8", "no script route: " + path);
@@ -151,8 +156,14 @@ public final class ScriptRouter {
             item.put("headers", new JSONObject());
         } catch (Exception ignored) { }
 
+        File f = new File(r.file);
+
+        // 脚本声明了 exports.proxy：返回的是"真实地址"，由框架拉取并转发二进制。
+        // 这条路径下播放器永远不知道真实地址 —— 解密、拼接、防盗链都在脚本里。
+        boolean isProxy = hasProxyExport(f);
+
         long t0 = System.currentTimeMillis();
-        ScriptEngine.Result res = engine.invoke(new File(r.file), r.entry, item);
+        ScriptEngine.Result res = engine.invoke(f, isProxy ? "proxy" : "main", item);
         long cost = System.currentTimeMillis() - t0;
 
         if (!res.ok) {
@@ -165,6 +176,12 @@ public final class ScriptRouter {
         ScriptLog.info(r.name, "解析成功 · " + cost + "ms"
                 + (res.url != null ? (" · " + res.url) : " · 返回正文"));
 
+        // 代理模式：流式拉取并原样吐回去
+        if (isProxy && res.url != null) {
+            streamBinary(res.url, res.headers, out);
+            return;
+        }
+
         if (res.body != null) {
             String ct = res.contentType != null ? res.contentType
                     : "application/vnd.apple.mpegurl; charset=utf-8";
@@ -172,44 +189,35 @@ public final class ScriptRouter {
             return;
         }
 
-        // 有地址：302 过去，请求头交给播放器（VLC 只认 Referer/UA/Cookie）
+        // main 模式：302 过去，请求头交给播放器（VLC 只认 Referer/UA/Cookie）
         writeRedirect(out, res.url);
     }
 
     /**
-     * 分片转发。
+     * 把脚本算出来的地址拉下来，原样转发给播放器。
      *
-     * <p>必须**流式**转发：一个 ts 分片 500KB~2MB，4K 的能到 5MB，
-     * 整个读进内存再写回去会让延迟和内存都炸。
+     * <p>必须流式：一个 ts 分片 500KB~2MB，4K 的能到 5MB，
+     * 整个读进内存会让延迟和内存都炸。
+     *
+     * <p>请求头只带脚本给的那几个 —— 框架不塞任何默认 UA。
      */
-    private void proxySegment(String query, OutputStream out) {
-        String src = qparam(query, "src");
-        if (src == null || src.isEmpty()) {
-            write(out, 400, "text/plain; charset=utf-8", "missing src");
-            return;
-        }
+    private void streamBinary(String url, Map<String, String> headers, OutputStream out) {
         java.net.HttpURLConnection conn = null;
         try {
             java.net.Proxy proxy = NetProxy.get(ctx);
-            java.net.URL u = new java.net.URL(src);
+            java.net.URL u = new java.net.URL(url);
             conn = proxy != null
                     ? (java.net.HttpURLConnection) u.openConnection(proxy)
                     : (java.net.HttpURLConnection) u.openConnection();
             conn.setConnectTimeout(8000);
             conn.setReadTimeout(15000);
             conn.setInstanceFollowRedirects(true);
-
-            // ⚠ 不写任何默认请求头。
-            // 有些源恰恰不允许带 UA，硬塞一个 Mozilla 会被 403；
-            // 带什么头是脚本的决定，框架只负责搬运。
-            // 脚本想带就在改写地址时带上：
-            //   /seg/xx?src=...&ua=<编码后的UA>&ref=<编码后的Referer>
-            String ua = qparam(query, "ua");
-            if (ua != null && !ua.isEmpty()) conn.setRequestProperty("User-Agent", ua);
-            String ref = qparam(query, "ref");
-            if (ref != null && !ref.isEmpty()) conn.setRequestProperty("Referer", ref);
-            String ck = qparam(query, "ck");
-            if (ck != null && !ck.isEmpty()) conn.setRequestProperty("Cookie", ck);
+            if (headers != null) {
+                for (Map.Entry<String, String> e : headers.entrySet()) {
+                    try { conn.setRequestProperty(e.getKey(), e.getValue()); }
+                    catch (Throwable ignored) { }
+                }
+            }
 
             int code = conn.getResponseCode();
             if (code >= 400) {
@@ -217,7 +225,7 @@ public final class ScriptRouter {
                 return;
             }
             String ct = conn.getContentType();
-            if (ct == null || ct.isEmpty()) ct = "video/mp2t";
+            if (ct == null || ct.isEmpty()) ct = "application/octet-stream";
             long len = conn.getContentLength();
 
             StringBuilder h = new StringBuilder();
@@ -230,12 +238,11 @@ public final class ScriptRouter {
 
             java.io.InputStream in = conn.getInputStream();
             byte[] buf = new byte[16 * 1024];
-            int n;
-            int total = 0;
+            int n, total = 0;
             while ((n = in.read(buf)) > 0) {
                 out.write(buf, 0, n);
                 total += n;
-                if (total > 32 * 1024 * 1024) break;   // 单分片上限，防异常流
+                if (total > 32 * 1024 * 1024) break;
             }
             out.flush();
             try { in.close(); } catch (Throwable ignored) { }
@@ -245,17 +252,6 @@ public final class ScriptRouter {
         } finally {
             if (conn != null) conn.disconnect();
         }
-    }
-
-    private static String qparam(String query, String key) {
-        if (query == null || query.isEmpty()) return null;
-        for (String p : query.split("&")) {
-            int i = p.indexOf('=');
-            if (i < 0) continue;
-            if (!p.substring(0, i).equals(key)) continue;
-            return safeDecode(p.substring(i + 1));
-        }
-        return null;
     }
 
     // ================= 输出 =================
