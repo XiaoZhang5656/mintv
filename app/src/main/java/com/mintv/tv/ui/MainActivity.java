@@ -76,6 +76,8 @@ public class MainActivity extends Activity implements FocusEngine.Host {
 
     // ---- 三栏 ----
     private final List<NavItemView> navViews = new ArrayList<>();
+    /** 最左侧的订阅列。开关关闭时为 null。 */
+    private LinearLayout subColumn;
 
     /**
      * navViews 里前 subItemCount 个是「订阅」，后面才是「分类」。
@@ -951,6 +953,14 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         }
     }
 
+    /**
+     * 订阅列宽度。开关关掉时是 0 —— 所有列的位置都基于它算，
+     * 关闭状态下整个布局和以前完全一样，不会留下空白。
+     */
+    private int subColW() {
+        return selections[ROW_SHOW_SUBS] == 1 ? Theme.px(200) : 0;
+    }
+
     private int chanWidth() {
         return Theme.px(Theme.CHAN_W);
     }
@@ -1089,9 +1099,45 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         View navLine = new View(this);
         navLine.setBackgroundColor(Theme.LINE);
         navDivider = navLine;
+        // 前三列整体右移 subColW —— 关掉订阅列时它是 0，布局和以前一致
+        int subW = subColW();
         FrameLayout.LayoutParams navLp = new FrameLayout.LayoutParams(navW, FrameLayout.LayoutParams.MATCH_PARENT);
+        navLp.leftMargin = subW;
         root.addView(nav, navLp);
-        root.addView(navLine, lineParams(navW));
+
+        FrameLayout.LayoutParams navLineLp = lineParams(navW);
+        navLineLp.leftMargin += subW;
+        root.addView(navLine, navLineLp);
+
+        // --- 订阅列 ---
+        // 只在「显示订阅列」开启时创建。内容在 rebuildCategoryColumn 里刷新。
+        if (subW > 0) {
+            LinearLayout subCol = new LinearLayout(this);
+            subCol.setOrientation(LinearLayout.VERTICAL);
+            subCol.setPadding(0, Theme.px(26), 0, 0);
+            subCol.setBackgroundColor(0x66000000);
+            subColumn = subCol;
+
+            TextView hd = new TextView(this);
+            hd.setText("订阅");
+            hd.setTextColor(Theme.TEXT);
+            hd.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, Theme.sp(Theme.TS_NAV_TITLE));
+            hd.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+            hd.setPadding(Theme.px(18), 0, 0, Theme.px(18));
+            subCol.addView(hd);
+
+            FrameLayout.LayoutParams subLp = new FrameLayout.LayoutParams(
+                    subW, FrameLayout.LayoutParams.MATCH_PARENT);
+            root.addView(subCol, subLp);
+
+            // 分隔线
+            View subLine = new View(this);
+            subLine.setBackgroundColor(Theme.LINE);
+            FrameLayout.LayoutParams slLp = new FrameLayout.LayoutParams(
+                    Theme.px(1), FrameLayout.LayoutParams.MATCH_PARENT);
+            slLp.leftMargin = subW;
+            root.addView(subLine, slLp);
+        }
 
         // --- 频道列 ---
         LinearLayout chan = new LinearLayout(this);
@@ -1124,7 +1170,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
 
         FrameLayout.LayoutParams chanLp = new FrameLayout.LayoutParams(
                 chanW, FrameLayout.LayoutParams.MATCH_PARENT);
-        chanLp.leftMargin = navW + Theme.px(1);
+        chanLp.leftMargin = subW + navW + Theme.px(1);
         chanContainer = chan;
         root.addView(chan, chanLp);
 
@@ -1132,7 +1178,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         View rail = new RailView(this);
         FrameLayout.LayoutParams railLp = new FrameLayout.LayoutParams(
                 railW, FrameLayout.LayoutParams.MATCH_PARENT);
-        railLp.leftMargin = navW + chanW + Theme.px(1);
+        railLp.leftMargin = subW + navW + chanW + Theme.px(1);
         railView = rail;
         rail.setClickable(true);
         rail.setOnClickListener(new View.OnClickListener() {
@@ -1576,65 +1622,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                 list.removeAllViews();
                 navViews.clear();
 
-                // ---- 第一段：订阅 ----
-                // 关闭「显示订阅列」时这一段不出现，索引自然就少了，
-                // 下面的分类索引从 0 开始 —— 不需要额外的偏移逻辑。
-                java.util.List<com.mintv.tv.data.SubscriptionStore.Sub> subs =
-                        com.mintv.tv.data.SubscriptionStore.list(this);
-                String activeSubId = com.mintv.tv.data.SubscriptionStore.activeId(this);
-
-                android.util.Log.i("MinTV", "rebuildCategory: showSubs="
-                        + selections[ROW_SHOW_SUBS] + " (idx " + ROW_SHOW_SUBS + ")"
-                        + " subs=" + subs.size() + " selLen=" + selections.length);
-
-                if (selections[ROW_SHOW_SUBS] == 1 && subs.size() > 0) {
-                    TextView subHd = new TextView(this);
-                    subHd.setText("订阅");
-                    subHd.setTextColor(Theme.TEXT);
-                    subHd.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, Theme.sp(14));
-                    subHd.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
-                    subHd.setPadding(Theme.px(12), Theme.px(12), 0, Theme.px(6));
-                    list.addView(subHd);
-
-                    for (int i = 0; i < subs.size(); i++) {
-                        final com.mintv.tv.data.SubscriptionStore.Sub sub = subs.get(i);
-                        int cnt = channelCache.containsKey(sub.id)
-                                ? channelCache.get(sub.id).size() : 0;
-                        NavItemView v = new NavItemView(MainActivity.this);
-                        v.bind(sub.name, cnt, (char) 0);
-                        v.setClickable(true);
-                        v.setOnClickListener(new View.OnClickListener() {
-                            @Override public void onClick(View view) {
-                                onSubClicked(sub.id);
-                            }
-                        });
-                        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(
-                                ViewGroup.LayoutParams.MATCH_PARENT, Theme.px(Theme.NAV_ITEM_H));
-                        p.bottomMargin = Theme.px(2);
-                        list.addView(v, p);
-                        navViews.add(v);
-                    }
-
-                    View sep = new View(this);
-                    sep.setBackgroundColor(0x1AFFFFFF);
-                    LinearLayout.LayoutParams sepLp = new LinearLayout.LayoutParams(
-                            ViewGroup.LayoutParams.MATCH_PARENT, Theme.px(1));
-                    sepLp.topMargin = Theme.px(10);
-                    sepLp.bottomMargin = Theme.px(8);
-                    sepLp.leftMargin = Theme.px(12);
-                    sepLp.rightMargin = Theme.px(12);
-                    list.addView(sep, sepLp);
-                } else if (selections[ROW_SHOW_SUBS] == 1) {
-                    // 开关开了但没有订阅：给一行提示。
-                    // 之前是"什么都不显示"，没法区分是开关没生效还是列表为空。
-                    TextView empty = new TextView(this);
-                    empty.setText(subs.isEmpty() ? "还没有订阅" : "订阅加载中…");
-                    empty.setTextColor(0xFF6E7683);
-                    empty.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, Theme.sp(14));
-                    empty.setPadding(Theme.px(12), Theme.px(14), 0, Theme.px(10));
-                    list.addView(empty);
-                }
-                subItemCount = navViews.size();
+                subItemCount = 0;
 
                 // ---- 第二段：分类 ----
                 for (int i = 0; i < categories.size(); i++) {
@@ -1654,8 +1642,9 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                     navViews.add(v);
                 }
                 focus.setNavCount(navViews.size());
-                // 用 navViews 的长度，不是 categories —— 前面还有订阅段
                 updateNavFocus(Math.min(focus.navIndex(), Math.max(0, navViews.size() - 1)));
+
+                fillSubColumn();
             }
         }
     }
@@ -1955,12 +1944,57 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     }
 
     /** 点了订阅：切源，焦点留在订阅列不动。 */
+    /**
+     * 刷新最左侧订阅列的内容。
+     *
+     * <p>只在「显示订阅列」开启时存在容器，关闭时整个方法空转。
+     */
+    private void fillSubColumn() {
+        if (subColumn == null) return;
+        // 保留标题（第 0 个），清掉后面的项
+        while (subColumn.getChildCount() > 1) {
+            subColumn.removeViewAt(1);
+        }
+
+        java.util.List<com.mintv.tv.data.SubscriptionStore.Sub> subs =
+                com.mintv.tv.data.SubscriptionStore.list(this);
+        String activeId = com.mintv.tv.data.SubscriptionStore.activeId(this);
+
+        if (subs.isEmpty()) {
+            TextView empty = new TextView(this);
+            empty.setText("还没有订阅");
+            empty.setTextColor(0xFF6E7683);
+            empty.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, Theme.sp(14));
+            empty.setPadding(Theme.px(18), Theme.px(8), 0, 0);
+            subColumn.addView(empty);
+            return;
+        }
+
+        for (int i = 0; i < subs.size(); i++) {
+            final com.mintv.tv.data.SubscriptionStore.Sub sub = subs.get(i);
+            int cnt = channelCache.containsKey(sub.id) ? channelCache.get(sub.id).size() : 0;
+
+            NavItemView v = new NavItemView(this);
+            v.bind(sub.name, cnt, (char) 0);
+            v.setActive(sub.id.equals(activeId));
+            v.setClickable(true);
+            v.setOnClickListener(new View.OnClickListener() {
+                @Override public void onClick(View view) { onSubClicked(sub.id); }
+            });
+            LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, Theme.px(Theme.NAV_ITEM_H));
+            p.bottomMargin = Theme.px(2);
+            subColumn.addView(v, p);
+        }
+    }
+
     private void onSubClicked(String subId) {
         String cur = com.mintv.tv.data.SubscriptionStore.activeId(this);
         if (subId != null && subId.equals(cur)) return;      // 已经是它了
         switchSubscription(subId);
         // 切完分类全变了，重建列表并把焦点落在第一个分类
         rebuildCategoryColumn();
+        fillSubColumn();
         focus.setNavIndexSilently(Math.min(subItemCount, Math.max(0, navViews.size() - 1)));
         updateNavFocus(focus.navIndex());
     }
@@ -1998,9 +2032,17 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             NavItemView v = navViews.get(i);
             // 前 subItemCount 个是订阅：用「当前订阅」判断高亮
             // 后面是分类：用 activeCategory（相对分类段的偏移）
-            boolean active = i < subItemCount
-                    ? isCurrentSub(navViews, i)
-                    : (i - subItemCount) == activeCategory;
+            boolean active;
+            if (i < subItemCount) {
+                // 订阅项：拿 tag 里存的 id 和当前激活 id 比。
+                // 不能按索引去重新读 list() —— 那次读的顺序可能和构建时不同，
+                // 会导致"高亮跳到别的项上"（实际出现过：高亮落在「我的收藏」）。
+                Object tag = v.getTag();
+                active = tag != null && tag.equals(
+                        com.mintv.tv.data.SubscriptionStore.activeId(this));
+            } else {
+                active = (i - subItemCount) == activeCategory;
+            }
             v.setActive(active);
             v.setFocused(navZone && i == index, true);
         }
@@ -5777,13 +5819,19 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         } else if (row == ROW_THEME) {
             openThemePicker();
         } else if (row == ROW_SHOW_SUBS) {
-            // 重建分类列，订阅段才会出现/消失。
-            // 原来这里没有分支 —— 设置存下来了但界面不重建，
-            // 用户看到的永远是"开了没反应"。
-            rebuildCategoryColumn();
-            focus.setNavIndexSilently(0);
-            updateNavFocus(0);
-            osd.toast(value == 1 ? "已显示订阅分组" : "已隐藏订阅分组");
+            // 整页重建：订阅列出现/消失会改变前三列的横坐标，
+            // 光刷新列表不够，得让 buildOverlay 重新算一遍位置。
+            try {
+                if (playerManager != null) playerManager.release();
+            } catch (Throwable ignored) { }
+            playerManager = null;
+            player = null;
+            new android.os.Handler(android.os.Looper.getMainLooper())
+                    .postDelayed(new Runnable() {
+                        @Override public void run() {
+                            if (!isFinishing()) recreate();
+                        }
+                    }, 120);
         } else if (row == ROW_EPG_POS || row == ROW_SWITCH_UI) {
             applyOsdPrefs();
         } else if (row == ROW_OUTPUT) {
