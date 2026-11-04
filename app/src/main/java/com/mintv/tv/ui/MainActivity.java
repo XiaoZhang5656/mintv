@@ -259,15 +259,25 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     /** 面板占了左边多少，OSD 卡片就要让开多少。 */
     private void updateOsdInset() {
         if (osd == null) return;
-        int inset;
-        if (!panelVisible) {
-            inset = 0;
-        } else if (epgPanelOpen) {
-            inset = Theme.px(Theme.CHAN_W + 8 + Theme.EPG_W);
+        // 直接读最后一列的实际右边界，不用常量累加。
+        //
+        // 常量累加的问题是：加一列要改这里，分辨率/缩放不同时算出来的
+        // 值还可能和实际布局差一截。读 getRight() 则永远准确，
+        // 而且加列不用管。
+        final View last = epgPanelOpen ? epgScroll : railView;
+        if (!panelVisible || last == null) {
+            osd.setLeftInset(0);
         } else {
-            inset = Theme.px(Theme.NAV_W + 1 + Theme.CHAN_W + 1 + Theme.RAIL_W);
+            osd.setLeftInset(Math.max(0, last.getRight()));
+            // 布局还没完成时 getRight() 是 0，下一帧再校正一次
+            last.post(new Runnable() {
+                @Override public void run() {
+                    if (osd != null && panelVisible) {
+                        osd.setLeftInset(Math.max(0, last.getRight()));
+                    }
+                }
+            });
         }
-        osd.setLeftInset(inset);
 
         // 台号要对齐时钟中心，这里直接量时钟的真实屏幕位置，不靠公式猜
         if (clock != null && clock.getWidth() > 0) {
@@ -1252,9 +1262,14 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                 android.widget.FrameLayout.LayoutParams.MATCH_PARENT));
         FrameLayout.LayoutParams epgLp = new FrameLayout.LayoutParams(
                 epgW, FrameLayout.LayoutParams.MATCH_PARENT);
-        epgLp.leftMargin = Theme.px(Theme.CHAN_W + 8);   // 紧贴左移后的频道列右侧
-        epgScroll.setVisibility(View.GONE);
-        root.addView(epgScroll, epgLp);
+        // EPG 面板也进 colsRow —— 位置由流式布局决定，不再手算 leftMargin。
+        //
+        // 手算的问题是每加一列都要回来改这里，而且设备分辨率不同、
+        // 缩放不同时算出来的值容易和实际布局差一截（抽屉态左边空一片就是这么来的）。
+        // 放进容器之后，它永远紧跟在频道列右侧，谁也不用管。
+        epgScroll.setVisibility(View.GONE);   // GONE 不占位，常态下自动收缩
+        colsRow.addView(epgScroll, new LinearLayout.LayoutParams(
+                epgW, ViewGroup.LayoutParams.MATCH_PARENT));
 
         // EPG 条目的点击。
         //
@@ -4785,6 +4800,22 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             scrim.setVisibility(View.VISIBLE);
         }
 
+        // 整体控制容器，不再逐列算位移。
+        //
+        // 逐列 translationX 的问题是每列都要算"前面有多少列"，
+        // 加一列就有一处漏算 —— 全屏时订阅列不消失、抽屉态频道列出屏
+        // 都是这么来的。容器整体淡出，谁也不会漏。
+        if (colsRow != null) {
+            colsRow.animate().alpha(to).setDuration(Theme.T_PANEL).start();
+            colsRow.setVisibility(to > 0f ? View.VISIBLE : View.VISIBLE);  // 保持 VISIBLE，靠 alpha 隐藏
+            if (!visible) {
+                colsRow.postDelayed(new Runnable() {
+                    @Override public void run() {
+                        if (colsRow != null && !panelVisible) colsRow.setVisibility(View.GONE);
+                    }
+                }, Theme.T_PANEL + 40);
+            }
+        }
         navPanel.animate().alpha(to).setDuration(Theme.T_PANEL).start();
         navDivider.animate().alpha(to).setDuration(Theme.T_PANEL).start();
         chanContainer.animate().alpha(to).setDuration(Theme.T_PANEL).start();
@@ -6132,7 +6163,11 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         if (layer == LAYER_SYS_DIALOG || layer == LAYER_SETTINGS) return;
         if (layer == LAYER_EPG) { closeEpgPanel(); return; }
 
-        boolean left = tapX < Theme.px(Theme.NAV_W + Theme.CHAN_W + Theme.RAIL_W);
+        // 分区边界读实际布局，不用常量累加 —— 加列/换分辨率都不会错位
+        View boundary = epgPanelOpen ? epgScroll : railView;
+        boolean left = boundary != null
+                ? tapX < boundary.getRight()
+                : tapX < getResources().getDisplayMetrics().widthPixels / 2f;
 
         if (layer == LAYER_PLAYER) {
             // 纯播放态：左边唤回面板，右边只管信息条
@@ -6163,12 +6198,10 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     private void layoutVideoTap() {
         if (videoTap == null) return;
         FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) videoTap.getLayoutParams();
-        int left;
-        if (epgPanelOpen) {
-            left = Theme.px(Theme.CHAN_W + 8 + Theme.EPG_W);
-        } else {
-            left = Theme.px(Theme.NAV_W + 1 + Theme.CHAN_W + 1 + Theme.RAIL_W);
-        }
+        // 和 OSD 一样：读最后一列的实际右边界，不用常量累加。
+        // 不同分辨率/缩放下常量算出来的值和实际布局会差，触摸区就错位。
+        View last = epgPanelOpen ? epgScroll : railView;
+        int left = last != null ? Math.max(0, last.getRight()) : 0;
         lp.leftMargin = left;
         lp.width = Math.max(0, getResources().getDisplayMetrics().widthPixels - left);
         lp.height = ViewGroup.LayoutParams.MATCH_PARENT;
