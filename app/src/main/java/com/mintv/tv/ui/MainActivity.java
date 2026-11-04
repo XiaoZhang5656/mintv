@@ -1583,6 +1583,10 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                         com.mintv.tv.data.SubscriptionStore.list(this);
                 String activeSubId = com.mintv.tv.data.SubscriptionStore.activeId(this);
 
+                android.util.Log.i("MinTV", "rebuildCategory: showSubs="
+                        + selections[ROW_SHOW_SUBS] + " (idx " + ROW_SHOW_SUBS + ")"
+                        + " subs=" + subs.size() + " selLen=" + selections.length);
+
                 if (selections[ROW_SHOW_SUBS] == 1 && subs.size() > 0) {
                     TextView subHd = new TextView(this);
                     subHd.setText("订阅");
@@ -1620,6 +1624,15 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                     sepLp.leftMargin = Theme.px(12);
                     sepLp.rightMargin = Theme.px(12);
                     list.addView(sep, sepLp);
+                } else if (selections[ROW_SHOW_SUBS] == 1) {
+                    // 开关开了但没有订阅：给一行提示。
+                    // 之前是"什么都不显示"，没法区分是开关没生效还是列表为空。
+                    TextView empty = new TextView(this);
+                    empty.setText(subs.isEmpty() ? "还没有订阅" : "订阅加载中…");
+                    empty.setTextColor(0xFF6E7683);
+                    empty.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, Theme.sp(14));
+                    empty.setPadding(Theme.px(12), Theme.px(14), 0, Theme.px(10));
+                    list.addView(empty);
                 }
                 subItemCount = navViews.size();
 
@@ -5763,6 +5776,14 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             openGroupManager();
         } else if (row == ROW_THEME) {
             openThemePicker();
+        } else if (row == ROW_SHOW_SUBS) {
+            // 重建分类列，订阅段才会出现/消失。
+            // 原来这里没有分支 —— 设置存下来了但界面不重建，
+            // 用户看到的永远是"开了没反应"。
+            rebuildCategoryColumn();
+            focus.setNavIndexSilently(0);
+            updateNavFocus(0);
+            osd.toast(value == 1 ? "已显示订阅分组" : "已隐藏订阅分组");
         } else if (row == ROW_EPG_POS || row == ROW_SWITCH_UI) {
             applyOsdPrefs();
         } else if (row == ROW_OUTPUT) {
