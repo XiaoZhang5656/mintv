@@ -1151,7 +1151,9 @@ public class MainActivity extends Activity implements FocusEngine.Host {
 
             FrameLayout.LayoutParams subLp = new FrameLayout.LayoutParams(
                     subW, FrameLayout.LayoutParams.MATCH_PARENT);
-            colsRow.addView(subCol, new LinearLayout.LayoutParams(subW, ViewGroup.LayoutParams.MATCH_PARENT));
+            // 插到索引 0 —— 订阅是最外层（先选源，再选分类）
+            colsRow.addView(subCol, 0, new LinearLayout.LayoutParams(
+                    subW, ViewGroup.LayoutParams.MATCH_PARENT));
 
             // 分隔线
             View subLine = new View(this);
@@ -1159,7 +1161,8 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             FrameLayout.LayoutParams slLp = new FrameLayout.LayoutParams(
                     Theme.px(1), FrameLayout.LayoutParams.MATCH_PARENT);
             slLp.leftMargin = subW;
-            colsRow.addView(subLine, new LinearLayout.LayoutParams(Theme.px(1), ViewGroup.LayoutParams.MATCH_PARENT));
+            colsRow.addView(subLine, 1, new LinearLayout.LayoutParams(
+                    Theme.px(1), ViewGroup.LayoutParams.MATCH_PARENT));
         }
 
         // --- 频道列 ---
