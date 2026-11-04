@@ -136,6 +136,16 @@ public final class Theme {
         EPG_LIVE_BG = alpha(c, 0.20f);
         OSD_CAT_BG = mix(c, 0xFF101216, 0.74f);       // 压暗当底
         OSD_CAT_TXT = mix(c, 0xFFFFFFFF, 0.52f);      // 提亮当字
+
+        // 设置行 / 分段控件里的"选中态"。
+        //
+        // 这三个原先只在 applyPalette（旧的三套主题）里赋值，
+        // applyAccent 完全没管 —— 结果选了主题色，按钮还是绿的。
+        // 这是"主题色不生效"的真正原因。
+        int lit = ensureReadable(c);
+        DLG_OPT_SEL     = alpha(lit, 0.30f);          // 选中态底色
+        DLG_OPT_TXT_ON  = 0xFFFFFFFF;                 // 选中态文字：白最稳
+        DLG_CHECK       = lit;                        // 那个 ✓
     }
 
     /** 线性混色：t=0 全取 a，t=1 全取 b。 */

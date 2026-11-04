@@ -881,8 +881,12 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         t.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, Theme.sp(13));
         t.setLetterSpacing(0.18f);
         t.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
-        t.setIncludeFontPadding(false);
-        h.addView(t);
+        // 不要 setIncludeFontPadding(false)：去掉字体 padding 之后
+        // TextView 的测量高度会小于实际行高，文字被父布局裁掉 ——
+        // 表现就是"只看见横线，标题字不见了"。
+        // 给它一个明确的高度更保险。
+        h.addView(t, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, Theme.px(22)));
 
         View line = new View(this);
         line.setBackgroundColor((Theme.FOCUS_BLUE & 0x00FFFFFF) | 0x38000000);
