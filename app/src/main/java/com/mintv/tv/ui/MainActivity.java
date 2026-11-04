@@ -1853,6 +1853,27 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         attempt().onRestart();   // 重开一次播放：清掉卡顿采样，但保留降级进度
         lineTotal = ch.sources.size();
         replayStartMs = -1;
+        // 台标：缓存命中就直接用，否则异步拉，回来再补上。
+        // 先 setLogo(null) 是为了不留上一个台的图标 —— 换台瞬间
+        // 显示上个台标比不显示更容易让人迷惑。
+        if (ch.logo != null && !ch.logo.isEmpty()) {
+            android.graphics.Bitmap cached = logos.peek(ch.logo);
+            osd.setLogo(cached);
+            if (cached == null) {
+                final String logoUrl = ch.logo;
+                logos.load(logoUrl, new LogoLoader.Callback() {
+                    @Override public void onLogo(String url, android.graphics.Bitmap bmp) {
+                        ui.post(new Runnable() {
+                            @Override public void run() {
+                                if (osd != null) osd.setLogo(bmp);
+                            }
+                        });
+                    }
+                });
+            }
+        } else {
+            osd.setLogo(null);
+        }
         osd.showChannel(no, ch.name, ch.group);
         // 换台时的大号台号去掉前导零：显示 9 而不是 0009
         osd.pulseChannelNumber(stripLeadingZeros(no));

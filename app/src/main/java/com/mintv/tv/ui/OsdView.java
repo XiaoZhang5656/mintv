@@ -44,6 +44,9 @@ public class OsdView extends View {
     private final String[] tags = new String[9];   // 源/回看/分辨率/视频编码/音频编码/声道/帧率/码率/网速
     private final boolean[] tagOn = new boolean[9];
 
+    /** 台标。null 表示这个台没有图标，布局会自动不留空位。 */
+    private android.graphics.Bitmap logo;
+
     private String clockText;
     /** 实时倍率（Δ播放时间/Δ墙钟），<0 表示还没数据。 */
     private float realtimeSpeed = -1f;
@@ -643,6 +646,22 @@ public class OsdView extends View {
         // ═══════════ 第 1 行：台号 + 台名 + 分类 ═══════════
         float noTop = y;
         float noW = Theme.px(66);
+
+        // 台标：台号左边。有图才占位，没图不留空白 ——
+        // 很多源压根没有 tvg-logo，留空会让整行缩进变得莫名其妙。
+        float logoSize = noH;
+        if (logo != null) {
+            float lx = x;
+            float lyy = noTop;
+            r.set(lx, lyy, lx + logoSize, lyy + logoSize);
+            c.save();
+            android.graphics.Path clip = new android.graphics.Path();
+            clip.addRoundRect(r, Theme.px(5), Theme.px(5), android.graphics.Path.Direction.CW);
+            c.clipPath(clip);
+            c.drawBitmap(logo, null, r, fill);
+            c.restore();
+            x += logoSize + Theme.px(12);
+        }
         fill.setColor(Theme.FOCUS_BLUE);
         r.set(x, noTop, x + noW, noTop + noH);
         c.drawRoundRect(r, Theme.px(5), Theme.px(5), fill);
@@ -855,6 +874,13 @@ public class OsdView extends View {
     public void setRealtimeSpeed(float x) {
         if (Math.abs(x - realtimeSpeed) < 0.01f) return;   // 变化太小不重绘
         realtimeSpeed = x;
+        invalidate();
+    }
+
+    /** 设置台标。传 null 表示没有，绘制时会跳过这一块。 */
+    public void setLogo(android.graphics.Bitmap bmp) {
+        if (this.logo == bmp) return;
+        this.logo = bmp;
         invalidate();
     }
 
