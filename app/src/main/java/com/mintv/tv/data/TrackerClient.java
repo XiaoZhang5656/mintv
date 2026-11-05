@@ -121,7 +121,9 @@ public final class TrackerClient {
             }
             return cfg;
         } catch (Throwable t) {
-            android.util.Log.w("Tracker", "join 失败", t);
+            // 把异常类型拼进消息里 —— 之前只有 "join 失败"，栈又被系统的
+            // GC 日志冲掉，根本看不出是超时、DNS 还是 401。
+            android.util.Log.w("Tracker", "join 失败: " + t, t);
             return null;
         }
     }
@@ -164,7 +166,7 @@ public final class TrackerClient {
                 out.add(p);
             }
         } catch (Throwable t) {
-            android.util.Log.w("Tracker", "peers 失败", t);
+            android.util.Log.w("Tracker", "peers 失败: " + t, t);
         }
         return out;
     }
@@ -197,7 +199,8 @@ public final class TrackerClient {
 
             int code = conn.getResponseCode();
             if (code < 200 || code >= 300) {
-                android.util.Log.w("Tracker", path + " HTTP " + code);
+                android.util.Log.w("Tracker", path + " HTTP " + code
+                        + " u=" + BASE);
                 return null;
             }
             InputStream in = conn.getInputStream();

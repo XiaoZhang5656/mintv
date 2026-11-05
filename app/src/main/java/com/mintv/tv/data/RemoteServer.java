@@ -145,17 +145,45 @@ public final class RemoteServer {
         server = null;
     }
 
+    /**
+     * 每个连接一个线程处理。
+     *
+     * <p>原来是 accept → handle 同步串行。播放时 VLC 会并发请求 3~5 个分片，
+     * 一个 4.3MB 的分片还在下载，后面的 m3u8 请求就全卡在 accept 队列里，
+     * 界面上表现为「正在解析源地址…」一直不动。
+     *
+     * <p>池子固定大小，避免被 VLC 的预加载打爆。
+     */
+    private final java.util.concurrent.ExecutorService workers =
+            java.util.concurrent.Executors.newFixedThreadPool(6,
+                    new java.util.concurrent.ThreadFactory() {
+                        @Override public Thread newThread(Runnable r) {
+                            Thread t = new Thread(r, "remote-http");
+                            t.setDaemon(true);
+                            return t;
+                        }
+                    });
+
     private void acceptLoop() {
         while (running) {
-            Socket s = null;
             try {
-                s = server.accept();
-                s.setSoTimeout(8000);
-                handle(s);
+                final Socket s = server.accept();
+                try {
+                    s.setSoTimeout(8000);
+                } catch (Throwable ignored) { }
+                workers.execute(new Runnable() {
+                    @Override public void run() {
+                        try {
+                            handle(s);
+                        } catch (Throwable t) {
+                            android.util.Log.w(TAG, "handle 异常: " + t);
+                        } finally {
+                            try { s.close(); } catch (Throwable ignored) { }
+                        }
+                    }
+                });
             } catch (Throwable t) {
                 if (!running) break;
-            } finally {
-                if (s != null) try { s.close(); } catch (Throwable ignored) { }
             }
         }
     }
