@@ -29,8 +29,8 @@ android {
         // 方法数已超 64K（media3 + libvlc + zxing + androidx.core）
         multiDexEnabled true
         targetSdk 34
-        versionCode 165
-        versionName "0.2.69"
+        versionCode 166
+        versionName "0.2.70"
 
         // 注意：这里不能再写 ndk { abiFilters ... }。
         // AGP 会直接报 "Conflicting configuration : 'arm64-v8a,armeabi-v7a'
@@ -47,7 +47,16 @@ android {
         abi {
             enable true
             reset()
-            include 'arm64-v8a', 'armeabi-v7a'
+            // 只出 32 位包。
+            //
+            // 原因：tvbus / pxp 的 SDK（libtvcore.so、libp2p.so 等）
+            // 只有 armeabi-v7a 版本。而一个进程只能选一种 ABI ——
+            // APK 里同时有 arm64 和 armv7 时系统永远先起 arm64 进程，
+            // 在那个进程里加载 armv7 的 so 会直接 UnsatisfiedLinkError。
+            //
+            // 代价：软解性能比 64 位低 15~25%，4K 不要指望。
+            // 1080p 及以下走硬解，和 64 位没有可感知差别。
+            include 'armeabi-v7a'
             universalApk false
         }
     }

@@ -3262,9 +3262,72 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         }
     }
 
+    /**
+     * 私有协议 → 本地 http。
+     *
+     * <p>VLC 只认标准协议，tvbus:// 和 p2p:// 必须先在 native 引擎里转成本机
+     * http 地址才能播。转换失败返回 null，调用方继续用原地址，让 VLC 报错。
+     */
+    private String resolvePrivateProtocol(String url) {
+        if (url == null) return null;
+
+        // IPv4 里带冒号的不太可能是协议头，先做个快速排除
+        int idx = url.indexOf("://");
+        if (idx <= 0) return null;
+        String scheme = url.substring(0, idx).toLowerCase();
+
+        try {
+            if ("tvbus".equals(scheme)) {
+                final com.tvbus.engine.TVCore core = com.tvbus.engine.TVCore.get();
+                core.init(this);
+                if (!osdShown("正在解析 tvbus 地址…")) { }
+                String out = core.playTVBUSUrl(url);
+                if (out == null || out.isEmpty()) {
+                    android.util.Log.w("MinTV", "tvbus 解析失败: " + url);
+                    return null;
+                }
+                android.util.Log.i("MinTV", "tvbus -> " + out);
+                return out;
+            }
+
+            // p2p / p3p … p9p
+            String lib = com.forcetech.android.ForceTV.libFor(url);
+            if (lib != null) {
+                // 端口沿用主端口 +1，避免和遥控服务撞
+                int port = 18899 + 1;
+                com.forcetech.android.ForceTV ft =
+                        new com.forcetech.android.ForceTV();
+                ft.start(lib, port);
+                // P2P 引擎起来后，播放地址是本地端口的映射。
+                // 具体路径还没在真机上验证过，先按常见形式拼。
+                String out = "http://127.0.0.1:" + port + "/" + url;
+                android.util.Log.i("MinTV", lib + " -> " + out);
+                return out;
+            }
+        } catch (Throwable t) {
+            android.util.Log.w("MinTV", "私有协议解析异常: " + url, t);
+        }
+        return null;
+    }
+
+    /** OSD 提示占位，暂时不弹，避免解析期间刷屏。 */
+    private boolean osdShown(String s) { return true; }
+
     private void playUrl(String url, java.util.Map<String, String> headers, PlaybackBackend.Mode mode) {
         if (url == null || url.isEmpty()) return;
         if (playerManager == null) return;
+
+        // 私有协议转标准 http —— VLC 内核不认 tvbus:// 和 p2p://。
+        //
+        // tvbus：libtvcore.so 在本机起 HTTP 服务，返回 http://127.0.0.1:port/mpegts_live
+        // p2p~p9p：libpNp.so 同样起本地服务
+        //
+        // 这一步是阻塞的（tvbus 最坏等 30 秒），但 playUrl 本身就在 IO 线程，
+        // 不会卡主线程。失败就原样往下走，让 VLC 自己报错。
+        String resolved = resolvePrivateProtocol(url);
+        if (resolved != null && !resolved.equals(url)) {
+            url = resolved;
+        }
 
         // 现在只有一个内核，udp/rtp/rtsp 天然支持，不需要再切。
         java.util.Map<String, String> merged = HttpHeaderProfile.merge(globalHeaders, headers);
@@ -6792,6 +6855,15 @@ public class MainActivity extends Activity implements FocusEngine.Host {
 
     @Override
     protected void onDestroy() {
+        // 释放 tvbus / p2p 的 native 资源。
+        //
+        // 不做的话：native 线程、socket、以及 UPnP 端口映射（so 里调了
+        // UPNP_AddPortMapping）都留在路由器上，用户看不到但会占端口。
+        try {
+            com.tvbus.engine.TVCore.close();
+        } catch (Throwable t) {
+            android.util.Log.w("MinTV", "TVCore.close 失败", t);
+        }
         super.onDestroy();
         ui.removeCallbacks(clockTick);
         ui.removeCallbacks(speedTick);
