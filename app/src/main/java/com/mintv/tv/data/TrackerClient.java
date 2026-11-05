@@ -192,6 +192,15 @@ public final class TrackerClient {
             conn.setDoOutput(true);
             conn.setRequestProperty("Content-Type", "application/json; charset=utf-8");
             conn.setRequestProperty("Connection", "close");
+            // 必须显式声明不压缩。
+            //
+            // tracker 在 Cloudflare 后面，CF 看到 Accept-Encoding 里有 gzip 就会
+            // 返回 Content-Encoding: gzip + Transfer-Encoding: chunked 的组合，
+            // Android 的 HttpURLConnection 解这种响应会抛异常，被 join 的
+            // catch 吞成一句「join 失败」，看不出原因。
+            //
+            // 实测：identity → 明文 JSON；gzip → 压缩体 + 双编码头。
+            conn.setRequestProperty("Accept-Encoding", "identity");
 
             byte[] data = body.toString().getBytes("UTF-8");
             OutputStream o = conn.getOutputStream();
