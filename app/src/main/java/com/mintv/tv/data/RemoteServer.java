@@ -164,6 +164,68 @@ public final class RemoteServer {
                         }
                     });
 
+    /**
+     * 进程级随机盐，用来给 u 参数签名。
+     *
+     * <p>为什么需要：u 只是 Base64，不是加密。任何人构造
+     * {@code /mintv/m3u8?u=<base64 任意地址>} 就能把这个 app 当开放的
+     * HTTP 代理 —— 拉别人的内容、探自己内网。监听是 0.0.0.0，
+     * 同一 WiFi 下的设备直接可访问。
+     *
+     * <p>盐每次进程启动重新生成，外面的链接一律失效。
+     */
+    private static final String SALT =
+            Long.toHexString(new java.util.Random().nextLong())
+                    + Long.toHexString(System.nanoTime());
+
+    /** u 的签名，取 SHA-256 前 12 位十六进制。 */
+    public static String sign(String u) {
+        try {
+            java.security.MessageDigest md =
+                    java.security.MessageDigest.getInstance("SHA-256");
+            md.update(SALT.getBytes("UTF-8"));
+            if (u != null) md.update(u.getBytes("UTF-8"));
+            byte[] d = md.digest();
+            StringBuilder sb = new StringBuilder(16);
+            for (int i = 0; i < 6; i++) sb.append(String.format("%02x", d[i]));
+            return sb.toString();
+        } catch (Throwable t) {
+            return "";
+        }
+    }
+
+    /** 校验 u 的签名。没带签名或对不上都算无效。 */
+    private static boolean signOk(String u, String sig) {
+        String want = sign(u);
+        return want.length() > 0 && want.equals(sig);
+    }
+
+    /** 目标地址放行判断。私网/回环/保留地址一律拒绝，防 SSRF。 */
+    static boolean isAllowedTarget(String raw) {
+        if (raw == null) return false;
+        String low = raw.toLowerCase();
+        if (!low.startsWith("http://") && !low.startsWith("https://")) return false;
+        try {
+            java.net.URL u = new java.net.URL(raw);
+            String host = u.getHost();
+            if (host == null || host.isEmpty()) return false;
+            if (host.equalsIgnoreCase("localhost")) return false;
+            if (host.matches("\\d{1,3}(\\.\\d{1,3}){3}")) {
+                String[] q = host.split("\\.");
+                int a = Integer.parseInt(q[0]);
+                int b = Integer.parseInt(q[1]);
+                if (a == 10 || a == 127 || a == 0) return false;
+                if (a == 172 && b >= 16 && b <= 31) return false;
+                if (a == 192 && b == 168) return false;
+                if (a == 169 && b == 254) return false;
+                if (a >= 224) return false;
+            }
+            return true;
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
     private void acceptLoop() {
         while (running) {
             try {
@@ -450,6 +512,14 @@ public final class RemoteServer {
                 send(out, 400, "text/plain; charset=utf-8", "bad url");
                 return;
             }
+            if (!signOk(u, qparam(query, "s"))) {
+                send(out, 403, "text/plain; charset=utf-8", "bad sign");
+                return;
+            }
+            if (!isAllowedTarget(u)) {
+                send(out, 403, "text/plain; charset=utf-8", "target not allowed");
+                return;
+            }
             String m3u = HlsProxy.fetchAndRewrite(u);
             if (m3u == null) {
                 send(out, 502, "text/plain; charset=utf-8", "fetch failed");
@@ -463,6 +533,14 @@ public final class RemoteServer {
             String u = HlsProxy.unb64(rawU == null ? "" : rawU);
             if (u == null) {
                 send(out, 400, "text/plain; charset=utf-8", "bad url");
+                return;
+            }
+            if (!signOk(u, qparam(query, "s"))) {
+                send(out, 403, "text/plain; charset=utf-8", "bad sign");
+                return;
+            }
+            if (!isAllowedTarget(u)) {
+                send(out, 403, "text/plain; charset=utf-8", "target not allowed");
                 return;
             }
 

@@ -3683,7 +3683,8 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             String enc = android.net.Uri.encode(
                     com.mintv.tv.data.HlsProxy.b64(afterPrefix));
             String out = "http://127.0.0.1:" + port + "/mintv/m3u8?u=" + enc
-                    + (ch == null ? "" : "&ch=" + ch);
+                    + (ch == null ? "" : "&ch=" + ch)
+                    + "&s=" + com.mintv.tv.data.RemoteServer.sign(afterPrefix);
             android.util.Log.w("MinTV", "mintv 展开 port=" + port
                     + " remotePort=" + remotePort + " ch=" + ch);
             return out;

@@ -219,6 +219,8 @@ public final class HlsProxy {
         if (channel != null && seq >= 0) {
             u.append("&ch=").append(channel).append("&seq=").append(seq);
         }
+        // 带签名，否则这个端口就是任何人都能用的开放代理
+        u.append("&s=").append(com.mintv.tv.data.RemoteServer.sign(absUrl));
         return u.toString();
     }
 
