@@ -3324,7 +3324,37 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         //
         // 这一步是阻塞的（tvbus 最坏等 30 秒），但 playUrl 本身就在 IO 线程，
         // 不会卡主线程。失败就原样往下走，让 VLC 自己报错。
-        String resolved = resolvePrivateProtocol(url);
+        // 私有协议解析必须在后台线程：libtvcore.so 的 speer_as_init →
+        // enet_host_service → select() 会阻塞等待网络事件，实测卡主线程 6 秒，
+        // 触发 ANR（Input dispatching timed out / FocusEvent）。
+        //
+        // 这里不假设调用方在哪个线程 —— 如果不是主线程直接解析，
+        // 是主线程就交给线程池，用 latch 等结果。
+        final String rawUrl = url;
+        String resolved;
+        if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) {
+            final java.util.concurrent.CountDownLatch latch =
+                    new java.util.concurrent.CountDownLatch(1);
+            final String[] holder = new String[1];
+            new Thread(new Runnable() {
+                @Override public void run() {
+                    try {
+                        holder[0] = resolvePrivateProtocol(rawUrl);
+                    } catch (Throwable t) {
+                        android.util.Log.w("MinTV", "协议解析失败", t);
+                    } finally {
+                        latch.countDown();
+                    }
+                }
+            }, "proto-resolve").start();
+            try {
+                // tvbus 最长等 30 秒，多给 5 秒余量
+                latch.await(35, java.util.concurrent.TimeUnit.SECONDS);
+            } catch (InterruptedException ignored) { }
+            resolved = holder[0];
+        } else {
+            resolved = resolvePrivateProtocol(url);
+        }
         if (resolved != null && !resolved.equals(url)) {
             url = resolved;
         }
