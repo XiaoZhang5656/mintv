@@ -1599,14 +1599,21 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         }
     }
 
-    /** 设置行里的"当前值"要跟着存储目录变，改完重建一次设置页。 */
+    /**
+     * 只重绑每行的文案，不重建弹窗。
+     *
+     * <p>授权返回后必须调一次，否则「存储目录」那行还显示旧值 ——
+     * 之前用 showTab() 刷新是无效的，它只切可见性，不重绑数据。
+     */
     private void refreshSettingRows() {
-        try {
-            if (currentTab == TAB_SETTINGS) {
-                showTab(TAB_SETTINGS);   // 重建设置页，让"当前值"跟着刷新
+        if (rowViews == null) return;
+        for (int i = 0; i < rowViews.size() && i < DemoData.ROW_TITLES.length; i++) {
+            try {
+                rowViews.get(i).bind(DemoData.ROW_TITLES[i][0], DemoData.ROW_TITLES[i][1],
+                        optionLabelsFor(i), selections[i]);
+            } catch (Throwable t) {
+                android.util.Log.w("MinTV", "重绑设置行 " + i + " 失败", t);
             }
-        } catch (Throwable t) {
-            android.util.Log.w("MinTV", "刷新设置行失败", t);
         }
     }
 
@@ -3745,16 +3752,29 @@ public class MainActivity extends Activity implements FocusEngine.Host {
 
     private void refreshHelperPage() {
         if (helperPage == null) return;
-        String ip = com.mintv.tv.data.LocalIp.get(MainActivity.this);
+        // LocalIp.get 取不到时可能返回 null 也可能抛异常，两种情况都兜住，
+        // 否则整个 refreshHelperPage 中断，地址和二维码都不会更新。
+        String ip = null;
+        try {
+            ip = com.mintv.tv.data.LocalIp.get(MainActivity.this);
+        } catch (Throwable t) {
+            android.util.Log.w("MinTV", "取本机 IP 失败", t);
+        }
         int port = remotePort > 0 ? remotePort : com.mintv.tv.data.RemoteServer.PORT_MAIN;
-        String url = "http://" + ip + ":" + port + "/";
+        String url = "http://" + (ip == null ? "" : ip) + ":" + port + "/";
+        android.util.Log.i("MinTV", "订阅页地址 ip=" + ip + " port=" + port);
         // 地址是动态的：IP 随网络变化，端口在 18899 被占用时会切 18900。
         //
         // 以前只显示 ip:port，而且 ip 取不到时显示成 ":18899"，
         // 用户看不出哪里不对。现在给出完整 URL，取不到 IP 时明说原因。
         if (ip == null || ip.isEmpty()) {
-            helperAddr.setText("未连接网络");
+            // 取不到局域网 IP 时用回环地址兜底，界面不留空。
+            // 注意：127.0.0.1 只有本机能访问，手机扫码后打不开 ——
+            // 这时候真正能用的前提是盒子已连上局域网。
+            url = "http://127.0.0.1:" + port + "/";
+            helperAddr.setText(url);
             helperAddr.setTextColor(0xFFFFA53D);
+            android.util.Log.w("MinTV", "未取到局域网 IP，地址回落到 " + url);
         } else {
             helperAddr.setText(url);
             helperAddr.setTextColor(Theme.FOCUS_BLUE);
@@ -5827,8 +5847,12 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                 out[0] = "未授权（用私有目录）";
             } else {
                 String p = com.mintv.tv.data.StorageDir.readablePath(root);
-                // 太长的路径把前面折掉，留末尾两段更有辨识度
-                if (p.length() > 26) p = "…" + p.substring(p.length() - 24);
+                // 深目录会很长，右侧按钮宽度放不下。
+                // 保留开头（/sdcard 或 /storage 用户认这个）和结尾（自己建的那层），
+                // 中间折成 …；完整路径在提示里能看到。
+                if (p.length() > 22) {
+                    p = p.substring(0, 10) + "…" + p.substring(p.length() - 10);
+                }
                 out[0] = p;
             }
             return out;
