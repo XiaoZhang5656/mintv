@@ -154,7 +154,21 @@ public class SettingRowView extends android.view.View {
             t.setColor(0xFF93939A);
             t.setTextSize(descSize);
             t.setFakeBoldText(false);
-            c.drawText(desc, padH, getHeight() * 0.72f, t);
+            // desc 是单行绘制，不换行也不自动截断 —— 内容一长就画到卡片外面去。
+            // 按可用宽度截断，超出部分用省略号。可用宽度保守取卡片的一半，
+            // 右边留给选项控件。
+            float avail = getWidth() * 0.52f - padH;
+            if (avail > 0) {
+                int fit = t.breakText(desc, true, avail, null);
+                if (fit < desc.length()) {
+                    String cut = desc.substring(0, Math.max(0, fit - 1)) + "…";
+                    c.drawText(cut, padH, getHeight() * 0.72f, t);
+                } else {
+                    c.drawText(desc, padH, getHeight() * 0.72f, t);
+                }
+            } else {
+                c.drawText(desc, padH, getHeight() * 0.72f, t);
+            }
         }
 
         // 把分段控件画进来（它已经 layout 好了）
