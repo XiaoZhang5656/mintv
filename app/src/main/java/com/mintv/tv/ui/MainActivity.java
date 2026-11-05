@@ -358,6 +358,14 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         // 那次 fillSubColumn 撞上 subColumn==null 直接返回，
         // 导致订阅列只剩标题、列表永远是空的。这里补一次。
         fillSubColumn();
+
+        // 扫一遍存储目录的 sources/，把里面的 m3u/txt 自动加成订阅。
+        // 延迟一点：loadPlaylist 刚跑完，别和它抢
+        ui.postDelayed(new Runnable() {
+            @Override public void run() {
+                if (!isFinishing()) loadLocalSources();
+            }
+        }, 1200);
         buildDialog(root);
         // 开屏：极简一屏，App 名 + 版本，900ms 后淡出。
         // 作用不是"好看"，是把"正在加载列表/EPG"这段不可避免的等待遮住，
@@ -789,7 +797,13 @@ public class MainActivity extends Activity implements FocusEngine.Host {
      * （电视盒子上经常没有这个设置页），要么走 SAF。SAF 是系统标准，
      * 手机和盒子都能用。
      */
-    private void pickScriptDir() {
+    /**
+     * 选存储根目录。
+     *
+     * <p>一个授权管全部：脚本、本地订阅、上传文件都在这个根下面。
+     * 之前是"脚本目录"单独一套，本地导入又一套，三处各存各的。
+     */
+    private void pickStorageDir() {
         try {
             android.content.Intent i = new android.content.Intent(
                     android.content.Intent.ACTION_OPEN_DOCUMENT_TREE);
@@ -812,10 +826,13 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         }
         if (req == REQ_SCRIPT_DIR) {
             if (res == RESULT_OK && data != null && data.getData() != null) {
-                com.mintv.tv.data.ScriptDir.setTreeUri(this, data.getData());
-                com.mintv.tv.data.ScriptLog.info("系统", "脚本目录已设置: "
-                        + com.mintv.tv.data.ScriptDir.displayPath(this));
-                osd.toast("脚本目录已设置");
+                com.mintv.tv.data.StorageDir.setRoot(this, data.getData());
+                String path = com.mintv.tv.data.StorageDir.readablePath(data.getData());
+                com.mintv.tv.data.ScriptLog.info("系统", "存储目录已设置: " + path);
+                osd.toast("已授权 " + path);
+                // 三个子目录已经建好，顺便把本地源扫一遍
+                loadLocalSources();
+                refreshSettingRows();
             }
             return;
         }
@@ -1541,24 +1558,67 @@ public class MainActivity extends Activity implements FocusEngine.Host {
      * <p>地址形如 {@code local://我的源.m3u}。文件名限制在 sources 目录内，
      * 拦 ".." 和斜杠，避免这个协议被用来读任意文件。
      */
+    /**
+     * 扫 sources/ 目录，把里面的 m3u / txt 都建成 local:// 订阅。
+     *
+     * <p>替代原来的「导入本地源」按钮：把文件丢进目录就行，不用再点导入。
+     * 已存在的（同文件名）跳过，不重复加。
+     */
+    private void loadLocalSources() {
+        java.util.List<String> names = com.mintv.tv.data.StorageDir.list(
+                this, com.mintv.tv.data.StorageDir.SUB_SOURCES);
+        if (names.isEmpty()) return;
+
+        java.util.Set<String> have = new java.util.HashSet<>();
+        for (com.mintv.tv.data.SubscriptionStore.Sub sub
+                : com.mintv.tv.data.SubscriptionStore.list(this)) {
+            if (sub.url != null && sub.url.startsWith("local://")) {
+                have.add(sub.url.substring("local://".length()));
+            }
+        }
+
+        int added = 0;
+        for (String n : names) {
+            String lower = n.toLowerCase();
+            if (!lower.endsWith(".m3u") && !lower.endsWith(".m3u8")
+                    && !lower.endsWith(".txt")) continue;
+            if (have.contains(n)) continue;
+            // 文件名去掉扩展名当订阅名
+            String title = n;
+            int dot = title.lastIndexOf('.');
+            if (dot > 0) title = title.substring(0, dot);
+            com.mintv.tv.data.SubscriptionStore.Sub created =
+                    new com.mintv.tv.data.SubscriptionStore.Sub(
+                            java.util.UUID.randomUUID().toString(), title, "local://" + n);
+            com.mintv.tv.data.SubscriptionStore.upsert(this, created);
+            added++;
+        }
+        if (added > 0) {
+            android.util.Log.i("MinTV", "从存储目录发现 " + added + " 个本地源");
+            osd.toast("发现 " + added + " 个本地源");
+        }
+    }
+
+    /** 设置行里的"当前值"要跟着存储目录变，改完重建一次设置页。 */
+    private void refreshSettingRows() {
+        try {
+            if (currentTab == TAB_SETTINGS) {
+                showTab(TAB_SETTINGS);   // 重建设置页，让"当前值"跟着刷新
+            }
+        } catch (Throwable t) {
+            android.util.Log.w("MinTV", "刷新设置行失败", t);
+        }
+    }
+
     private String readLocalSource(String url) {
         try {
             String name = url.substring("local://".length());
             if (name.isEmpty() || name.contains("..") || name.contains("/") || name.contains("\\")) {
                 return null;
             }
-            java.io.File f = new java.io.File(localSourceDir(), name);
-            if (!f.isFile()) return null;
-            java.io.FileInputStream in = new java.io.FileInputStream(f);
-            try {
-                java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
-                byte[] buf = new byte[8192];
-                int n;
-                while ((n = in.read(buf)) > 0) bos.write(buf, 0, n);
-                return new String(bos.toByteArray(), java.nio.charset.StandardCharsets.UTF_8);
-            } finally {
-                try { in.close(); } catch (Exception ignored) { }
-            }
+            // 统一存储：授权目录的 sources/ 优先，未授权回落私有目录
+            return com.mintv.tv.data.StorageDir.read(
+                    this, com.mintv.tv.data.StorageDir.SUB_SOURCES, name);
         } catch (Throwable t) {
             return null;
         }
@@ -2364,8 +2424,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     private static final String KEY_SELECTIONS  = "selections";
     private static final String KEY_HIDDEN_CATS = "hidden_cats";
     private static final int ROW_GROUP_MGR= com.mintv.tv.ui.setting.Settings.IDX_GROUP_MGR;
-    private static final int ROW_SCRIPT_DIR = com.mintv.tv.ui.setting.Settings.IDX_SCRIPT_DIR;
-    private static final int ROW_LOCAL_IMPORT = com.mintv.tv.ui.setting.Settings.IDX_LOCAL_IMPORT;
+    private static final int ROW_STORAGE_DIR = com.mintv.tv.ui.setting.Settings.IDX_STORAGE_DIR;
     private static final int ROW_NET_PROXY = com.mintv.tv.ui.setting.Settings.IDX_NET_PROXY;
     private static final int ROW_SHOW_SUBS = com.mintv.tv.ui.setting.Settings.IDX_SHOW_SUBS;
 
@@ -3296,6 +3355,11 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     private volatile com.forcetech.android.ForceTV curForceTv = null;
     private volatile String curPrivateUrl = null;
 
+    /** 正在解析的私有协议地址，用来挡住重复点击。 */
+    private String resolvingUrl;
+    /** TVCore.init 只做一次，且必须串行 —— 日志里出现过 4 线程抢锁 7 秒。 */
+    private final Object tvbusInitLock = new Object();
+
     /** 停掉当前所有私有协议引擎。非阻塞：内部起线程做 native 调用。 */
     private void stopPrivateEngines() {
         final com.forcetech.android.ForceTV ft = curForceTv;
@@ -3337,13 +3401,40 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         try {
             if ("tvbus".equals(scheme)) {
                 final com.tvbus.engine.TVCore core = com.tvbus.engine.TVCore.get();
-                if (!tvbusInited) {
-                    // applicationContext：TVCore 是全局单例，持有 Activity 会泄漏整个界面
-                    core.init(getApplicationContext());
-                    tvbusInited = true;
+                // init 必须串行。
+                //
+                // 真实日志：4 个 proto-resolve 线程同时进来，
+                // Long monitor contention ... TVCore.init ... waiters=3 for 7.007s。
+                // 并发调 init 会让 native 层状态互相覆盖，之后 start 也拿不到地址。
+                synchronized (tvbusInitLock) {
+                    if (!tvbusInited) {
+                        // applicationContext：TVCore 是全局单例，持有 Activity 会泄漏整个界面
+                        core.init(getApplicationContext());
+                        tvbusInited = true;
+                    }
                 }
                 curPrivateUrl = url;
-                String out = core.playTVBUSUrl(url);
+                // 同一地址已经在解析：直接返回，不再起第二个 start。
+                // 重复 start 会让 native 收到多次请求，但只有一份内部状态。
+                if (url.equals(resolvingUrl)) {
+                    android.util.Log.i("MinTV", "同一地址正在解析，忽略重复请求");
+                    return null;
+                }
+                // 超时时间跟用户设置走（"超时换源"那一项）。
+                // 用户的设置是全局约定，不该被某个协议单独写死。
+                // 用和"超时换源"同一个值；用户关掉超时（0）时给个 8 秒兜底，
+                // 否则 tvbus 的循环会退化成最短值。
+                int toMs = (int) switchTimeoutMs();
+                if (toMs <= 0) toMs = 8000;
+                com.tvbus.engine.TVCore.setTimeoutMs(toMs);
+                android.util.Log.i("MinTV", "tvbus 超时=" + toMs + "ms");
+                resolvingUrl = url;
+                String out;
+                try {
+                    out = core.playTVBUSUrl(url);
+                } finally {
+                    resolvingUrl = null;
+                }
                 if (out == null || out.isEmpty()) {
                     android.util.Log.w("MinTV", "tvbus 解析失败: " + url);
                     // 失败也要停，别留一个半初始化的引擎
@@ -3657,7 +3748,17 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         String ip = com.mintv.tv.data.LocalIp.get(MainActivity.this);
         int port = remotePort > 0 ? remotePort : com.mintv.tv.data.RemoteServer.PORT_MAIN;
         String url = "http://" + ip + ":" + port + "/";
-        helperAddr.setText(ip + ":" + port);
+        // 地址是动态的：IP 随网络变化，端口在 18899 被占用时会切 18900。
+        //
+        // 以前只显示 ip:port，而且 ip 取不到时显示成 ":18899"，
+        // 用户看不出哪里不对。现在给出完整 URL，取不到 IP 时明说原因。
+        if (ip == null || ip.isEmpty()) {
+            helperAddr.setText("未连接网络");
+            helperAddr.setTextColor(0xFFFFA53D);
+        } else {
+            helperAddr.setText(url);
+            helperAddr.setTextColor(Theme.FOCUS_BLUE);
+        }
         if (qrView != null) {
             android.graphics.Bitmap bmp = com.mintv.tv.data.QrUtil.encode(url, Theme.px(240));
             if (bmp != null) qrView.setImageBitmap(bmp);
@@ -5719,11 +5820,17 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                     ? "直连" : com.mintv.tv.data.NetProxy.url(this);
             return out;
         }
-        if ("script_dir".equals(id)) {
+        if ("storage_dir".equals(id)) {
             String[] out = base.clone();
-            String p = new com.mintv.tv.data.ScriptStore(this).displayPath();
-            int slash = p.lastIndexOf('/');
-            out[0] = slash >= 0 ? p.substring(slash + 1) : p;
+            android.net.Uri root = com.mintv.tv.data.StorageDir.rootUri(this);
+            if (root == null) {
+                out[0] = "未授权（用私有目录）";
+            } else {
+                String p = com.mintv.tv.data.StorageDir.readablePath(root);
+                // 太长的路径把前面折掉，留末尾两段更有辨识度
+                if (p.length() > 26) p = "…" + p.substring(p.length() - 24);
+                out[0] = p;
+            }
             return out;
         }
         return base;
@@ -6119,10 +6226,8 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             if (value == 0) showAutoStartGuide();
         } else if (row == ROW_NET_PROXY) {
             showProxyDialog();
-        } else if (row == ROW_LOCAL_IMPORT) {
-            pickLocalSource();
-        } else if (row == ROW_SCRIPT_DIR) {
-            pickScriptDir();
+        } else if (row == ROW_STORAGE_DIR) {
+            pickStorageDir();
         } else if (row == ROW_GROUP_MGR) {
             openGroupManager();
         } else if (row == ROW_THEME) {
