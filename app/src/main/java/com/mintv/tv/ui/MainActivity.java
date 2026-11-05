@@ -3503,19 +3503,24 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     /** TVCore.init 只做一次，且必须串行 —— 日志里出现过 4 线程抢锁 7 秒。 */
     private final Object tvbusInitLock = new Object();
 
-    /** 停掉当前所有私有协议引擎。非阻塞：内部起线程做 native 调用。 */
+    /**
+     * 放开当前私有协议引擎的引用。非阻塞。
+     *
+     * <p><b>不再调用 ForceTV.stop()</b>：native 的 stop 会释放
+     * j_select_reactor，而 _forcetv_run 的线程还在跑 select 循环，
+     * 下一轮就 SEGV（fault addr 0x198, run_reactor_event_loop()+6）。
+     * 实测切源三次必崩一次。
+     *
+     * <p>引擎本身按需拉流：VLC 断开 9906 之后它自然不干活，留着不占带宽。
+     * 猫影原版同样从不 stop。
+     */
     private void stopPrivateEngines() {
-        final com.forcetech.android.ForceTV ft = curForceTv;
         curForceTv = null;
         curPrivateUrl = null;
-        if (ft == null && !tvbusInited) return;
+        if (!tvbusInited) return;
+        // tvbus 是另一套 so，close 不涉及 forcetv 的 reactor，仍然照常停。
         new Thread(new Runnable() {
             @Override public void run() {
-                if (ft != null) {
-                    try { ft.stop2(); } catch (Throwable t) {
-                        android.util.Log.w("MinTV", "ForceTV stop 失败", t);
-                    }
-                }
                 try {
                     com.tvbus.engine.TVCore.close();
                     android.util.Log.i("MinTV", "私有引擎已停止");

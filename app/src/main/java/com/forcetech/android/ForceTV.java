@@ -24,8 +24,18 @@ public class ForceTV {
 
     public ForceTV() { }
 
-    /** 当前实例占用的端口，stop 时要释放。 */
+    /** 当前实例占用的端口。 */
     private int curPort = -1;
+
+    /**
+     * 已经 start 过的 so 名字。
+     *
+     * <p>libforcetv.so 的全局状态只有一份，重复调用 native {@code start()}
+     * 会重置结构体的同时把上一轮的事件循环线程留在原地，那个线程下一轮
+     * select 就踩空。所以同一个 so 只 start 一次，之后靠 switch_chan 换台。
+     */
+    private static final java.util.Set<String> STARTED =
+            java.util.Collections.synchronizedSet(new java.util.HashSet<String>());
 
     private native int start(int port, int bufBytes);
     private native int stop();
@@ -37,6 +47,12 @@ public class ForceTV {
      * @param port    本地监听端口
      */
     public void start(String libName, int port) {
+        curPort = port;
+        if (STARTED.contains(libName)) {
+            // 已经起过：复用那个引擎，只换台。
+            android.util.Log.i("ForceTV", libName + " 已在运行，复用 port=" + port);
+            return;
+        }
         try {
             System.loadLibrary(libName);
         } catch (Throwable t) {
@@ -44,17 +60,31 @@ public class ForceTV {
             return;
         }
         try {
-            // 换源前先停掉旧的，否则 native 引擎会累积
-            if (curPort > 0) stop2();
-            curPort = port;
-            start(port, BUF_BYTES);
+            int rc = start(port, BUF_BYTES);
+            android.util.Log.i("ForceTV", "start(" + libName + ", " + port + ") rc=" + rc);
+            STARTED.add(libName);
         } catch (Throwable t) {
             android.util.Log.w("ForceTV", "start 失败", t);
         }
     }
 
+    /**
+     * 停止引擎。
+     *
+     * <p><b>不要调用</b> —— 实测 native {@code stop()} 会释放 j_select_reactor，
+     * 而 {@code _forcetv_run} 起的线程还在 select 循环里，下一轮就踩空：
+     *
+     * <pre>
+     * signal 11 (SIGSEGV), fault addr 0x00000198, cause: null pointer dereference
+     * #00 libforcetv.so j_select_reactor::run_reactor_event_loop()+6
+     * #01 libforcetv.so x_net_task::run()+24
+     * #02 libforcetv.so _forcetv_run(void*)+54
+     * </pre>
+     *
+     * <p>猫影原版从不调 stop，引擎跟着进程一起死。这里保留方法只为兼容
+     * 旧调用点，实际是空操作。
+     */
     public void stop2() {
-        try { stop(); } catch (Throwable ignored) { }
         curPort = -1;
     }
 
