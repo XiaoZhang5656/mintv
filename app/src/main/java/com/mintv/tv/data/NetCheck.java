@@ -38,6 +38,20 @@ public final class NetCheck {
 
     private static final int MAGIC = 0x2112A442;
 
+    /** 单个服务器的总预算（DNS + UDP 往返）。 */
+    private static final long PROBE_BUDGET_MS = 4000L;
+
+    /** daemon 线程池，用完不阻塞进程退出。 */
+    private static final java.util.concurrent.ExecutorService POOL =
+            java.util.concurrent.Executors.newCachedThreadPool(
+                    new java.util.concurrent.ThreadFactory() {
+                        @Override public Thread newThread(Runnable r) {
+                            Thread t = new Thread(r, "stun-probe");
+                            t.setDaemon(true);
+                            return t;
+                        }
+                    });
+
     /** NAT 类型。 */
     public static final int NAT_UNKNOWN = 0;
     public static final int NAT_FULL_CONE = 1;
@@ -78,8 +92,9 @@ public final class NetCheck {
         Result r = new Result();
         DatagramSocket sock = null;
         try {
+            // new DatagramSocket() 已经绑好了一个随机本地端口，再 bind 会抛
+            // "Already bound"，整轮检测直接失败 —— 之前一直显示"连不上 STUN"就是这个。
             sock = new DatagramSocket();
-            sock.bind(new java.net.InetSocketAddress(0));
             sock.setSoTimeout(3000);
             r.localPort = sock.getLocalPort();
 
@@ -87,7 +102,14 @@ public final class NetCheck {
             Set<Integer> ports = new HashSet<>();
 
             for (String[] srv : STUN_SERVERS) {
-                int[] mapped = probe(sock, srv[0], Integer.parseInt(srv[1]));
+                int[] mapped;
+                try {
+                    mapped = probeWithTimeout(sock, srv[0], Integer.parseInt(srv[1]));
+                } catch (ProbeTimeout pt) {
+                    // 线程取消不掉，继续用这个 sock 会收到上一轮迟到的包而误判。
+                    r.note = "探测超时（DNS 或 UDP 无响应），已停止";
+                    break;
+                }
                 if (mapped == null) continue;
                 String ip = ipToString(mapped[0]);
                 int port = mapped[1];
@@ -100,7 +122,9 @@ public final class NetCheck {
 
             if (r.responded == 0) {
                 r.natType = NAT_BLOCKED;
-                r.note = "所有 STUN 都没应答：可能被墙、或运营商 CGNAT 完全阻断";
+                if (r.note.isEmpty()) {
+                    r.note = "所有 STUN 都没应答：可能被墙、或运营商 CGNAT 完全阻断";
+                }
             } else if (ips.size() > 1) {
                 r.natType = NAT_UNKNOWN;
                 r.note = "出口 IP 不一致（多出口/负载均衡），需要更多数据判断";
@@ -119,6 +143,42 @@ public final class NetCheck {
             if (sock != null) try { sock.close(); } catch (Throwable ignored) { }
         }
         return r;
+    }
+
+    /**
+     * 带硬超时的探测。
+     *
+     * <p>为什么需要：{@code InetAddress.getByName} 做 DNS 解析时不受
+     * SoTimeout 约束，弱网下能卡几十秒。三个服务器累加会超过一分钟，
+     * 界面上就一直停在"正在检测网络…"。
+     *
+     * <p>做法是把整个 probe（含 DNS）丢进线程池，主线程只等固定时间。
+     * 超时就放弃这个服务器 —— 检测本来就是"能测出来最好，测不出不影响播放"。
+     */
+    private static int[] probeWithTimeout(final DatagramSocket sock,
+                                          final String host, final int port) {
+        java.util.concurrent.Future<int[]> f =
+                POOL.submit(new java.util.concurrent.Callable<int[]>() {
+                    @Override public int[] call() { return probe(sock, host, port); }
+                });
+        try {
+            return f.get(PROBE_BUDGET_MS, java.util.concurrent.TimeUnit.MILLISECONDS);
+        } catch (java.util.concurrent.TimeoutException te) {
+            // 取消不掉阻塞中的 DNS/recv，那个线程可能稍后还会往 sock 里塞包。
+            // 所以不只放弃这个服务器，是整轮放弃 —— 见调用处的 catch。
+            f.cancel(true);
+            android.util.Log.w("NetCheck", host + " 超时 "
+                    + PROBE_BUDGET_MS + "ms（DNS 卡住或 UDP 无响应）");
+            throw new ProbeTimeout();
+        } catch (Throwable t) {
+            f.cancel(true);
+            return null;
+        }
+    }
+
+    /** 探测超时。见 {@link #probeWithTimeout} 里的说明。 */
+    private static final class ProbeTimeout extends RuntimeException {
+        ProbeTimeout() { super("stun probe timeout"); }
     }
 
     /**
