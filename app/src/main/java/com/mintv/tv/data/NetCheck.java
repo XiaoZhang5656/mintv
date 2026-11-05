@@ -31,9 +31,26 @@ public final class NetCheck {
 
     /** 公开 STUN，全部实测可用。小米那个是国内的，优先。 */
     private static final String[][] STUN_SERVERS = {
-            {"stun.miwifi.com", "3478"},
             {"stun.chat.bilibili.com", "3478"},
-            {"stun.hitv.com", "3478"},
+            {"stun.cloudflare.com", "3478"},
+            {"stun.miwifi.com", "3478"},
+    };
+
+    /**
+     * 支持 CHANGE-REQUEST（RFC 5780）的服务器，用来测过滤策略。
+     *
+     * <p>实测（2026-11，同一 socket 打到四个目标）：
+     * <pre>
+     *   stun.chat.bilibili.com  Test II 通
+     *   stun.cloudflare.com     Test II 通
+     *   stun.miwifi.com         Test II 超时
+     *   stun.hitv.com           Test II 超时
+     * </pre>
+     * 用不支持的那两个测，会把"服务器不认这个属性"误判成"过滤器严格"。
+     */
+    private static final String[][] CHANGE_CAPABLE = {
+            {"stun.chat.bilibili.com", "3478"},
+            {"stun.cloudflare.com", "3478"},
     };
 
     private static final int MAGIC = 0x2112A442;
@@ -65,6 +82,18 @@ public final class NetCheck {
         public String publicIp;            // 拿到的公网 IP（可能为 null）
         public final List<String> mappings = new ArrayList<>();
         public int responded;              // 有应答的服务器数
+        /**
+         * 过滤策略：true = 端点无关（任何外部主机都能打进来）。
+         *
+         * <p>测法：把 Binding Request 发到 server1，用 CHANGE-REQUEST 要求
+         * 服务器从另一个 IP 和端口回包。能收到就说明映射建立之后，
+         * 陌生来源的包也能穿过 NAT。
+         *
+         * <p>对称型 NAT 也有过滤宽松的（映射随目标变，但过滤只看映射是否存在）。
+         * 这种组合比"双向都对称"好打洞 —— 对方一旦知道映射端口就能进来。
+         */
+        public boolean filterOpen;
+
         public String note = "";           // 结论说明
 
         /** 能不能当上传节点：只有全锥形和地址受限有机会。 */
@@ -76,7 +105,9 @@ public final class NetCheck {
             switch (natType) {
                 case NAT_FULL_CONE:  return "全锥形（可当节点）";
                 case NAT_RESTRICTED: return "地址/端口受限（有机会）";
-                case NAT_SYMMETRIC:  return "对称型（打洞不可行）";
+                case NAT_SYMMETRIC:  return filterOpen
+                        ? "对称型·过滤宽松（知道端口就能打洞）"
+                        : "对称型·过滤严格（打洞不可行）";
                 case NAT_BLOCKED:    return "无法连接 STUN（被墙或 CGNAT）";
                 default:             return "未知";
             }
@@ -120,6 +151,25 @@ public final class NetCheck {
                 if (r.publicIp == null) r.publicIp = ip;
             }
 
+            // 过滤策略。必须放在映射探测之后 —— 它会在同一个 socket 上
+            // 再建立一条新映射，先测的话会把对称性判断搅乱。
+            if (r.responded > 0) {
+                for (String[] srv : CHANGE_CAPABLE) {
+                    int[] m;
+                    try {
+                        m = probeWithTimeout(sock, srv[0],
+                                Integer.parseInt(srv[1]), true);
+                    } catch (ProbeTimeout pt) {
+                        m = null;
+                    }
+                    if (m != null) {
+                        r.filterOpen = true;
+                        r.mappings.add("过滤策略 " + srv[0] + " → 换地址仍可达");
+                        break;
+                    }
+                }
+            }
+
             if (r.responded == 0) {
                 r.natType = NAT_BLOCKED;
                 if (r.note.isEmpty()) {
@@ -129,12 +179,24 @@ public final class NetCheck {
                 r.natType = NAT_UNKNOWN;
                 r.note = "出口 IP 不一致（多出口/负载均衡），需要更多数据判断";
             } else if (ports.size() == 1) {
-                r.natType = NAT_FULL_CONE;
-                r.note = "同一本地端口映射到固定公网端口，打洞成功率最高";
+                if (r.filterOpen) {
+                    r.natType = NAT_FULL_CONE;
+                    r.note = "映射固定 + 过滤宽松 = 全锥形，打洞成功率最高，适合当节点";
+                } else {
+                    r.natType = NAT_RESTRICTED;
+                    r.note = "映射固定但过滤严格 = 受限锥形，"
+                            + "对方需要先收到你的包才能回，打洞有机会";
+                }
             } else {
                 r.natType = NAT_SYMMETRIC;
-                r.note = "同一本地端口映射到 " + ports.size()
-                        + " 个不同公网端口 —— 对方无法预知，打洞必然失败";
+                if (r.filterOpen) {
+                    r.note = "同一本地端口对不同目标映射出 " + ports.size()
+                            + " 个不同公网端口（对称型），但过滤器宽松，"
+                            + "知道映射端口就能打进来。当下载端没问题，当上传节点不可靠";
+                } else {
+                    r.note = "同一本地端口映射到 " + ports.size()
+                            + " 个不同公网端口，且过滤器严格 —— 对方无法预知，打洞必然失败";
+                }
             }
         } catch (Throwable t) {
             r.natType = NAT_BLOCKED;
@@ -157,9 +219,15 @@ public final class NetCheck {
      */
     private static int[] probeWithTimeout(final DatagramSocket sock,
                                           final String host, final int port) {
+        return probeWithTimeout(sock, host, port, false);
+    }
+
+    private static int[] probeWithTimeout(final DatagramSocket sock,
+                                          final String host, final int port,
+                                          final boolean changeBoth) {
         java.util.concurrent.Future<int[]> f =
                 POOL.submit(new java.util.concurrent.Callable<int[]>() {
-                    @Override public int[] call() { return probe(sock, host, port); }
+                    @Override public int[] call() { return probe(sock, host, port, changeBoth); }
                 });
         try {
             return f.get(PROBE_BUDGET_MS, java.util.concurrent.TimeUnit.MILLISECONDS);
@@ -185,8 +253,12 @@ public final class NetCheck {
      * 发一次 Binding Request，返回 {IPv4 整数, 端口}；失败返回 null。
      */
     private static int[] probe(DatagramSocket sock, String host, int port) {
+        return probe(sock, host, port, false);
+    }
+
+    private static int[] probe(DatagramSocket sock, String host, int port, boolean changeBoth) {
         try {
-            byte[] pkt = buildRequest();
+            byte[] pkt = buildRequest(changeBoth);
             InetAddress addr = InetAddress.getByName(host);
             sock.send(new DatagramPacket(pkt, pkt.length, addr, port));
 
@@ -201,6 +273,30 @@ public final class NetCheck {
 
     /** 20 字节头：type=0x0001, length=0, magic, 12 字节随机事务 ID。 */
     private static byte[] buildRequest() {
+        return buildRequest(false);
+    }
+
+    /**
+     * @param changeBoth 带上 CHANGE-REQUEST 属性（换 IP + 换端口）要求服务器
+     *                   从另一个地址回包，用来判断 NAT 的过滤策略
+     */
+    private static byte[] buildRequest(boolean changeBoth) {
+        if (changeBoth) {
+            // 头 20 字节 + 属性 8 字节（type 0x0003, len 4, value 0x06）
+            byte[] pkt = new byte[28];
+            pkt[0] = 0x00; pkt[1] = 0x01;
+            pkt[2] = 0x00; pkt[3] = 0x08;             // length = 8
+            pkt[4] = 0x21; pkt[5] = 0x12;
+            pkt[6] = (byte) 0xA4; pkt[7] = 0x42;
+            byte[] tid = new byte[12];
+            new Random().nextBytes(tid);
+            System.arraycopy(tid, 0, pkt, 8, 12);
+            pkt[20] = 0x00; pkt[21] = 0x03;           // CHANGE-REQUEST
+            pkt[22] = 0x00; pkt[23] = 0x04;           // length = 4
+            pkt[24] = 0x00; pkt[25] = 0x00;
+            pkt[26] = 0x00; pkt[27] = 0x06;           // change IP(0x04) | port(0x02)
+            return pkt;
+        }
         byte[] pkt = new byte[20];
         pkt[0] = 0x00; pkt[1] = 0x01;                 // Binding Request
         pkt[2] = 0x00; pkt[3] = 0x00;                 // length = 0

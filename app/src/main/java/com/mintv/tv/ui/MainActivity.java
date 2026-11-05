@@ -6368,7 +6368,10 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         switch (r.natType) {
             case com.mintv.tv.data.NetCheck.NAT_FULL_CONE:  return "全锥形";
             case com.mintv.tv.data.NetCheck.NAT_RESTRICTED: return "地址受限";
-            case com.mintv.tv.data.NetCheck.NAT_SYMMETRIC:  return "对称型";
+            case com.mintv.tv.data.NetCheck.NAT_SYMMETRIC:
+                // 过滤宽松的对称型能被打进来（只是对方得先知道端口），
+                // 跟"双向都对称"不是一回事，副标题上分开显示。
+                return r.filterOpen ? "对称型·宽松" : "对称型";
             case com.mintv.tv.data.NetCheck.NAT_BLOCKED:    return "连不上 STUN";
             default: return "未知";
         }

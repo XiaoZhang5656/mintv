@@ -161,8 +161,30 @@ public final class P2PEngine {
         List<TrackerClient.Peer> peers = tracker.peers(channelHash, seq);
         if (peers.isEmpty()) return null;
 
-        // 3) 依次试。先直连（成本最低），不行再打洞，打完再试一次。
-        for (TrackerClient.Peer p : peers) {
+        // 3) 排序之后再试。
+        //
+        // tracker 返回的 rtt / load 以前直接丢掉了，等于按服务器随手给的
+        // 顺序瞎撞。先试近的、闲的，失败率明显低一截。
+        //
+        // 打分规则：
+        //   - rtt 未知（0 或负数）当 800ms 处理，排到后面去，但别排除
+        //   - load 是 0~1 的负载比例，乘 500 让它跟 rtt 同量级
+        //   - 两项相加，小的先试
+        java.util.List<TrackerClient.Peer> ordered =
+                new java.util.ArrayList<>(peers);
+        try {
+            java.util.Collections.sort(ordered,
+                    new java.util.Comparator<TrackerClient.Peer>() {
+                        @Override public int compare(TrackerClient.Peer a,
+                                                     TrackerClient.Peer b) {
+                            return scorePeer(a) - scorePeer(b);
+                        }
+                    });
+        } catch (Throwable t) {
+            android.util.Log.w("P2P", "peer 排序失败，按原顺序试", t);
+        }
+
+        for (TrackerClient.Peer p : ordered) {
             String key = p.addr + ":" + p.port;
 
             byte[] data = fetchFromPeer(p, seq);
@@ -194,6 +216,19 @@ public final class P2PEngine {
             }
         }
         return null;
+    }
+
+    /**
+     * 给候选节点打分，越小越优先。
+     *
+     * <p>rtt 未知时按 800ms 估，宁可排后面也别排除 —— 有些 tracker 不给 rtt，
+     * 排掉了就等于永远只在自己那几个邻居里打转。
+     */
+    private static int scorePeer(TrackerClient.Peer p) {
+        if (p == null) return Integer.MAX_VALUE;
+        int rtt = p.rtt > 0 ? Math.min(p.rtt, 2000) : 800;
+        double load = p.load < 0 ? 0 : (p.load > 1 ? 1 : p.load);
+        return rtt + (int) (load * 500);
     }
 
     /** 从一个对端拉分片。失败（超时/校验不过）返回 null。 */
