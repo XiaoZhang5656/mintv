@@ -134,9 +134,16 @@ public final class StorageDir {
             if (exists(c, DocumentsContract.buildDocumentUriUsingTree(root, childDoc))) {
                 return childUri;
             }
-            // 不存在就建一个，再用它的 tree uri
+            // 不存在就建一个。
+            //
+            // 关键：createDocument 的 parent 必须是 document uri，
+            // 不能直接传 tree uri（content://.../tree/primary%3Amintv）。
+            // 传 tree uri 会返回 null，子目录就永远建不出来 ——
+            // 现象是"授权成功了，但目录里空空如也"。
+            Uri parentDoc = DocumentsContract.buildDocumentUriUsingTree(root, rootDoc);
             Uri created = DocumentsContract.createDocument(
-                    c.getContentResolver(), root, DocumentsContract.Document.MIME_TYPE_DIR, sub);
+                    c.getContentResolver(), parentDoc,
+                    DocumentsContract.Document.MIME_TYPE_DIR, sub);
             if (created == null) return null;
             String newDoc = DocumentsContract.getDocumentId(created);
             return DocumentsContract.buildTreeDocumentUri(root.getAuthority(), newDoc);

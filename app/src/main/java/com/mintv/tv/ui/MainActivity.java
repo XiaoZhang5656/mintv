@@ -3789,6 +3789,11 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         android.util.Log.w("MinTV", "地址已写入: " + url
                 + " len=" + (helperAddr == null || helperAddr.getText() == null
                         ? -1 : helperAddr.getText().length()));
+        // 诊断：helperAddr 在界面上一直不显示，把 URL 也拼进状态行，
+        // 这样一定能看到算出来的地址是什么。
+        if (helperState != null) {
+            helperState.setText("● 等待手机扫码   " + url);
+        }
         if (qrView != null) {
             android.graphics.Bitmap bmp = com.mintv.tv.data.QrUtil.encode(url, Theme.px(240));
             if (bmp != null) qrView.setImageBitmap(bmp);
@@ -3799,12 +3804,17 @@ public class MainActivity extends Activity implements FocusEngine.Host {
 
     private void refreshHelperState() {
         if (helperState == null) return;
+        // 状态行带上地址：helperAddr 那个独立控件在这台设备上一直不显示，
+        // 合成一行既省空间又保证用户一定能看到访问地址。
+        String addr = helperAddr == null || helperAddr.getText() == null
+                ? "" : helperAddr.getText().toString();
+        String suffix = addr.isEmpty() ? "" : ("   " + addr);
         if (remote == null || !remote.running()) {
-            helperState.setText("● 服务未启动");
+            helperState.setText("● 服务未启动" + suffix);
             return;
         }
         boolean on = remote.idleMs() < 15000;
-        helperState.setText(on ? "● 手机已连接 · 正在浏览" : "● 等待手机扫码");
+        helperState.setText((on ? "● 手机已连接 · 正在浏览" : "● 等待手机扫码") + suffix);
         helperState.setTextColor(on ? Theme.SEL_GREEN : 0xFFFFA53D);
     }
 
