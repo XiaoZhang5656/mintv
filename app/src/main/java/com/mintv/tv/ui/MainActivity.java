@@ -1609,7 +1609,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         if (rowViews == null) return;
         for (int i = 0; i < rowViews.size() && i < DemoData.ROW_TITLES.length; i++) {
             try {
-                rowViews.get(i).bind(DemoData.ROW_TITLES[i][0], DemoData.ROW_TITLES[i][1],
+                rowViews.get(i).bind(DemoData.ROW_TITLES[i][0], hintFor(i),
                         optionLabelsFor(i), selections[i]);
             } catch (Throwable t) {
                 android.util.Log.w("MinTV", "重绑设置行 " + i + " 失败", t);
@@ -5446,7 +5446,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             //   主题颜色 → 现在选的色名
             //   脚本目录 → 现在用的目录名
             // 文案是 SettingDef 里写死的（"选择…"），这里替换掉。
-            row.bind(DemoData.ROW_TITLES[i][0], DemoData.ROW_TITLES[i][1],
+            row.bind(DemoData.ROW_TITLES[i][0], hintFor(i),
                     optionLabelsFor(i), selections[i]);
             row.setClickable(true);
             row.setOnClickListener(new View.OnClickListener() {
@@ -5823,6 +5823,27 @@ public class MainActivity extends Activity implements FocusEngine.Host {
      * 用户选了紫色，那行还写着「选择…」，看不出当前是什么。
      * 对"有当前值"的行这里换成真实值。
      */
+    /**
+     * 每行的说明文字。
+     *
+     * <p>存储目录这种需要展示完整路径的，放在说明行里 —— 按钮宽度有限，
+     * 塞进去不是折成看不懂的省略号，就是溢出。
+     */
+    private String hintFor(int rowIndex) {
+        String base = DemoData.ROW_TITLES[rowIndex][1];
+        String id;
+        try { id = com.mintv.tv.ui.setting.Settings.ALL[rowIndex].id; }
+        catch (Throwable t) { return base; }
+
+        if ("storage_dir".equals(id)) {
+            android.net.Uri root = com.mintv.tv.data.StorageDir.rootUri(this);
+            if (root == null) return "未授权：脚本和本地源存在 App 私有目录，文件管理器看不到";
+            String p = com.mintv.tv.data.StorageDir.readablePath(root);
+            return "当前：" + p + "（脚本 scripts/ 订阅 sources/）";
+        }
+        return base;
+    }
+
     private String[] optionLabelsFor(int rowIndex) {
         String[] base = DemoData.ROW_OPTIONS[rowIndex];
         String id;
@@ -5847,13 +5868,11 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                 out[0] = "未授权（用私有目录）";
             } else {
                 String p = com.mintv.tv.data.StorageDir.readablePath(root);
-                // 深目录会很长，右侧按钮宽度放不下。
-                // 保留开头（/sdcard 或 /storage 用户认这个）和结尾（自己建的那层），
-                // 中间折成 …；完整路径在提示里能看到。
-                if (p.length() > 22) {
-                    p = p.substring(0, 10) + "…" + p.substring(p.length() - 10);
-                }
-                out[0] = p;
+                // 按钮只放最后一段目录名（mintv），完整路径放下面那行说明里。
+                // 路径折成 /storage/e…intv 读不出是哪一层，不如直接给名字。
+                int slash = p.lastIndexOf('/');
+                out[0] = slash >= 0 && slash < p.length() - 1
+                        ? p.substring(slash + 1) : p;
             }
             return out;
         }
