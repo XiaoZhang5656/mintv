@@ -122,33 +122,63 @@ public final class StorageDir {
     // ---------- 目录 ----------
 
     /** 保证子目录存在，返回它的 tree uri；失败返回 null。 */
+    /**
+     * 确保 {@code sub} 子目录存在，返回它的 tree uri。
+     *
+     * <p>之前的实现用 {@code exists()} 判断目录是否已建好，但那个检查
+     * 依赖 {@code buildDocumentUriUsingTree} 拼出的 URI 能被 query 到 ——
+     * 实测在部分设备上拼出来的 URI 查不到，于是误判成"目录不存在"，
+     * 又去 createDocument，创建失败返回 null，最后调用方回落到私有目录，
+     * 表现就是"授权了但读不到文件"。
+     *
+     * <p>现在改成：先列 root 的子项，按名字找；找不到才创建。
+     * 这条路径只用 {@code buildChildDocumentsUriUsingTree}，不依赖单个
+     * document URI 的可查性，稳得多。
+     */
     public static Uri ensureSub(Context c, String sub) {
         Uri root = rootUri(c);
         if (root == null) return null;
         String rootDoc = docId(root);
         if (rootDoc == null) return null;
+
         try {
-            String childDoc = rootDoc + "/" + sub;
-            Uri childUri = DocumentsContract.buildTreeDocumentUri(root.getAuthority(), childDoc);
-            // 已存在就直接用
-            if (exists(c, DocumentsContract.buildDocumentUriUsingTree(root, childDoc))) {
-                return childUri;
+            // 1) 先列 root 下所有子项，找同名目录
+            Uri children = DocumentsContract.buildChildDocumentsUriUsingTree(root, rootDoc);
+            String foundId = null;
+            try (android.database.Cursor cur = c.getContentResolver().query(children,
+                    new String[]{
+                            DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                            DocumentsContract.Document.COLUMN_DISPLAY_NAME},
+                    null, null, null)) {
+                if (cur != null) {
+                    while (cur.moveToNext()) {
+                        String id = cur.getString(0);
+                        String name = cur.getString(1);
+                        if (sub.equals(name)) { foundId = id; break; }
+                    }
+                }
+            } catch (Throwable t) {
+                android.util.Log.w("StorageDir", "列 root 子项失败", t);
             }
-            // 不存在就建一个。
-            //
-            // 关键：createDocument 的 parent 必须是 document uri，
-            // 不能直接传 tree uri（content://.../tree/primary%3Amintv）。
-            // 传 tree uri 会返回 null，子目录就永远建不出来 ——
-            // 现象是"授权成功了，但目录里空空如也"。
+
+            if (foundId != null) {
+                return DocumentsContract.buildTreeDocumentUri(root.getAuthority(), foundId);
+            }
+
+            // 2) 没找到就创建（parent 必须是 document uri）
             Uri parentDoc = DocumentsContract.buildDocumentUriUsingTree(root, rootDoc);
             Uri created = DocumentsContract.createDocument(
                     c.getContentResolver(), parentDoc,
                     DocumentsContract.Document.MIME_TYPE_DIR, sub);
-            if (created == null) return null;
-            String newDoc = DocumentsContract.getDocumentId(created);
-            return DocumentsContract.buildTreeDocumentUri(root.getAuthority(), newDoc);
+            if (created == null) {
+                android.util.Log.w("StorageDir", "createDocument 返回 null: " + sub);
+                return null;
+            }
+            String newId = DocumentsContract.getDocumentId(created);
+            return DocumentsContract.buildTreeDocumentUri(root.getAuthority(), newId);
+
         } catch (Throwable t) {
-            android.util.Log.w("StorageDir", "建子目录失败 " + sub, t);
+            android.util.Log.w("StorageDir", "ensureSub 异常 " + sub, t);
             return null;
         }
     }

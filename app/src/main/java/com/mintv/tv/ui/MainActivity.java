@@ -1600,8 +1600,8 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             com.mintv.tv.data.SubscriptionStore.upsert(this, created);
             added++;
         }
-        lastScanDiag = "sources 有 " + names.size() + " 个文件 · 新增 " + added;
-        android.util.Log.w("MinTV", "扫描本地源: " + lastScanDiag);
+        android.util.Log.w("MinTV", "sources 有 " + names.size() + " 个文件 · 新增 " + added
+                + " · 列表=" + names);
         if (added > 0) {
             osd.toast("发现 " + added + " 个本地源");
         } else if (!names.isEmpty()) {
@@ -3828,7 +3828,6 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         String addr = helperAddr == null || helperAddr.getText() == null
                 ? "" : helperAddr.getText().toString();
         String suffix = addr.isEmpty() ? "" : ("   " + addr);
-        if (lastScanDiag != null && !lastScanDiag.isEmpty()) suffix += "\n" + lastScanDiag;
         if (remote == null || !remote.running()) {
             helperState.setText("● 服务未启动" + suffix);
             return;
