@@ -4689,42 +4689,25 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         if (epgCursor >= 0 && epgPanel != null) epgPanel.setFocus(epgCursor);
         epgScroll.animate().alpha(1f).setDuration(Theme.T_PANEL).start();
 
-        // 分类栏滑出屏幕
-        navPanel.animate()
-                .translationX(-(subColW() + Theme.px(Theme.NAV_W)))
-                .alpha(0f)
-                .setDuration(Theme.T_PANEL).start();
+        // 纯流式：GONE 不占位，后面的列自动补齐。
+        // 不加任何 translationX —— 之前 GONE + 位移两套一起用，
+        // 频道列被推了两次，出屏/压缩/左边黑一块都是这么来的。
+        navPanel.animate().alpha(0f).setDuration(Theme.T_PANEL).start();
         navDivider.animate().alpha(0f).setDuration(Theme.T_PANEL).start();
         railView.animate().alpha(0f).setDuration(Theme.T_PANEL).start();
-        // 订阅列不在导航面板里，得单独藏 —— 之前漏了这一步，
-        // 全屏播放时它留在左边占着 200px
         if (subColumn != null) {
             subColumn.animate().alpha(0f).setDuration(Theme.T_PANEL).start();
         }
-        // 滑出去的分类栏不能再吃点击
         for (NavItemView v : navViews) v.setClickable(false);
         ui.postDelayed(new Runnable() {
             @Override public void run() {
                 if (!epgPanelOpen) return;
-                navPanel.setVisibility(View.GONE);
-                // INVISIBLE 不是 GONE：GONE 会让 LinearLayout 重新排布，
-            // 后面的列自动前移，而 chanContainer 的 translationX 是按
-            // "订阅列还占着 200px"算的 —— 结果频道列被推出屏幕，
-            // 看起来就是抽屉态左边一片空白。
-            if (subColumn != null) subColumn.setVisibility(View.INVISIBLE);
+                navPanel.setVisibility(View.GONE);          // 不占位 → 频道列自动到最左
                 navDivider.setVisibility(View.GONE);
                 railView.setVisibility(View.GONE);
-                // INVISIBLE 不是 GONE：GONE 会让 LinearLayout 重新排布，
-            // 后面的列自动前移，而 chanContainer 的 translationX 是按
-            // "订阅列还占着 200px"算的 —— 结果频道列被推出屏幕，
-            // 看起来就是抽屉态左边一片空白。
-            if (subColumn != null) subColumn.setVisibility(View.INVISIBLE);
+                if (subColumn != null) subColumn.setVisibility(View.GONE);
             }
         }, Theme.T_PANEL + 40);
-        // 频道列左移补位
-        chanContainer.animate()
-                .translationX(-(subColW() + Theme.px(Theme.NAV_W)))
-                .setDuration(Theme.T_PANEL).start();
         layoutVideoTap();
         updateOsdInset();
     }
@@ -4739,20 +4722,16 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                     @Override public void run() { epgScroll.setVisibility(View.GONE); }
                 }).start();
 
+        // 恢复各列：VISIBLE 之后流式自动把频道列推回原位，不用位移
         navPanel.setVisibility(View.VISIBLE);
         if (subColumn != null) subColumn.setVisibility(View.VISIBLE);
         navDivider.setVisibility(View.VISIBLE);
         railView.setVisibility(View.VISIBLE);
-        navPanel.animate()
-                .translationX(0f)
-                .alpha(1f)
-                .setDuration(Theme.T_PANEL).start();
+        navPanel.animate().alpha(1f).setDuration(Theme.T_PANEL).start();
         navDivider.animate().alpha(1f).setDuration(Theme.T_PANEL).start();
         railView.animate().alpha(1f).setDuration(Theme.T_PANEL).start();
+        if (subColumn != null) subColumn.animate().alpha(1f).setDuration(Theme.T_PANEL).start();
         for (NavItemView v : navViews) v.setClickable(true);
-        chanContainer.animate()
-                .translationX(0f)
-                .setDuration(Theme.T_PANEL).start();
         layoutVideoTap();
         updateOsdInset();
 
