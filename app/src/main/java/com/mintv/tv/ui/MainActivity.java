@@ -210,6 +210,8 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     private int pageFocusIdx = -1;
     private android.widget.ImageView qrView;
     private TextView helperAddr;
+    /** 上次扫 sources/ 的诊断串，显示在订阅页上方便定位问题。 */
+    private String lastScanDiag = "";
     private TextView helperState;
     private LinearLayout helperSubs;
     private TextView infoPageText;
@@ -1567,7 +1569,12 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     private void loadLocalSources() {
         java.util.List<String> names = com.mintv.tv.data.StorageDir.list(
                 this, com.mintv.tv.data.StorageDir.SUB_SOURCES);
-        if (names.isEmpty()) return;
+        boolean rooted = com.mintv.tv.data.StorageDir.hasRoot(this);
+        if (names.isEmpty()) {
+            lastScanDiag = "sources 空 · " + (rooted ? "已授权" : "未授权");
+            android.util.Log.w("MinTV", "扫描本地源: " + lastScanDiag);
+            return;
+        }
 
         java.util.Set<String> have = new java.util.HashSet<>();
         for (com.mintv.tv.data.SubscriptionStore.Sub sub
@@ -1593,9 +1600,15 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             com.mintv.tv.data.SubscriptionStore.upsert(this, created);
             added++;
         }
+        lastScanDiag = "sources 有 " + names.size() + " 个文件 · 新增 " + added;
+        android.util.Log.w("MinTV", "扫描本地源: " + lastScanDiag);
         if (added > 0) {
-            android.util.Log.i("MinTV", "从存储目录发现 " + added + " 个本地源");
             osd.toast("发现 " + added + " 个本地源");
+        } else if (!names.isEmpty()) {
+            // 目录里有文件但一个都没加：要么文件名后缀不对，要么已经加过了。
+            // 后者是正常的，前者需要提示，否则用户以为功能坏了。
+            android.util.Log.w("MinTV", "sources/ 有 " + names.size()
+                    + " 个文件，但没有新增订阅（已存在或后缀不符）");
         }
     }
 
@@ -3752,6 +3765,12 @@ public class MainActivity extends Activity implements FocusEngine.Host {
 
     private void refreshHelperPage() {
         if (helperPage == null) return;
+        // 每次进这一页都扫一遍 sources/：
+        // 用户很可能是在 App 运行期间用文件管理器丢文件进来的，
+        // 只在启动和授权后扫一次会导致"放了文件但没反应"。
+        try { loadLocalSources(); } catch (Throwable t) {
+            android.util.Log.w("MinTV", "扫描本地源失败", t);
+        }
         // LocalIp.get 取不到时可能返回 null 也可能抛异常，两种情况都兜住，
         // 否则整个 refreshHelperPage 中断，地址和二维码都不会更新。
         String ip = null;
@@ -3809,6 +3828,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         String addr = helperAddr == null || helperAddr.getText() == null
                 ? "" : helperAddr.getText().toString();
         String suffix = addr.isEmpty() ? "" : ("   " + addr);
+        if (lastScanDiag != null && !lastScanDiag.isEmpty()) suffix += "\n" + lastScanDiag;
         if (remote == null || !remote.running()) {
             helperState.setText("● 服务未启动" + suffix);
             return;
