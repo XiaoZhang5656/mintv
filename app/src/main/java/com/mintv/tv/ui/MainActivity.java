@@ -3762,7 +3762,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         }
         int port = remotePort > 0 ? remotePort : com.mintv.tv.data.RemoteServer.PORT_MAIN;
         String url = "http://" + (ip == null ? "" : ip) + ":" + port + "/";
-        android.util.Log.i("MinTV", "订阅页地址 ip=" + ip + " port=" + port);
+        android.util.Log.w("MinTV", "订阅页地址 ip=" + ip + " port=" + port);
         // 地址是动态的：IP 随网络变化，端口在 18899 被占用时会切 18900。
         //
         // 以前只显示 ip:port，而且 ip 取不到时显示成 ":18899"，
@@ -3779,6 +3779,16 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             helperAddr.setText(url);
             helperAddr.setTextColor(Theme.FOCUS_BLUE);
         }
+        // 兜底：任何分支都没写进 helperAddr 时，这里强制补一次。
+        // 之前出现过二维码正常、地址栏空白的现象，加这层保证界面不留白。
+        if (helperAddr != null && (helperAddr.getText() == null
+                || helperAddr.getText().length() == 0)) {
+            helperAddr.setText(url);
+            helperAddr.setTextColor(Theme.FOCUS_BLUE);
+        }
+        android.util.Log.w("MinTV", "地址已写入: " + url
+                + " len=" + (helperAddr == null || helperAddr.getText() == null
+                        ? -1 : helperAddr.getText().length()));
         if (qrView != null) {
             android.graphics.Bitmap bmp = com.mintv.tv.data.QrUtil.encode(url, Theme.px(240));
             if (bmp != null) qrView.setImageBitmap(bmp);
@@ -3806,6 +3816,68 @@ public class MainActivity extends Activity implements FocusEngine.Host {
      * 之前是一整条平铺的 TextView，既没卡片感也没有操作提示。
      */
     private String helperSig = "";
+
+    /**
+     * 长按订阅 → 确认删除。
+     *
+     * <p>除了删订阅记录，本地源（local://）对应的文件也一起删，
+     * 否则 samples/ 目录里会留下没人引用的孤儿文件。
+     */
+    private void confirmDeleteSub(final com.mintv.tv.data.SubscriptionStore.Sub sub) {
+        if (sub == null) return;
+        final String label = sub.name == null || sub.name.isEmpty() ? "未命名" : sub.name;
+        android.app.AlertDialog.Builder b = new android.app.AlertDialog.Builder(this,
+                android.R.style.Theme_DeviceDefault_Dialog_Alert);
+        b.setTitle("删除订阅");
+        b.setMessage("确定删除「" + label + "」吗？\n本地源文件也会一起删掉。");
+        b.setNegativeButton("取消", null);
+        b.setPositiveButton("删除", new android.content.DialogInterface.OnClickListener() {
+            @Override public void onClick(android.content.DialogInterface d, int w) {
+                boolean isLocal = sub.url != null && sub.url.startsWith("local://");
+                String fileName = isLocal ? sub.url.substring("local://".length()) : null;
+
+                com.mintv.tv.data.SubscriptionStore.remove(MainActivity.this, sub.id);
+
+                if (fileName != null) {
+                    try {
+                        com.mintv.tv.data.StorageDir.delete(
+                                MainActivity.this,
+                                com.mintv.tv.data.StorageDir.SUB_SOURCES, fileName);
+                        android.util.Log.w("MinTV", "已删除本地源文件: " + fileName);
+                    } catch (Throwable t) {
+                        android.util.Log.w("MinTV", "删除本地源文件失败: " + fileName, t);
+                    }
+                }
+
+                // 删的是当前订阅 → 切到第一个还能用的
+                java.util.List<com.mintv.tv.data.SubscriptionStore.Sub> rest =
+                        com.mintv.tv.data.SubscriptionStore.list(MainActivity.this);
+                if (rest.isEmpty()) {
+                    channels.clear();
+                    playlist = null;
+                    rebuildCategoryColumn();
+                    refreshChannelSubs();
+                    osd.toast("订阅已全部删除");
+                } else {
+                    String act = com.mintv.tv.data.SubscriptionStore.activeId(MainActivity.this);
+                    if (act == null || !hasSub(rest, act)) {
+                        switchSubscription(rest.get(0).id);
+                    } else {
+                        rebuildHelperSubs();
+                    }
+                }
+                osd.toast("已删除「" + label + "」");
+            }
+        });
+        b.show();
+    }
+
+    private boolean hasSub(java.util.List<com.mintv.tv.data.SubscriptionStore.Sub> list, String id) {
+        for (com.mintv.tv.data.SubscriptionStore.Sub t : list) {
+            if (t.id != null && t.id.equals(id)) return true;
+        }
+        return false;
+    }
 
     private void rebuildHelperSubs() {
         if (helperSubs == null) return;
@@ -3843,6 +3915,14 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             row.setOnClickListener(new View.OnClickListener() {
                 @Override public void onClick(View v) {
                     if (!on) switchSubscription(sub.id);
+                }
+            });
+            // 长按删除：连文件一起删（local:// 的源文件也清掉），
+            // 否则用户删了订阅，sources/ 目录里还留着孤儿文件。
+            row.setOnLongClickListener(new View.OnLongClickListener() {
+                @Override public boolean onLongClick(View v) {
+                    confirmDeleteSub(sub);
+                    return true;
                 }
             });
             row.setOnFocusChangeListener(new View.OnFocusChangeListener() {
@@ -5620,11 +5700,14 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         // 地址：QR 正下方，等宽字体、主题蓝
         helperAddr = new TextView(this);
         helperAddr.setTextColor(Theme.FOCUS_BLUE);
-        helperAddr.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, Theme.sp(28));
+        helperAddr.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, Theme.sp(21));
         helperAddr.setTypeface(android.graphics.Typeface.MONOSPACE);
         helperAddr.setGravity(Gravity.CENTER);
-        helperAddr.setPadding(0, Theme.px(22), 0, 0);
-        left.addView(helperAddr);
+        helperAddr.setPadding(0, Theme.px(18), 0, 0);
+        helperAddr.setSingleLine(true);
+        helperAddr.setEllipsize(android.text.TextUtils.TruncateAt.MIDDLE);
+        left.addView(helperAddr, new LinearLayout.LayoutParams(
+                Theme.px(360), ViewGroup.LayoutParams.WRAP_CONTENT));
 
         helperState = new TextView(this);
         helperState.setTextColor(Theme.TEXT_SUB);
