@@ -1473,6 +1473,23 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             channelCache.put(curSub, channels);
         }
 
+        // ── 关键：数据换完了必须重建 UI ──
+        //
+        // 之前这里只更新 playlist / channels / categories，界面不动。
+        // 结果：
+        //   · 分类计数显示 0（categories 是新的，但列表还是旧的 View）
+        //   · 切订阅后频道列表不刷新，非得重启 App
+        // 两个现象是同一个原因。
+        if (navPanel != null) {
+            try {
+                rebuildCategoryColumn();
+                bindChannels();
+                updateChannelFocus(Math.min(focus.chanIndex(), Math.max(0, channels.size() - 1)));
+            } catch (Throwable t) {
+                android.util.Log.w("MinTV", "重建列表失败", t);
+            }
+        }
+
         // 解析出 0 个频道，但内容明显不是空源 → 判定这份内容有问题，记下指纹。
         // 记下来之后下次启动会直接跳过，避免"一次填错地址，之后每次启动都崩"。
         boolean looksEmpty = body == null || body.trim().isEmpty()
