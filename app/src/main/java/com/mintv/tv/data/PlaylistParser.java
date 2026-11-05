@@ -557,9 +557,13 @@ public final class PlaylistParser {
     public static boolean isPrivateScheme(String url) {
         if (url == null || url.isEmpty()) return false;
         String u = url.toLowerCase();
+        // mintv:// 是我们自己的分发协议（mintv://tvbus/xxx、mintv://script/xxx）
+        if (u.startsWith("mintv://")) return true;
         if (u.startsWith("tvbus://")) return true;
-        for (int i = 2; i <= 9; i++) {
-            if (u.startsWith("p" + i + "p://")) return true;
+        if (u.startsWith("mitv:")) return true;
+        if (u.startsWith("p2p:")) return true;
+        for (int i = 3; i <= 9; i++) {
+            if (u.startsWith("p" + i + "p:")) return true;
         }
         return false;
     }

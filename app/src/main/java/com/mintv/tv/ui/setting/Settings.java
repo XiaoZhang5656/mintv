@@ -76,6 +76,9 @@ public final class Settings {
                     new String[]{"开启", "关闭"}, 0),
             SettingDef.action("storage_dir", "存储目录",
                     "选一个外部目录放脚本，文件管理器可见；不选则用 App 私有目录", "选择…"),
+            SettingDef.value("p2p_boost", "源力加速",
+                    "和同频道观众共享带宽，高峰期更流畅；会使用部分上传流量",
+                    new String[]{"已关闭", "开启"}, 0),
     };
 
     // ══════════════════════════════════════════════════════════
@@ -102,6 +105,7 @@ public final class Settings {
     public static final int IDX_THEME = indexOf("theme");
     public static final int IDX_SHOW_SUBS = indexOf("show_subs");
     public static final int IDX_STORAGE_DIR = indexOf("storage_dir");
+    public static final int IDX_P2P_BOOST = indexOf("p2p_boost");
     public static final int IDX_NET_PROXY = indexOf("net_proxy");
 
     public static final int IDX_GROUP_MGR = indexOf("group_mgr");

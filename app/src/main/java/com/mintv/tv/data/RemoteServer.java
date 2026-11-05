@@ -377,6 +377,103 @@ public final class RemoteServer {
             return;
         }
 
+        // ---- P2P 分片上传 ----
+        // 别的节点来拉我缓存的分片：GET /mintv/piece?ch=<hash>&seq=<n>
+        // 只有开了源力加速、且缓存里真有这一片才回应，否则 404。
+        if (path.equals("/mintv/piece")) {
+            String ch = qparam(query, "ch");
+            int seq = -1;
+            try { seq = Integer.parseInt(qparam(query, "seq")); } catch (Exception ignored) { }
+
+            com.mintv.tv.data.P2PEngine p2p =
+                    com.mintv.tv.data.P2PEngine.get(appCtx);
+            if (!p2p.running() || ch == null || seq < 0
+                    || !ch.equals(p2p.channelHash())) {
+                send(out, 404, "text/plain; charset=utf-8", "not here");
+                return;
+            }
+            com.mintv.tv.data.PieceCache.Piece piece = p2p.cache().get(seq);
+            if (piece == null || piece.data == null) {
+                send(out, 404, "text/plain; charset=utf-8", "no piece");
+                return;
+            }
+            // 带上校验值，对方拿到能自检
+            String head = "HTTP/1.1 200 OK\r\n"
+                    + "Content-Type: application/octet-stream\r\n"
+                    + "Content-Length: " + piece.data.length + "\r\n"
+                    + "X-Piece-SHA256: " + (piece.sha256 == null ? "" : piece.sha256) + "\r\n"
+                    + "Cache-Control: no-store\r\n"
+                    + "Connection: close\r\n\r\n";
+            out.write(head.getBytes("UTF-8"));
+            out.write(piece.data);
+            out.flush();
+            return;
+        }
+
+        // ---- HLS 代理 ----
+        // 播放 mintv://<url> 时，客户端展开成本地这两个端点：
+        //   /mintv/m3u8?u=<base64>   拉取并改写播放列表
+        //   /mintv/seg?u=<base64>    转发分片/密钥
+        // 这样源要的任何请求头都由 App 带，VLC 不用管。
+        if (path.equals("/mintv/m3u8")) {
+            String rawU = qparam(query, "u");
+            String u = HlsProxy.unb64(rawU == null ? "" : rawU);
+            if (u == null) {
+                send(out, 400, "text/plain; charset=utf-8", "bad url");
+                return;
+            }
+            String m3u = HlsProxy.fetchAndRewrite(u);
+            if (m3u == null) {
+                send(out, 502, "text/plain; charset=utf-8", "fetch failed");
+                return;
+            }
+            send(out, 200, "application/vnd.apple.mpegurl; charset=utf-8", m3u);
+            return;
+        }
+        if (path.equals("/mintv/seg")) {
+            String rawU = qparam(query, "u");
+            String u = HlsProxy.unb64(rawU == null ? "" : rawU);
+            if (u == null) {
+                send(out, 400, "text/plain; charset=utf-8", "bad url");
+                return;
+            }
+
+            // 带序号的才是媒体分片，才参与 P2P。
+            // KEY / MAP 这类没有序号，直接转发不缓存。
+            String segCh = qparam(query, "ch");
+            int segSeq = -1;
+            try { segSeq = Integer.parseInt(qparam(query, "seq")); } catch (Exception ignored) { }
+
+            com.mintv.tv.data.P2PEngine p2p = null;
+            if (segCh != null && segSeq >= 0) {
+                p2p = com.mintv.tv.data.P2PEngine.get(appCtx);
+                if (p2p.running() && segCh.equals(p2p.channelHash())) {
+                    // 1) 本地缓存或对端有 → 直接用，省一次源站流量
+                    byte[] hit = p2p.fetchPiece(segSeq);
+                    if (hit != null && hit.length > 0) {
+                        send(out, 200, "application/octet-stream", hit);
+                        return;
+                    }
+                }
+            }
+
+            // 2) 回源：整块拉下来（要存缓存，所以不能纯流式）
+            byte[] data = HlsProxy.fetch(u);
+            if (data == null || data.length == 0) {
+                send(out, 502, "text/plain; charset=utf-8", "fetch failed");
+                return;
+            }
+            if (p2p != null && p2p.running() && segCh != null
+                    && segCh.equals(p2p.channelHash())) {
+                try {
+                    p2p.onPieceFetched(segSeq, data);
+                    p2p.setPos(segSeq);
+                } catch (Throwable ignored) { }
+            }
+            send(out, 200, "application/octet-stream", data);
+            return;
+        }
+
         // ---- 脚本路由 ----
         // 放在静态页之前：脚本声明的 /cctv/:id 这类路径优先，
         // 都不匹配时才去找 assets 里的静态文件。
@@ -462,6 +559,21 @@ public final class RemoteServer {
 
     private void send(OutputStream out, int code, String mime, String body) throws IOException {
         send(out, code, mime, body == null ? new byte[0] : body.getBytes("UTF-8"));
+    }
+
+    /**
+     * 只发响应头，正文由调用方流式写。
+     *
+     * <p>不带 Content-Length：分片大小事先不知道，硬写会截断。
+     * HTTP/1.1 里用 {@code Connection: close} 让客户端读到 EOF 即可。
+     */
+    private void sendStreamHead(OutputStream out, int code, String mime) throws IOException {
+        String head = "HTTP/1.1 " + code + " OK\r\n"
+                + "Content-Type: " + mime + "\r\n"
+                + "Cache-Control: no-store\r\n"
+                + "Connection: close\r\n\r\n";
+        out.write(head.getBytes("UTF-8"));
+        out.flush();
     }
 
     private void send(OutputStream out, int code, String mime, byte[] body) throws IOException {

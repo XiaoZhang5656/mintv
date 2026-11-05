@@ -64,11 +64,47 @@ public class ForceTV {
      * <p>前缀就是 p2p / p3p / p4p … p9p，各自对应 libp2p.so … libp9p.so。
      * 没有 pxp 这个协议。
      */
+    /**
+     * 每种前缀对应一个固定端口，值抄自猫影 PlayerActivity 的 switch 分支。
+     *
+     * <pre>
+     *   P2p  → 9001      （大写 P，另一套引擎）
+     *   mitv → 9002
+     *   p2p  → 9906
+     *   p3p  → 9907
+     *   p4p  → 9908
+     *   p5p  → 9909
+     *   p6p  → 9910
+     *   p7p  → 9911
+     *   p8p  → 9912
+     *   p9p  → 9913
+     * </pre>
+     * 规律：pNp 的端口 = 9904 + N。端口不能随便换，
+     * 换了 cmd.xml 的控制请求就打到空气里去了。
+     */
+    public static int portFor(String url) {
+        if (url == null) return 0;
+        if (url.startsWith("mitv")) return 9002;
+        if (url.startsWith("P2p")) return 9001;          // 大写 P
+        if (url.startsWith("p")) {
+            // p2p ~ p9p：取中间的数字
+            if (url.length() >= 3 && url.charAt(2) == 'p') {
+                char c = url.charAt(1);
+                if (c >= '2' && c <= '9') return 9904 + (c - '0');
+            }
+        }
+        return 0;
+    }
+
     public static String libFor(String url) {
         if (url == null) return null;
+        // mitv 用的是 libmitv.so（不是 libpNp）
+        if (url.startsWith("mitv:")) return "mitv";
         String u = url.toLowerCase();
+        // P2p（大写）没有独立 so，复用小写 p2p 那套，只是端口不同
+        if (url.startsWith("P2p:")) return "p2p";
         for (int i = 9; i >= 2; i--) {
-            if (u.startsWith("p" + i + "p://")) return "p" + i + "p";
+            if (u.startsWith("p" + i + "p:")) return "p" + i + "p";
         }
         return null;
     }

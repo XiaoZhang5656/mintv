@@ -141,6 +141,8 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     private final LogoLoader logos = new LogoLoader();
     private boolean panelVisible = true;
     private int playingChannel = 0;
+    /** 最近一次 NAT 检测结果，启动 P2P 时传给引擎。 */
+    private com.mintv.tv.data.NetCheck.Result lastNatResult;
     private int currentLine = 0;
     private int lineTotal = 1;
     private String lastResolution, lastFps, lastVCodec, lastACodec, lastBitrate;
@@ -1644,6 +1646,57 @@ public class MainActivity extends Activity implements FocusEngine.Host {
      * <p>授权返回后必须调一次，否则「存储目录」那行还显示旧值 ——
      * 之前用 showTab() 刷新是无效的，它只切可见性，不重绑数据。
      */
+    /**
+     * 真正切换源力加速。
+     *
+     * <p>开启：立刻检测一次网络，之后每 30 分钟重测（网络可能换）。
+     * <p>关闭：停掉定时器，什么都不做。
+     */
+    private void applyP2pBoost(final boolean on) {
+        selections[ROW_P2P_BOOST] = on ? 1 : 0;
+        saveSelections();
+        refreshSettingRows();
+
+        ui.removeCallbacks(netCheckLoop);
+        if (!on) {
+            // 关掉就把引擎停干净：停心跳、通知 tracker 离开、清缓存。
+            // 只停定时检测而留着心跳，等于"关了还在上传"。
+            try {
+                com.mintv.tv.data.P2PEngine.get(getApplicationContext()).stop();
+            } catch (Throwable t) {
+                android.util.Log.w("MinTV", "停止 P2P 失败", t);
+            }
+            osd.toast("源力加速已关闭");
+            android.util.Log.w("MinTV", "p2p boost off");
+            return;
+        }
+        osd.toast("源力加速已开启");
+        netCheckLoop.run();
+    }
+
+    /** 定时检测：开关打开时每 30 分钟跑一次。 */
+    private final Runnable netCheckLoop = new Runnable() {
+        @Override public void run() {
+            if (selections[ROW_P2P_BOOST] != 1) return;
+            new Thread(new Runnable() {
+                @Override public void run() {
+                    final com.mintv.tv.data.NetCheck.Result r =
+                            com.mintv.tv.data.NetCheck.run();
+                    android.util.Log.w("MinTV", "p2p 定时检测 nat=" + r.typeName()
+                            + " ip=" + r.publicIp + " · " + r.note);
+                    lastNatResult = r;
+                    ui.post(new Runnable() {
+                        @Override public void run() {
+                            if (selections[ROW_P2P_BOOST] == 1) {
+                                ui.postDelayed(netCheckLoop, 30 * 60 * 1000L);
+                            }
+                        }
+                    });
+                }
+            }, "net-check-periodic").start();
+        }
+    };
+
     private void refreshSettingRows() {
         if (rowViews == null) return;
         for (int i = 0; i < rowViews.size() && i < DemoData.ROW_TITLES.length; i++) {
@@ -2488,6 +2541,9 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     private static final String KEY_HIDDEN_CATS = "hidden_cats";
     private static final int ROW_GROUP_MGR= com.mintv.tv.ui.setting.Settings.IDX_GROUP_MGR;
     private static final int ROW_STORAGE_DIR = com.mintv.tv.ui.setting.Settings.IDX_STORAGE_DIR;
+    private static final int ROW_P2P_BOOST  = com.mintv.tv.ui.setting.Settings.IDX_P2P_BOOST;
+    /** 是否已经告知过源力加速的后果（只告知一次，之后静默切换）。 */
+    private static final String KEY_P2P_ACKED = "p2p_acked";
     private static final int ROW_NET_PROXY = com.mintv.tv.ui.setting.Settings.IDX_NET_PROXY;
     private static final int ROW_SHOW_SUBS = com.mintv.tv.ui.setting.Settings.IDX_SHOW_SUBS;
 
@@ -3410,11 +3466,16 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     private boolean isPrivateProtocol(String url) {
         if (url == null) return false;
         String u = url.toLowerCase();
-        return u.startsWith("tvbus://") || u.startsWith("p2p://")
-                || u.startsWith("p3p://") || u.startsWith("p4p://")
-                || u.startsWith("p5p://") || u.startsWith("p6p://")
-                || u.startsWith("p7p://") || u.startsWith("p8p://")
-                || u.startsWith("p9p://");
+        // mintv:// 是我们自己的分发协议：mintv://tvbus/xxx、mintv://p2p/host/path
+        if (u.startsWith("mintv://")) return true;
+        if (u.startsWith("tvbus://")) return true;
+        // mitv: 只有单个冒号，也要认
+        if (u.startsWith("mitv:")) return true;
+        if (u.startsWith("p2p:") || u.startsWith("pp:")) return true;
+        for (int i = 3; i <= 9; i++) {
+            if (u.startsWith("p" + i + "p:")) return true;
+        }
+        return false;
     }
 
     // ---------- 私有协议引擎的生命周期 ----------
@@ -3466,8 +3527,25 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     private String resolvePrivateProtocol(String url) {
         if (url == null) return null;
 
+        // mintv:// 是我们自己的分发器：展开成内部协议再走下面的分支。
+        if (url.toLowerCase().startsWith("mintv://")) {
+            String expanded = expandMintvUrl(url);
+            if (expanded == null) return null;
+            if (expanded.startsWith("script:")) {
+                return runScriptProtocol(expanded.substring("script:".length()));
+            }
+            // 展开成 tvbus:// 或 pNp:// 后递归处理
+            return resolvePrivateProtocol(expanded);
+        }
+
         int idx = url.indexOf("://");
-        if (idx <= 0) return null;
+        if (idx <= 0) {
+            // mitv: / p2p: 这种单冒号写法，补成双斜杠好走后面的解析
+            int c = url.indexOf(':');
+            if (c <= 0) return null;
+            url = url.substring(0, c) + "://" + url.substring(c + 1);
+            idx = url.indexOf("://");
+        }
         String scheme = url.substring(0, idx).toLowerCase();
 
         // 同一个地址又解析一次（比如重连）也算"新的一路"，
@@ -3526,14 +3604,30 @@ public class MainActivity extends Activity implements FocusEngine.Host {
 
             String lib = com.forcetech.android.ForceTV.libFor(url);
             if (lib != null) {
-                int port = 18899 + 1;
+                // 端口是固定的，按协议前缀选（猫影 PlayerActivity 里的常量）：
+                //   mitv → 9002 (0x232a)，P2p → 9001，p2p/pNp → 9000
+                // 之前用 18899+1 是错的 —— 那是 RemoteServer 的备用端口，
+                // 引擎根本没在那监听，VLC 一连接就 Connection refused。
+                int port = com.forcetech.android.ForceTV.portFor(url);
                 com.forcetech.android.ForceTV ft =
                         new com.forcetech.android.ForceTV();
                 ft.start(lib, port);
                 curForceTv = ft;
                 curPrivateUrl = url;
-                String out = "http://127.0.0.1:" + port + "/" + url;
-                android.util.Log.i("MinTV", lib + " -> " + out);
+
+                // 关键一步：先发控制请求告诉引擎播哪个频道，再返回播放地址。
+                // 猫影的 a(url, port) 就是干这个的：
+                //   GET http://127.0.0.1:<port>/cmd.xml?cmd=switch_chan
+                //       &server=<host>:<port>&id=<lastPathSegment 去掉扩展名>
+                //   播放地址 = http://127.0.0.1:<port>/<lastPathSegment>[.ts]
+                String out = forceTvPlayUrl(url, port);
+                android.util.Log.w("MinTV", lib + " port=" + port + " -> " + out);
+                if (out == null) {
+                    stopPrivateEngines();
+                    return null;
+                }
+                // 引擎起来需要一点时间，给它 300ms 再让 VLC 去连
+                try { Thread.sleep(300); } catch (InterruptedException ignored) { }
                 return out;
             }
         } catch (Throwable t) {
@@ -3541,6 +3635,229 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             stopPrivateEngines();
         }
         return null;
+    }
+
+    /**
+     * 把 mintv:// 展开成内部协议。
+     *
+     * <pre>
+     *   mintv://tvbus/39D2wC2h...        → tvbus://39D2wC2h...
+     *   mintv://p2p/host.com/live/x      → p2p://host.com/live/x
+     *   mintv://p5p/host.com:8000/x      → p5p://host.com:8000/x
+     *   mintv://mitv/host.com/x          → mitv://host.com/x
+     *   mintv://script/name?a=1&amp;b=2      → script:name?a=1&amp;b=2
+     * </pre>
+     *
+     * @return 内部协议串；不认识的返回 null
+     */
+    private String expandMintvUrl(String url) {
+        // mintv://http://... 交给本地 HLS 代理先处理。
+        // 必须用 substring 判断，不能靠 Uri.parse —— 那样 host 会是 "http"，
+        // path 是 "//xxx"，拼不回来。
+        String afterPrefix = url.substring("mintv://".length());
+        String afterLow = afterPrefix.toLowerCase();
+        if (afterLow.startsWith("http://") || afterLow.startsWith("https://")) {
+            int port = remotePort > 0
+                    ? remotePort : com.mintv.tv.data.RemoteServer.PORT_MAIN;
+            // 开了源力加速才带频道 hash，让分片请求能参与 P2P。
+            // 拿不到频道名就退化成纯代理，不影响播放。
+            String ch = null;
+            if (selections[ROW_P2P_BOOST] == 1) ch = p2pChannel();
+            String enc = android.net.Uri.encode(
+                    com.mintv.tv.data.HlsProxy.b64(afterPrefix));
+            return "http://127.0.0.1:" + port + "/mintv/m3u8?u=" + enc
+                    + (ch == null ? "" : "&ch=" + ch);
+        }
+
+        try {
+            android.net.Uri u = android.net.Uri.parse(url);
+            String kind = u.getHost();
+            if (kind == null) return null;
+            String k = kind.toLowerCase();
+
+            // 脚本处理器：mintv://script/name?args
+            if ("script".equals(k)) {
+                java.util.List<String> seg = u.getPathSegments();
+                if (seg.isEmpty()) return null;
+                String name = seg.get(0);
+                if (name == null || name.isEmpty()) return null;
+                String q = u.getQuery();
+                return "script:" + name + (q == null || q.isEmpty() ? "" : "?" + q);
+            }
+
+            // 其余都是"把 kind 当协议名，原样拼回去"
+            String proto = k;
+            if (!"tvbus".equals(proto) && !"mitv".equals(proto)
+                    && !proto.matches("p[3-9]p") && !"p2p".equals(proto)) {
+                android.util.Log.w("MinTV", "mintv:// 不认识的类型: " + kind);
+                return null;
+            }
+
+            StringBuilder sb = new StringBuilder(proto).append("://");
+            java.util.List<String> seg = u.getPathSegments();
+            for (int i = 0; i < seg.size(); i++) {
+                if (i > 0) sb.append('/');
+                sb.append(seg.get(i));
+            }
+            if (u.getQuery() != null && !u.getQuery().isEmpty()) {
+                sb.append('?').append(u.getQuery());
+            }
+            return sb.toString();
+        } catch (Throwable t) {
+            android.util.Log.w("MinTV", "展开 mintv:// 失败", t);
+            return null;
+        }
+    }
+
+    /**
+     * 取当前播放频道的 P2P hash，并确保引擎已经在跑。
+     *
+     * <p>开关没开、或拿不到频道名，都返回 null —— 调用方退化成纯代理。
+     */
+    private String p2pChannel() {
+        try {
+            if (playingChannel < 0 || playingChannel >= channels.size()) return null;
+            PlaylistParser.Channel c = channels.get(playingChannel);
+            if (c == null || c.name == null || c.name.trim().isEmpty()) return null;
+
+            com.mintv.tv.data.P2PEngine engine =
+                    com.mintv.tv.data.P2PEngine.get(getApplicationContext());
+            if (!engine.running() || !c.name.equals(engine.channelName())) {
+                engine.start(c.name, lastNatResult);
+            }
+            return com.mintv.tv.data.ChannelHash.id(c.name);
+        } catch (Throwable t) {
+            android.util.Log.w("MinTV", "p2pChannel 失败", t);
+            return null;
+        }
+    }
+
+    /**
+     * 跑脚本协议：{@code mintv://script/name?args}。
+     *
+     * <p>脚本放在 {@code <存储根>/scripts/name.js}，执行后返回播放地址。
+     * 这样遇到没见过的私有协议，写个 JS 就能接，不用发版。
+     *
+     * @param spec {@code name?args} 形式
+     * @return 播放地址；失败返回 null
+     */
+    private String runScriptProtocol(String spec) {
+        try {
+            String name = spec;
+            String query = "";
+            int q = spec.indexOf('?');
+            if (q >= 0) {
+                name = spec.substring(0, q);
+                query = spec.substring(q + 1);
+            }
+            if (!name.endsWith(".js")) name = name + ".js";
+
+            // 脚本执行需要 File，先把授权目录里的脚本同步到私有目录
+            com.mintv.tv.data.ScriptStore store =
+                    new com.mintv.tv.data.ScriptStore(getApplicationContext());
+            store.syncFromStorage(getApplicationContext());
+
+            java.io.File f = new java.io.File(store.dir(), name);
+            if (!f.isFile()) {
+                android.util.Log.w("MinTV", "脚本不存在: " + f.getAbsolutePath());
+                return null;
+            }
+
+            org.json.JSONObject item = new org.json.JSONObject();
+            item.put("url", "mintv://script/" + spec);
+            item.put("query", query);
+            // 把 query 展开成 params，脚本里用 item.params.xxx 取
+            org.json.JSONObject params = new org.json.JSONObject();
+            if (!query.isEmpty()) {
+                for (String kv : query.split("&")) {
+                    int eq = kv.indexOf('=');
+                    if (eq > 0) params.put(kv.substring(0, eq),
+                            android.net.Uri.decode(kv.substring(eq + 1)));
+                }
+            }
+            item.put("params", params);
+
+            com.mintv.tv.data.ScriptEngine engine =
+                    new com.mintv.tv.data.ScriptEngine(getApplicationContext());
+            com.mintv.tv.data.ScriptEngine.Result r = engine.invoke(f, "main", item);
+            if (r == null || !r.ok || r.url == null || r.url.isEmpty()) {
+                android.util.Log.w("MinTV", "脚本 " + name + " 没返回地址"
+                        + (r == null ? "" : " · " + r.error));
+                return null;
+            }
+            android.util.Log.w("MinTV", "script " + name + " -> " + r.url);
+            return r.url;
+        } catch (Throwable t) {
+            android.util.Log.w("MinTV", "跑脚本协议失败", t);
+            return null;
+        }
+    }
+
+    /**
+     * 构造 P2P 的本地播放地址，并先发一次 switch_chan 控制请求。
+     *
+     * <p>从猫影 PlayerActivity.a(String,String) 还原：
+     * <pre>
+     *   uri   = Uri.parse(url)
+     *   last  = uri.getLastPathSegment()
+     *   控制   http://127.0.0.1:port/cmd.xml?cmd=switch_chan
+     *          &amp;server=host:port&amp;id=last去掉扩展名[&amp;原始query]
+     *   播放   http://127.0.0.1:port/last[.ts]
+     * </pre>
+     * last 里没有 "." 时追加 .ts —— 这是猫影的分支，照抄。
+     *
+     * @return 播放地址；参数不合法返回 null
+     */
+    private String forceTvPlayUrl(String url, int port) {
+        try {
+            android.net.Uri uri = android.net.Uri.parse(url);
+            String last = uri.getLastPathSegment();
+            if (last == null || last.isEmpty()) {
+                android.util.Log.w("MinTV", "p2p 地址没有路径段: " + url);
+                return null;
+            }
+
+            String playUrl;
+            String id;
+            int dot = last.indexOf('.');
+            if (dot != -1) {
+                id = last.substring(0, dot);
+                playUrl = "http://127.0.0.1:" + port + "/" + last;
+            } else {
+                id = last;
+                playUrl = "http://127.0.0.1:" + port + "/" + last + ".ts";
+            }
+
+            StringBuilder cmd = new StringBuilder("http://127.0.0.1:" + port);
+            cmd.append("/cmd.xml?cmd=switch_chan&server=");
+            cmd.append(uri.getHost() == null ? "" : uri.getHost());
+            cmd.append(":");
+            cmd.append(uri.getPort());
+            cmd.append("&id=");
+            cmd.append(id);
+            if (uri.getQuery() != null && !uri.getQuery().isEmpty()) {
+                cmd.append("&").append(uri.getQuery());
+            }
+
+            // 发控制请求（失败也继续，有些引擎不需要）
+            try {
+                java.net.HttpURLConnection conn =
+                        (java.net.HttpURLConnection) new java.net.URL(cmd.toString()).openConnection();
+                conn.setConnectTimeout(3000);
+                conn.setReadTimeout(3000);
+                conn.setRequestMethod("GET");
+                int code = conn.getResponseCode();
+                android.util.Log.w("MinTV", "switch_chan " + code + " · " + cmd);
+                conn.disconnect();
+            } catch (Throwable t) {
+                android.util.Log.w("MinTV", "switch_chan 失败: " + cmd, t);
+            }
+
+            return playUrl;
+        } catch (Throwable t) {
+            android.util.Log.w("MinTV", "构造 p2p 地址失败", t);
+            return null;
+        }
     }
 
     /** OSD 提示占位，暂时不弹，避免解析期间刷屏。 */
@@ -6444,6 +6761,10 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             if (value == 0) showAutoStartGuide();
         } else if (row == ROW_NET_PROXY) {
             showProxyDialog();
+        } else if (row == ROW_P2P_BOOST) {
+            // 直接切换，不弹窗。设置项里那行"和同频道观众共享带宽"
+            // 就是告知，用户点开关是主动行为。
+            applyP2pBoost(value == 1);
         } else if (row == ROW_STORAGE_DIR) {
             pickStorageDir();
         } else if (row == ROW_GROUP_MGR) {
