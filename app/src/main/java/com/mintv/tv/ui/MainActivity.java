@@ -1687,6 +1687,9 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                     lastNatResult = r;
                     ui.post(new Runnable() {
                         @Override public void run() {
+                            // 副标题要跟着变（显示网络类型），
+                            // 不重绑的话用户得切页面再回来才看得到
+                            refreshSettingRows();
                             if (selections[ROW_P2P_BOOST] == 1) {
                                 ui.postDelayed(netCheckLoop, 30 * 60 * 1000L);
                             }
@@ -5937,6 +5940,10 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             // 文案是 SettingDef 里写死的（"选择…"），这里替换掉。
             row.bind(DemoData.ROW_TITLES[i][0], hintFor(i),
                     optionLabelsFor(i), selections[i]);
+            row.setHintColor(
+                    (i == ROW_P2P_BOOST && selections[i] == 1
+                            && lastNatResult != null && lastNatResult.canServe())
+                            ? 0xFF2EA85A : 0);
             row.setClickable(true);
             row.setOnClickListener(new View.OnClickListener() {
                 @Override public void onClick(View v) {
@@ -6333,7 +6340,33 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             String p = com.mintv.tv.data.StorageDir.readablePath(root);
             return "当前：" + p + "（脚本 scripts/ 订阅 sources/）";
         }
+        if ("p2p_boost".equals(id)) {
+            // 开启后副标题改成显示网络类型，让用户知道自己在加速里能扮演什么角色。
+            // 没检测过就提示一下，不显示"未知"这种没信息量的字。
+            if (selections[rowIndex] != 1) return base;
+            if (lastNatResult == null) return "已开启 · 正在检测网络…";
+            // 两种情况都带地址：用户想看到自己作为节点的出口。
+            // 差别只在前面那截 —— 能用是"加速中…"，不能用报类型。
+            boolean hasAddr = lastNatResult.publicIp != null
+                    && lastNatResult.publicIp.length() > 0;
+            String addr = hasAddr
+                    ? " " + lastNatResult.publicIp + ":" + lastNatResult.localPort
+                    : "";
+            if (lastNatResult.canServe()) return "加速中…" + addr;
+            return "已开启 · " + natShortName(lastNatResult) + addr;
+        }
         return base;
+    }
+
+    /** NAT 类型的短名称，用在设置项副标题里（不能太长，一行放不下）。 */
+    private static String natShortName(com.mintv.tv.data.NetCheck.Result r) {
+        switch (r.natType) {
+            case com.mintv.tv.data.NetCheck.NAT_FULL_CONE:  return "全锥形";
+            case com.mintv.tv.data.NetCheck.NAT_RESTRICTED: return "地址受限";
+            case com.mintv.tv.data.NetCheck.NAT_SYMMETRIC:  return "对称型";
+            case com.mintv.tv.data.NetCheck.NAT_BLOCKED:    return "连不上 STUN";
+            default: return "未知";
+        }
     }
 
     private String[] optionLabelsFor(int rowIndex) {

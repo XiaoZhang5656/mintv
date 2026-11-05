@@ -46,6 +46,15 @@ public class SettingRowView extends android.view.View {
         // 手动摆放，不用 layout 参数 —— 固定尺寸，省一次 measure 遍历
     }
 
+    /** 副标题颜色，默认灰。用于"加速中"这类需要突出状态的行。 */
+    private int hintColor = 0xFF93939A;
+
+    /** 单独改副标题颜色。传 0 恢复默认灰。 */
+    public void setHintColor(int color) {
+        this.hintColor = (color == 0) ? 0xFF93939A : color;
+        invalidate();
+    }
+
     public void bind(String title, String desc, String[] options, int selected) {
         this.title = title == null ? "" : title;
         this.desc = desc == null ? "" : desc;
@@ -151,7 +160,7 @@ public class SettingRowView extends android.view.View {
             t.setTextSize(titleSize);
             c.drawText(title, padH, titleY, t);
 
-            t.setColor(0xFF93939A);
+            t.setColor(hintColor);
             t.setTextSize(descSize);
             t.setFakeBoldText(false);
             // desc 是单行绘制，不换行也不自动截断 —— 内容一长就画到卡片外面去。
