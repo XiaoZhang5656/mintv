@@ -833,6 +833,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                 com.mintv.tv.data.ScriptLog.info("系统", "存储目录已设置: " + path);
                 osd.toast("已授权 " + path);
                 // 三个子目录已经建好，顺便把本地源扫一遍
+                com.mintv.tv.data.SubscriptionStore.reload();
                 loadLocalSources();
                 refreshSettingRows();
             }
@@ -1566,22 +1567,24 @@ public class MainActivity extends Activity implements FocusEngine.Host {
      * <p>替代原来的「导入本地源」按钮：把文件丢进目录就行，不用再点导入。
      * 已存在的（同文件名）跳过，不重复加。
      */
-    private void loadLocalSources() {
-        java.util.List<String> names = com.mintv.tv.data.StorageDir.list(
-                this, com.mintv.tv.data.StorageDir.SUB_SOURCES);
+    /**
+     * 扫某个子目录，把里面的 m3u/m3u8/txt 建成订阅。
+     *
+     * @return 新增的订阅数
+     */
+    private int scanDirForSubs(String subDir, String scheme) {
+        java.util.List<String> names = com.mintv.tv.data.StorageDir.list(this, subDir);
         boolean rooted = com.mintv.tv.data.StorageDir.hasRoot(this);
-        if (names.isEmpty()) {
-            lastScanDiag = "sources 空 · " + (rooted ? "已授权" : "未授权");
-            android.util.Log.w("MinTV", "扫描本地源: " + lastScanDiag);
-            return;
-        }
+        android.util.Log.w("MinTV", "扫描 " + subDir + ": "
+                + (names == null ? "null" : names.size() + " 项 · " + names)
+                + " · " + (rooted ? "已授权" : "未授权"));
+        if (names == null || names.isEmpty()) return 0;
 
+        // 已有订阅的 (scheme+文件名) 集合，避免重复加
         java.util.Set<String> have = new java.util.HashSet<>();
         for (com.mintv.tv.data.SubscriptionStore.Sub sub
                 : com.mintv.tv.data.SubscriptionStore.list(this)) {
-            if (sub.url != null && sub.url.startsWith("local://")) {
-                have.add(sub.url.substring("local://".length()));
-            }
+            if (sub.url != null) have.add(sub.url);
         }
 
         int added = 0;
@@ -1589,26 +1592,32 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             String lower = n.toLowerCase();
             if (!lower.endsWith(".m3u") && !lower.endsWith(".m3u8")
                     && !lower.endsWith(".txt")) continue;
-            if (have.contains(n)) continue;
+            String full = scheme + n;
+            if (have.contains(full)) continue;
             // 文件名去掉扩展名当订阅名
             String title = n;
             int dot = title.lastIndexOf('.');
             if (dot > 0) title = title.substring(0, dot);
             com.mintv.tv.data.SubscriptionStore.Sub created =
                     new com.mintv.tv.data.SubscriptionStore.Sub(
-                            java.util.UUID.randomUUID().toString(), title, "local://" + n);
+                            java.util.UUID.randomUUID().toString(), title, full);
             com.mintv.tv.data.SubscriptionStore.upsert(this, created);
+            have.add(full);
             added++;
         }
-        android.util.Log.w("MinTV", "sources 有 " + names.size() + " 个文件 · 新增 " + added
-                + " · 列表=" + names);
+        return added;
+    }
+
+    private void loadLocalSources() {
+        // 两个目录都扫：
+        //   sources/ 用户自己丢进去的  → local://
+        //   upload/  手机后台上传的    → upload://
+        int added = 0;
+        added += scanDirForSubs(com.mintv.tv.data.StorageDir.SUB_SOURCES, "local://");
+        added += scanDirForSubs(com.mintv.tv.data.StorageDir.SUB_UPLOAD, "upload://");
         if (added > 0) {
+            android.util.Log.w("MinTV", "本次新增 " + added + " 个本地订阅");
             osd.toast("发现 " + added + " 个本地源");
-        } else if (!names.isEmpty()) {
-            // 目录里有文件但一个都没加：要么文件名后缀不对，要么已经加过了。
-            // 后者是正常的，前者需要提示，否则用户以为功能坏了。
-            android.util.Log.w("MinTV", "sources/ 有 " + names.size()
-                    + " 个文件，但没有新增订阅（已存在或后缀不符）");
         }
     }
 
@@ -1630,15 +1639,32 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         }
     }
 
+    /**
+     * 读本地订阅内容。
+     *
+     * <p>两种前缀：
+     * <ul>
+     *   <li>{@code local://}  → 存储目录的 sources/（用户自己丢进去的）</li>
+     *   <li>{@code upload://} → 存储目录的 upload/（手机后台上传的）</li>
+     * </ul>
+     */
     private String readLocalSource(String url) {
         try {
-            String name = url.substring("local://".length());
+            String name;
+            String sub;
+            if (url.startsWith("upload://")) {
+                name = url.substring("upload://".length());
+                sub = com.mintv.tv.data.StorageDir.SUB_UPLOAD;
+            } else if (url.startsWith("local://")) {
+                name = url.substring("local://".length());
+                sub = com.mintv.tv.data.StorageDir.SUB_SOURCES;
+            } else {
+                return null;
+            }
             if (name.isEmpty() || name.contains("..") || name.contains("/") || name.contains("\\")) {
                 return null;
             }
-            // 统一存储：授权目录的 sources/ 优先，未授权回落私有目录
-            return com.mintv.tv.data.StorageDir.read(
-                    this, com.mintv.tv.data.StorageDir.SUB_SOURCES, name);
+            return com.mintv.tv.data.StorageDir.read(this, sub, name);
         } catch (Throwable t) {
             return null;
         }
@@ -3132,7 +3158,17 @@ public class MainActivity extends Activity implements FocusEngine.Host {
 
     private void loadHiddenCats() {
         hiddenCats.clear();
-        String raw = getSharedPreferences(PREF, MODE_PRIVATE).getString(KEY_HIDDEN_CATS, "");
+        // 跟着存储根走：未授权在私有目录，授权后在 <授权根>/hidden_cats.txt
+        String raw = com.mintv.tv.data.StorageDir.readPath(this, com.mintv.tv.data.StorageDir.SUB_CONFIG + "/hidden_cats.txt");
+        if (raw == null || raw.isEmpty()) {
+            // 一次性迁移：老版本存在 SharedPreferences
+            String legacy = getSharedPreferences(PREF, MODE_PRIVATE)
+                    .getString(KEY_HIDDEN_CATS, "");
+            if (legacy != null && !legacy.isEmpty()) {
+                raw = legacy;
+                com.mintv.tv.data.StorageDir.writePath(this, com.mintv.tv.data.StorageDir.SUB_CONFIG + "/hidden_cats.txt", legacy);
+            }
+        }
         if (raw == null || raw.isEmpty()) return;
         for (String line : raw.split("\n")) {
             if (!line.trim().isEmpty()) hiddenCats.add(line.trim());
@@ -3145,12 +3181,18 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             if (sb.length() > 0) sb.append('\n');
             sb.append(n);
         }
-        getSharedPreferences(PREF, MODE_PRIVATE).edit()
-                .putString(KEY_HIDDEN_CATS, sb.toString()).apply();
+        com.mintv.tv.data.StorageDir.writePath(this, com.mintv.tv.data.StorageDir.SUB_CONFIG + "/hidden_cats.txt", sb.toString());
     }
 
     private void loadHeaders() {
-        String raw = getSharedPreferences(PREF, MODE_PRIVATE).getString(KEY_HEADERS, "");
+        String raw = com.mintv.tv.data.StorageDir.readPath(this, com.mintv.tv.data.StorageDir.SUB_CONFIG + "/headers.txt");
+        if (raw == null || raw.isEmpty()) {
+            String legacy = getSharedPreferences(PREF, MODE_PRIVATE).getString(KEY_HEADERS, "");
+            if (legacy != null && !legacy.isEmpty()) {
+                raw = legacy;
+                com.mintv.tv.data.StorageDir.writePath(this, com.mintv.tv.data.StorageDir.SUB_CONFIG + "/headers.txt", legacy);
+            }
+        }
         globalHeaders = parseHeaderText(raw);
         if (globalHeaders == null) globalHeaders = new java.util.LinkedHashMap<>();
         if (rowViews.size() > ROW_HEADERS) {
@@ -3164,7 +3206,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             if (sb.length() > 0) sb.append(';');
             sb.append(e.getKey()).append('=').append(e.getValue());
         }
-        getSharedPreferences(PREF, MODE_PRIVATE).edit().putString(KEY_HEADERS, sb.toString()).apply();
+        com.mintv.tv.data.StorageDir.writePath(this, com.mintv.tv.data.StorageDir.SUB_CONFIG + "/headers.txt", sb.toString());
         selections[ROW_HEADERS] = globalHeaders.isEmpty() ? 0 : 1;
         if (rowViews.size() > ROW_HEADERS) {
             rowViews.get(ROW_HEADERS).setSelected(selections[ROW_HEADERS]);
@@ -3765,11 +3807,15 @@ public class MainActivity extends Activity implements FocusEngine.Host {
 
     private void refreshHelperPage() {
         if (helperPage == null) return;
-        // 每次进这一页都扫一遍 sources/：
-        // 用户很可能是在 App 运行期间用文件管理器丢文件进来的，
-        // 只在启动和授权后扫一次会导致"放了文件但没反应"。
-        try { loadLocalSources(); } catch (Throwable t) {
-            android.util.Log.w("MinTV", "扫描本地源失败", t);
+        // 每次进这一页都做两件事：
+        //   1) 重读订阅配置 —— 用户可能在文件管理器里手改过 subscriptions.json
+        //   2) 重扫 sources/ + upload/ —— 可能刚丢进新文件
+        // 只在启动和授权时做一次会导致"改了文件但界面不更新"。
+        try {
+            com.mintv.tv.data.SubscriptionStore.reload();
+            loadLocalSources();
+        } catch (Throwable t) {
+            android.util.Log.w("MinTV", "刷新订阅失败", t);
         }
         // LocalIp.get 取不到时可能返回 null 也可能抛异常，两种情况都兜住，
         // 否则整个 refreshHelperPage 中断，地址和二维码都不会更新。

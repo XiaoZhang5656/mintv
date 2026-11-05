@@ -32,7 +32,8 @@ public final class EpgStore {
     /** 老版本把 Base64 正文存在这里，保留 key 只为了迁移一次。 */
     private static final String K_LEGACY_RAW = "epg_raw";
 
-    private static final String FILE_NAME = "epg.xml";
+    private static final String FILE_NAME =
+            com.mintv.tv.data.StorageDir.SUB_CACHE + "/epg.xml";
 
     public static final String[] SOURCES = {
             "https://epg.51zmt.top:8001/e.xml.gz",
@@ -44,12 +45,15 @@ public final class EpgStore {
 
     private EpgStore() {}
 
-    private static File cacheFile(Context c) {
+    private static File privateFile(Context c) {
         return new File(c.getApplicationContext().getFilesDir(), FILE_NAME);
     }
 
     public static byte[] cached(Context c) {
-        File f = cacheFile(c);
+        // EPG 是 gzip 的 XML，走字节级 API
+        byte[] data = StorageDir.readBytesPath(c, FILE_NAME);
+        if (data != null && data.length > 0) return data;
+        File f = privateFile(c);
         if (f.exists() && f.length() > 0) {
             FileInputStream in = null;
             try {
@@ -86,15 +90,9 @@ public final class EpgStore {
 
     public static void save(Context c, byte[] raw) {
         if (raw == null || raw.length == 0) return;
-        FileOutputStream out = null;
-        try {
-            out = new FileOutputStream(cacheFile(c));
-            out.write(raw);
-            out.flush();
-        } catch (Throwable ignored) {
-        } finally {
-            if (out != null) try { out.close(); } catch (Throwable ignored) { }
-        }
+        // EPG 跟着存储根走：未授权在 getFilesDir()/epg.xml，
+        // 授权后在 <授权根>/epg.xml —— 用户可以自己换一份 EPG 丢进去。
+        StorageDir.writeBytesPath(c, FILE_NAME, raw);
         sp(c).edit().putLong(K_TIME, System.currentTimeMillis()).apply();
     }
 

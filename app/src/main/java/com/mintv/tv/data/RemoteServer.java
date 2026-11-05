@@ -73,9 +73,25 @@ public final class RemoteServer {
         this.host = host;
     }
 
+    /** 上次同步脚本的时间，避免每个请求都碰一次目录。 */
+    private long lastScriptSync = 0L;
+    private static final long SCRIPT_SYNC_GAP_MS = 3000L;
+
     /** 取脚本路由，顺带懒加载。 */
     private synchronized ScriptRouter router() {
         if (scriptRouter == null) scriptRouter = new ScriptRouter(appCtx);
+        // 定期把授权目录 scripts/ 里的脚本同步到私有目录。
+        // ScriptEngine 只吃 File，SAF 给不了 File，执行必须在私有目录。
+        // 之前只在首次建路由时同步一次，导致"丢了新脚本要重启才认"。
+        long now = System.currentTimeMillis();
+        if (now - lastScriptSync > SCRIPT_SYNC_GAP_MS) {
+            lastScriptSync = now;
+            try {
+                scriptRouter.store().syncFromStorage(appCtx);
+            } catch (Throwable t) {
+                android.util.Log.w("RemoteServer", "同步脚本失败", t);
+            }
+        }
         return scriptRouter;
     }
 
@@ -255,21 +271,24 @@ public final class RemoteServer {
                 // 文件名只留安全字符，避免路径穿越
                 String safe = name.replaceAll("[^\\w.\\-\\u4e00-\\u9fa5]", "_");
                 if (safe.length() > 120) safe = safe.substring(0, 120);
-                java.io.File base = appCtx.getExternalFilesDir(null);
-                if (base == null) base = appCtx.getFilesDir();
-                java.io.File dir = new java.io.File(base, "sources");
-                if (!dir.exists()) {
-                    //noinspection ResultOfMethodCallIgnored
-                    dir.mkdirs();
+
+                // 写进统一存储的 upload/ 子目录。
+                //
+                // 之前这里直接写 getExternalFilesDir(null)/sources（App 私有目录），
+                // 而扫描读的是 StorageDir（授权目录）—— 两套路径完全不通，
+                // 结果"手机上传成功了，盒子上永远看不到"。
+                boolean ok = com.mintv.tv.data.StorageDir.write(
+                        appCtx, com.mintv.tv.data.StorageDir.SUB_UPLOAD, safe, content);
+                if (!ok) {
+                    send(out, 500, "application/json; charset=utf-8",
+                            "{\"ok\":false,\"msg\":\"写入存储目录失败\"}");
+                    return;
                 }
-                java.io.File f = new java.io.File(dir, safe);
-                java.io.FileOutputStream fos = new java.io.FileOutputStream(f);
-                try { fos.write(content.getBytes("UTF-8")); } finally { fos.close(); }
 
                 org.json.JSONObject o = new org.json.JSONObject();
                 o.put("ok", true);
-                o.put("url", "local://" + safe);
-                o.put("size", f.length());
+                o.put("url", "upload://" + safe);
+                o.put("size", content.getBytes("UTF-8").length);
                 send(out, 200, "application/json; charset=utf-8", o.toString());
             } catch (Exception e) {
                 send(out, 500, "application/json; charset=utf-8",

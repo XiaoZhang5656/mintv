@@ -30,7 +30,8 @@ public final class SourceStore {
     /** 老版本把正文存在这里，保留 key 只为了迁移一次。 */
     private static final String K_LEGACY_BODY = "source_body";
 
-    private static final String FILE_NAME = "source.m3u";
+    private static final String FILE_NAME =
+            com.mintv.tv.data.StorageDir.SUB_CACHE + "/source.m3u";
 
     // 这里刻意**不内置任何直播源地址**。
     // 早期版本写死过一个 guovin.github.io 的地址，结果是：
@@ -115,6 +116,31 @@ public final class SourceStore {
     public static final int MAX_SOURCE_BYTES = 16 * 1024 * 1024;
 
     public static String cachedBody(Context c) {
+        // 源正文跟着存储根走。
+        // 有大小保护：超过上限直接丢弃，不能读进内存。
+        String viaStore = null;
+        try {
+            long size = com.mintv.tv.data.StorageDir.hasRoot(c)
+                    ? -1 : bodyFile(c).length();
+            if (size > MAX_SOURCE_BYTES) {
+                android.util.Log.w("SourceStore", "缓存源过大 " + size + " 字节，已丢弃");
+                com.mintv.tv.data.StorageDir.deletePath(c, FILE_NAME);
+                clearBad(c);
+                return null;
+            }
+            viaStore = com.mintv.tv.data.StorageDir.readPath(c, FILE_NAME);
+        } catch (Throwable t) {
+            android.util.Log.w("SourceStore", "读缓存失败", t);
+        }
+        if (viaStore != null && !viaStore.isEmpty()) {
+            if (viaStore.length() > MAX_SOURCE_BYTES) {
+                com.mintv.tv.data.StorageDir.deletePath(c, FILE_NAME);
+                clearBad(c);
+                return null;
+            }
+            return viaStore;
+        }
+
         File f = bodyFile(c);
         if (f.exists() && f.length() > MAX_SOURCE_BYTES) {
             // 上次留下了坏数据：超过上限就地删掉，不能读进内存
@@ -178,18 +204,12 @@ public final class SourceStore {
         if (bytes.length > MAX_SOURCE_BYTES) {
             // 不落盘，避免下次启动再被它撑爆；同时清掉旧缓存
             android.util.Log.w("SourceStore", "源过大 " + bytes.length + " 字节，拒绝缓存");
+            com.mintv.tv.data.StorageDir.deletePath(c, FILE_NAME);
             try { bodyFile(c).delete(); } catch (Throwable ignored) { }
             return;
         }
-        FileOutputStream out = null;
-        try {
-            out = new FileOutputStream(bodyFile(c));
-            out.write(bytes);
-            out.flush();
-        } catch (Throwable ignored) {
-        } finally {
-            if (out != null) try { out.close(); } catch (Throwable ignored) { }
-        }
+        // 源正文跟着存储根走（未授权 getFilesDir()，授权后 <授权根>/source.m3u）
+        com.mintv.tv.data.StorageDir.writePath(c, FILE_NAME, body);
         SharedPreferences.Editor e = sp(c).edit().putLong(K_TIME, System.currentTimeMillis());
         if (etag != null && !etag.isEmpty()) e.putString(K_ETAG, etag);
         else e.remove(K_ETAG);

@@ -73,6 +73,51 @@ public final class ScriptStore {
         }
     }
 
+    /**
+     * 把「存储根/scripts/」里的脚本同步到私有目录。
+     *
+     * <p>为什么需要这一步：ScriptEngine 用 {@code java.io.File} 读脚本，
+     * 而 SAF 只给 Uri，拿不到 File。所以脚本的**执行**只能发生在私有目录。
+     *
+     * <p>做法是把授权目录当作"源"：用户在文件管理器里往
+     * {@code <授权根>/scripts/} 丢脚本，这里同步一份到私有目录，
+     * 引擎就能跑。两边内容一致，用户看得见、能备份。
+     *
+     * @return 同步的文件数
+     */
+    public int syncFromStorage(Context c) {
+        java.util.List<String> names = StorageDir.listPath(c, StorageDir.SUB_SCRIPTS);
+        if (names == null || names.isEmpty()) return 0;
+        int n = 0;
+        for (String name : names) {
+            String lower = name.toLowerCase(java.util.Locale.US);
+            if (!lower.endsWith(".js")) continue;
+            String text = StorageDir.readPath(c, StorageDir.SUB_SCRIPTS + "/" + name);
+            if (text == null) continue;
+            File target = new File(dir, name);
+            // 内容没变就不写，避免每次启动都碰磁盘
+            String old = null;
+            if (target.isFile()) {
+                try {
+                    byte[] buf = new byte[(int) target.length()];
+                    java.io.FileInputStream in = new java.io.FileInputStream(target);
+                    try { in.read(buf); } finally { in.close(); }
+                    old = new String(buf, "UTF-8");
+                } catch (Throwable ignored) { }
+            }
+            if (text.equals(old)) continue;
+            try {
+                java.io.FileOutputStream o = new java.io.FileOutputStream(target);
+                try { o.write(text.getBytes("UTF-8")); } finally { o.close(); }
+                n++;
+            } catch (Throwable t) {
+                android.util.Log.w("ScriptStore", "同步脚本失败 " + name, t);
+            }
+        }
+        if (n > 0) android.util.Log.w("ScriptStore", "从存储目录同步 " + n + " 个脚本");
+        return n;
+    }
+
     public File dir() { return dir; }
 
     /** 给人看的目录路径（SAF 模式返回用户选的目录名）。 */

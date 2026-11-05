@@ -27,7 +27,8 @@ import java.util.List;
  */
 public final class SubscriptionStore {
 
-    private static final String FILE_NAME = "subscriptions.json";
+    private static final String FILE_NAME =
+            com.mintv.tv.data.StorageDir.SUB_CONFIG + "/subscriptions.json";
 
     public static final class Sub {
         public String id;
@@ -58,9 +59,6 @@ public final class SubscriptionStore {
 
     private static List<Sub> cache;
     private static String activeId;
-    private static File file(Context c) {
-        return new File(c.getApplicationContext().getFilesDir(), FILE_NAME);
-    }
 
     // ---------------- 读取 ----------------
 
@@ -146,17 +144,30 @@ public final class SubscriptionStore {
         return Long.toHexString(System.currentTimeMillis());
     }
 
+    /**
+     * 丢弃内存缓存，下次 list() 重新读文件。
+     *
+     * <p>用在两个场景：
+     * <ul>
+     *   <li>用户可能在文件管理器里直接改了 subscriptions.json</li>
+     *   <li>授权目录切换后，根变了，必须重读</li>
+     * </ul>
+     */
+    public static synchronized void reload() {
+        cache = null;
+        activeId = null;
+    }
+
     private static void load(Context c) {
         cache = new ArrayList<>();
         activeId = null;
-        File f = file(c);
-        if (f.exists() && f.length() > 0) {
-            FileInputStream in = null;
+        // 订阅配置放在「存储根」下，未授权时是 getFilesDir()，
+        // 授权后是 <授权目录>/subscriptions.json —— 两个根结构同构，
+        // 所以这里只关心相对路径。
+        String raw = com.mintv.tv.data.StorageDir.readPath(c, FILE_NAME);
+        if (raw != null && !raw.trim().isEmpty()) {
             try {
-                in = new FileInputStream(f);
-                byte[] buf = new byte[(int) f.length()];
-                int n = in.read(buf);
-                JSONObject root = new JSONObject(new String(buf, 0, Math.max(0, n), "UTF-8"));
+                JSONObject root = new JSONObject(raw);
                 activeId = root.optString("active", null);
                 JSONArray arr = root.optJSONArray("list");
                 if (arr != null) {
@@ -174,9 +185,10 @@ public final class SubscriptionStore {
                         if (!s.url.isEmpty()) cache.add(s);
                     }
                 }
-            } catch (Throwable ignored) {
-            } finally {
-                if (in != null) try { in.close(); } catch (Throwable ignored) { }
+            } catch (Throwable t) {
+                // 用户在文件管理器里手改过 JSON、格式坏了的时候会走到这里。
+                // 不能崩，也不能把好数据覆盖掉 —— 用空列表兜底并记一条日志。
+                android.util.Log.w("SubscriptionStore", "订阅配置解析失败，已重置为空", t);
             }
         }
 
@@ -219,7 +231,6 @@ public final class SubscriptionStore {
     }
 
     private static void save(Context c) {
-        FileOutputStream out = null;
         try {
             JSONArray arr = new JSONArray();
             for (Sub s : cache) {
@@ -236,12 +247,11 @@ public final class SubscriptionStore {
             JSONObject root = new JSONObject();
             root.put("active", activeId == null ? "" : activeId);
             root.put("list", arr);
-            out = new FileOutputStream(file(c));
-            out.write(root.toString().getBytes("UTF-8"));
-            out.flush();
-        } catch (Throwable ignored) {
-        } finally {
-            if (out != null) try { out.close(); } catch (Throwable ignored) { }
+            if (!com.mintv.tv.data.StorageDir.writePath(c, FILE_NAME, root.toString())) {
+                android.util.Log.w("SubscriptionStore", "写订阅配置失败");
+            }
+        } catch (Throwable t) {
+            android.util.Log.w("SubscriptionStore", "序列化订阅失败", t);
         }
     }
 }
