@@ -3268,44 +3268,107 @@ public class MainActivity extends Activity implements FocusEngine.Host {
      * <p>VLC 只认标准协议，tvbus:// 和 p2p:// 必须先在 native 引擎里转成本机
      * http 地址才能播。转换失败返回 null，调用方继续用原地址，让 VLC 报错。
      */
+    /** tvbus / p2p~p9p 这类内核不认的私有协议。 */
+    private boolean isPrivateProtocol(String url) {
+        if (url == null) return false;
+        String u = url.toLowerCase();
+        return u.startsWith("tvbus://") || u.startsWith("p2p://")
+                || u.startsWith("p3p://") || u.startsWith("p4p://")
+                || u.startsWith("p5p://") || u.startsWith("p6p://")
+                || u.startsWith("p7p://") || u.startsWith("p8p://")
+                || u.startsWith("p9p://");
+    }
+
+    // ---------- 私有协议引擎的生命周期 ----------
+    //
+    // tvbus 和 p2p 都会在本机起一个 HTTP 服务，还带 native 线程、socket、
+    // 甚至往路由器写 UPnP 端口映射。不显式停就会一路累积：
+    // 切十几个台之后端口耗尽、native 内存涨、路由器映射表越来越长。
+    //
+    // 三条规则：
+    //   1. 切到非私有协议前，先停私有引擎
+    //   2. 私有 → 私有（哪怕同一个 tvbus）也要先停，再起新的
+    //   3. onDestroy 兜底全停
+    //
+    // stop() 是 native 调用，可能阻塞，所以一律丢后台线程。
+
+    private volatile boolean tvbusInited = false;
+    private volatile com.forcetech.android.ForceTV curForceTv = null;
+    private volatile String curPrivateUrl = null;
+
+    /** 停掉当前所有私有协议引擎。非阻塞：内部起线程做 native 调用。 */
+    private void stopPrivateEngines() {
+        final com.forcetech.android.ForceTV ft = curForceTv;
+        curForceTv = null;
+        curPrivateUrl = null;
+        if (ft == null && !tvbusInited) return;
+        new Thread(new Runnable() {
+            @Override public void run() {
+                if (ft != null) {
+                    try { ft.stop2(); } catch (Throwable t) {
+                        android.util.Log.w("MinTV", "ForceTV stop 失败", t);
+                    }
+                }
+                try {
+                    com.tvbus.engine.TVCore.close();
+                    android.util.Log.i("MinTV", "私有引擎已停止");
+                } catch (Throwable t) {
+                    android.util.Log.w("MinTV", "TVCore close 失败", t);
+                }
+            }
+        }, "private-stop").start();
+        tvbusInited = false;
+    }
+
     private String resolvePrivateProtocol(String url) {
         if (url == null) return null;
 
-        // IPv4 里带冒号的不太可能是协议头，先做个快速排除
         int idx = url.indexOf("://");
         if (idx <= 0) return null;
         String scheme = url.substring(0, idx).toLowerCase();
 
+        // 同一个地址又解析一次（比如重连）也算"新的一路"，
+        // 必须先停旧的 —— 否则 native 侧会有两个实例抢同一个本地端口。
+        if (curPrivateUrl != null) {
+            android.util.Log.i("MinTV", "切私有源，先停旧引擎");
+            stopPrivateEngines();
+        }
+
         try {
             if ("tvbus".equals(scheme)) {
                 final com.tvbus.engine.TVCore core = com.tvbus.engine.TVCore.get();
-                core.init(this);
-                if (!osdShown("正在解析 tvbus 地址…")) { }
+                if (!tvbusInited) {
+                    // applicationContext：TVCore 是全局单例，持有 Activity 会泄漏整个界面
+                    core.init(getApplicationContext());
+                    tvbusInited = true;
+                }
+                curPrivateUrl = url;
                 String out = core.playTVBUSUrl(url);
                 if (out == null || out.isEmpty()) {
                     android.util.Log.w("MinTV", "tvbus 解析失败: " + url);
+                    // 失败也要停，别留一个半初始化的引擎
+                    stopPrivateEngines();
                     return null;
                 }
                 android.util.Log.i("MinTV", "tvbus -> " + out);
                 return out;
             }
 
-            // p2p / p3p … p9p
             String lib = com.forcetech.android.ForceTV.libFor(url);
             if (lib != null) {
-                // 端口沿用主端口 +1，避免和遥控服务撞
                 int port = 18899 + 1;
                 com.forcetech.android.ForceTV ft =
                         new com.forcetech.android.ForceTV();
                 ft.start(lib, port);
-                // P2P 引擎起来后，播放地址是本地端口的映射。
-                // 具体路径还没在真机上验证过，先按常见形式拼。
+                curForceTv = ft;
+                curPrivateUrl = url;
                 String out = "http://127.0.0.1:" + port + "/" + url;
                 android.util.Log.i("MinTV", lib + " -> " + out);
                 return out;
             }
         } catch (Throwable t) {
             android.util.Log.w("MinTV", "私有协议解析异常: " + url, t);
+            stopPrivateEngines();
         }
         return null;
     }
@@ -3324,39 +3387,47 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         //
         // 这一步是阻塞的（tvbus 最坏等 30 秒），但 playUrl 本身就在 IO 线程，
         // 不会卡主线程。失败就原样往下走，让 VLC 自己报错。
-        // 私有协议解析必须在后台线程：libtvcore.so 的 speer_as_init →
-        // enet_host_service → select() 会阻塞等待网络事件，实测卡主线程 6 秒，
-        // 触发 ANR（Input dispatching timed out / FocusEvent）。
+        // 私有协议解析必须完全异步。
         //
-        // 这里不假设调用方在哪个线程 —— 如果不是主线程直接解析，
-        // 是主线程就交给线程池，用 latch 等结果。
-        final String rawUrl = url;
-        String resolved;
-        if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) {
-            final java.util.concurrent.CountDownLatch latch =
-                    new java.util.concurrent.CountDownLatch(1);
-            final String[] holder = new String[1];
-            new Thread(new Runnable() {
-                @Override public void run() {
-                    try {
-                        holder[0] = resolvePrivateProtocol(rawUrl);
-                    } catch (Throwable t) {
-                        android.util.Log.w("MinTV", "协议解析失败", t);
-                    } finally {
-                        latch.countDown();
-                    }
-                }
-            }, "proto-resolve").start();
-            try {
-                // tvbus 最长等 30 秒，多给 5 秒余量
-                latch.await(35, java.util.concurrent.TimeUnit.SECONDS);
-            } catch (InterruptedException ignored) { }
-            resolved = holder[0];
-        } else {
-            resolved = resolvePrivateProtocol(url);
+        // 之前的做法是"主线程起线程 + latch.await"，结果是主线程被自己锁住，
+        // ANR 从 native 的 6 秒变成锁等待的 5 秒 —— 换了个地方卡而已。
+        //
+        // 现在：主线程立刻返回（先给个提示），后台解析完再 post 回来继续。
+        // resolved 已经是 http，二次进入不会再走这个分支。
+        // 从 tvbus/p2p 切到 http 源：先把私有引擎停掉，
+        // 否则它在后台继续拉 P2P 流，白占带宽和端口。
+        if (!isPrivateProtocol(url) && curPrivateUrl != null) {
+            android.util.Log.i("MinTV", "切到普通源，停私有引擎");
+            stopPrivateEngines();
         }
-        if (resolved != null && !resolved.equals(url)) {
-            url = resolved;
+
+        if (isPrivateProtocol(url)) {
+            if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) {
+                if (osd != null) osd.toast("正在解析源地址…");
+                final String pendingUrl = url;
+                final java.util.Map<String, String> pendingHeaders = headers;
+                final PlaybackBackend.Mode pendingMode = mode;
+                new Thread(new Runnable() {
+                    @Override public void run() {
+                        String r = null;
+                        try {
+                            r = resolvePrivateProtocol(pendingUrl);
+                        } catch (Throwable t) {
+                            android.util.Log.w("MinTV", "协议解析失败", t);
+                        }
+                        final String finalUrl = (r != null) ? r : pendingUrl;
+                        ui.post(new Runnable() {
+                            @Override public void run() {
+                                if (isFinishing()) return;
+                                playUrl(finalUrl, pendingHeaders, pendingMode);
+                            }
+                        });
+                    }
+                }, "proto-resolve").start();
+                return;   // 主线程不等
+            }
+            String r = resolvePrivateProtocol(url);
+            if (r != null) url = r;
         }
 
         // 现在只有一个内核，udp/rtp/rtsp 天然支持，不需要再切。
@@ -6890,6 +6961,9 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         // 不做的话：native 线程、socket、以及 UPnP 端口映射（so 里调了
         // UPNP_AddPortMapping）都留在路由器上，用户看不到但会占端口。
         try {
+            // 先停 p2p 再关 tvbus，两个都走 stopPrivateEngines；
+            // 单独再 close 一次是兜底（比如 p2p 从没起过但 tvbus 起过）
+            stopPrivateEngines();
             com.tvbus.engine.TVCore.close();
         } catch (Throwable t) {
             android.util.Log.w("MinTV", "TVCore.close 失败", t);
