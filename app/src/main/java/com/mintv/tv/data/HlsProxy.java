@@ -67,7 +67,65 @@ public final class HlsProxy {
     /**
      * 拉取任意地址的原始字节（分片、密钥都用这个）。
      */
+    /** 诊断只跑一次，避免每次拉分片都重复。 */
+    private static volatile boolean diagDone = false;
+
+    /**
+     * 首次请求时启动一次对照诊断：同一个地址，分别用 HttpURLConnection
+     * 和裸 socket 各拉一次，同时打印系统代理与当前 Network。
+     *
+     * <p>异步跑，不阻塞播放。目的是把「到底哪一层出问题」用日志钉死，
+     * 而不是靠猜。
+     */
+    private static void diagnoseOnce(final String url) {
+        if (diagDone) return;
+        diagDone = true;
+        new Thread(new Runnable() {
+            @Override public void run() {
+                // 1) 系统代理：HttpURLConnection 会读它，裸 socket 不会
+                try {
+                    java.net.Proxy px = java.net.ProxySelector.getDefault()
+                            .select(new java.net.URI(url)).get(0);
+                    android.util.Log.w("HlsDiag", "proxy=" + px.type()
+                            + " " + (px == java.net.Proxy.NO_PROXY ? "(直连)" : px.address()));
+                } catch (Throwable t) {
+                    android.util.Log.w("HlsDiag", "proxy 查询异常: " + t);
+                }
+
+                // 2) HttpURLConnection
+                long t0 = System.currentTimeMillis();
+                try {
+                    java.net.HttpURLConnection c = (java.net.HttpURLConnection)
+                            new java.net.URL(url).openConnection();
+                    c.setConnectTimeout(8000);
+                    c.setReadTimeout(8000);
+                    int code = c.getResponseCode();
+                    android.util.Log.w("HlsDiag", "HttpURLConnection OK code=" + code
+                            + " " + (System.currentTimeMillis() - t0) + "ms"
+                            + " 实际IP=" + c.getURL().getHost());
+                    c.disconnect();
+                } catch (Throwable t) {
+                    android.util.Log.w("HlsDiag", "HttpURLConnection 失败 "
+                            + (System.currentTimeMillis() - t0) + "ms : " + t);
+                }
+
+                // 3) 裸 socket
+                t0 = System.currentTimeMillis();
+                try {
+                    byte[] r = fetchRaw(url, 0);
+                    android.util.Log.w("HlsDiag", "裸socket "
+                            + (r == null ? "失败" : "OK " + r.length + "B")
+                            + " " + (System.currentTimeMillis() - t0) + "ms");
+                } catch (Throwable t) {
+                    android.util.Log.w("HlsDiag", "裸socket 失败 "
+                            + (System.currentTimeMillis() - t0) + "ms : " + t);
+                }
+            }
+        }, "hls-diag").start();
+    }
+
     public static byte[] fetch(String remoteUrl) {
+        diagnoseOnce(remoteUrl);
         // 走裸 socket，不用 HttpURLConnection。
         //
         // 实测（Android 15 / MIUI）：同一个 http://host:8080/... 的地址，
