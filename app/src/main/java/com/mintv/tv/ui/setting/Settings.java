@@ -27,8 +27,6 @@ public final class Settings {
                     new String[]{"已关闭", "开启"}, 0),
             SettingDef.action("source", "切源",
                     "同一频道多条线路时手动切换，左=上一条 右=下一条", null),
-            SettingDef.action("local_import", "导入本地源",
-                    "从本机或 U 盘导入 m3u / txt，内容复制到本机，不依赖网络", "选择文件…"),
             SettingDef.action("headers", "请求头",
                     "该源需要特定 UA/Referer 时才填，全局生效", "编辑…"),
             SettingDef.action("group_mgr", "频道分组管理",
@@ -76,7 +74,7 @@ public final class Settings {
             SettingDef.value("autostart", "开机自启",
                     "开机后自动拉起本应用",
                     new String[]{"开启", "关闭"}, 0),
-            SettingDef.action("script_dir", "脚本目录",
+            SettingDef.action("storage_dir", "存储目录",
                     "选一个外部目录放脚本，文件管理器可见；不选则用 App 私有目录", "选择…"),
     };
 
@@ -103,9 +101,9 @@ public final class Settings {
     public static final int IDX_OUTPUT = indexOf("output");
     public static final int IDX_THEME = indexOf("theme");
     public static final int IDX_SHOW_SUBS = indexOf("show_subs");
-    public static final int IDX_SCRIPT_DIR = indexOf("script_dir");
+    public static final int IDX_STORAGE_DIR = indexOf("storage_dir");
     public static final int IDX_NET_PROXY = indexOf("net_proxy");
-    public static final int IDX_LOCAL_IMPORT = indexOf("local_import");
+
     public static final int IDX_GROUP_MGR = indexOf("group_mgr");
 
     /** 按 id 查行号。找不到直接抛 —— 说明常量名和总表里的 id 对不上。 */
@@ -148,7 +146,7 @@ public final class Settings {
         int[] all = {IDX_SOURCE, IDX_ASPECT, IDX_EPG_POS, IDX_REVERSE, IDX_SWITCH_UI,
                 IDX_LEFT_KEY, IDX_SPEED, IDX_AUTOSTART, IDX_DECODER, IDX_TIMEOUT,
                 IDX_HEADERS, IDX_CLOCK, IDX_OUTPUT, IDX_THEME, IDX_SHOW_SUBS,
-                IDX_SCRIPT_DIR, IDX_NET_PROXY, IDX_LOCAL_IMPORT, IDX_GROUP_MGR};
+                IDX_STORAGE_DIR, IDX_NET_PROXY, IDX_GROUP_MGR};
         for (int v : all) {
             if (v < 0 || v >= ALL.length) {
                 throw new IllegalStateException("索引常量越界：" + v + "，表长 " + ALL.length);
