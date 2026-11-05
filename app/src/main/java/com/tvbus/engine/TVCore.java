@@ -40,6 +40,14 @@ public final class TVCore {
 
     private TVCore() { }
 
+    /** 等播放地址的超时。由宿主按用户设置（超时换源）传入。 */
+    private static volatile int sTimeoutMs = 8000;
+
+    /** 设置超时毫秒数。宿主在每次解析前调用。 */
+    public static void setTimeoutMs(int ms) {
+        sTimeoutMs = ms > 0 ? ms : 8000;
+    }
+
     public static synchronized TVCore get() {
         if (b == null) b = new TVCore();
         return b;
@@ -142,8 +150,10 @@ public final class TVCore {
             Log.w(TAG, "start 失败: " + tvbusUrl, t);
             return null;
         }
-        // 最多等 30 秒：300 次 × 100ms
-        for (int i = 0; i < 300; i++) {
+        // 超时由宿主传入（用户设置里的"超时换源"）。
+        // 原来写死 30 秒 —— 用户设了 8 秒却要干等 30 秒，逻辑上说不通。
+        int loops = Math.max(10, sTimeoutMs / 100);
+        for (int i = 0; i < loops; i++) {
             String v = c;
             if (v != null) return v;
             try {
@@ -171,7 +181,7 @@ public final class TVCore {
             Log.w(TAG, "start2 失败", t);
             return null;
         }
-        for (int i = 0; i < 300; i++) {
+        for (int i = 0; i < Math.max(10, sTimeoutMs / 100); i++) {
             String v = c;
             if (v != null) return v;
             try {
