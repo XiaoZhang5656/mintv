@@ -142,7 +142,13 @@ public final class PlaylistParser {
             // 有大写 #EXTM3U 就走 M3U 分支，否则按 TXT 解析
             boolean isM3u = text.contains("#EXTM3U") || text.contains("#EXTINF");
             String cleaned = stripBom(text);
-            return isM3u ? parseM3u(cleaned) : parseTxt(cleaned);
+            Playlist pl = isM3u ? parseM3u(cleaned) : parseTxt(cleaned);
+            // 排查"导入后 0 个频道"用：原文长度、走到了哪个分支、解析出多少
+            android.util.Log.i("PlaylistParser", "解析完成 格式=" + (isM3u ? "m3u" : "txt")
+                    + " 原文=" + cleaned.length() + "字符"
+                    + " 频道=" + (pl == null ? -1 : pl.all.size())
+                    + " 分类=" + (pl == null ? -1 : pl.byGroup.size()));
+            return pl;
         } catch (OutOfMemoryError oom) {
             android.util.Log.e("PlaylistParser", "解析时内存不足，返回空列表");
             return new Playlist();
@@ -541,7 +547,27 @@ public final class PlaylistParser {
     }
 
     /** 去掉 URL 上的参数尾巴，只留真实地址。 */
+    /**
+     * 内核不认、需要先转成本地 http 的私有协议。
+     *
+     * <p>tvbus 走 libtvcore.so，p2p~p9p 走 libpNp.so，都在本机起 HTTP 服务。
+     * 解析阶段不该把它们过滤掉 —— 之前 txt 里这些地址会被当成"无效地址"，
+     * 表现就是导入后频道数为 0。
+     */
+    public static boolean isPrivateScheme(String url) {
+        if (url == null || url.isEmpty()) return false;
+        String u = url.toLowerCase();
+        if (u.startsWith("tvbus://")) return true;
+        for (int i = 2; i <= 9; i++) {
+            if (u.startsWith("p" + i + "p://")) return true;
+        }
+        return false;
+    }
+
     public static String cleanUrl(String url) {
+        // 私有协议的地址原样返回：它们后面不含请求头分隔符，
+        // 而且 ChannelID 是 base64url，理论上可能含 '-' '_'，不能乱切。
+        if (isPrivateScheme(url)) return url;
         int cut = headerCut(url);
         return cut < 0 ? url : url.substring(0, cut);
     }
