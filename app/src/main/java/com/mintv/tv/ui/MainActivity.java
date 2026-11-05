@@ -3542,8 +3542,17 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             if (expanded.startsWith("script:")) {
                 return runScriptProtocol(expanded.substring("script:".length()));
             }
-            // 展开成 tvbus:// 或 pNp:// 后递归处理
-            return resolvePrivateProtocol(expanded);
+            // 展开成 tvbus:// 或 pNp:// 后递归处理。
+            //
+            // 但 mintv://http://... 展开出来的是本地代理地址
+            // （http://127.0.0.1:port/mintv/m3u8?u=...），递归进去
+            // "http" 不匹配任何私有协议，会一路返回 null，把展开结果丢掉，
+            // 最后回退成原地址交给播放器 —— VLC 不认识 mintv:// ，一个请求
+            // 都不发，界面永远停在"正在解析源地址"。
+            //
+            // 展开结果本身就是最终播放地址，递归拿不到东西时就用它。
+            String inner = resolvePrivateProtocol(expanded);
+            return inner != null ? inner : expanded;
         }
 
         int idx = url.indexOf("://");
