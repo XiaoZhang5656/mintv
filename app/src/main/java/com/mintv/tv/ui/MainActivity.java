@@ -3673,8 +3673,11 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             if (selections[ROW_P2P_BOOST] == 1) ch = p2pChannel();
             String enc = android.net.Uri.encode(
                     com.mintv.tv.data.HlsProxy.b64(afterPrefix));
-            return "http://127.0.0.1:" + port + "/mintv/m3u8?u=" + enc
+            String out = "http://127.0.0.1:" + port + "/mintv/m3u8?u=" + enc
                     + (ch == null ? "" : "&ch=" + ch);
+            android.util.Log.w("MinTV", "mintv 展开 port=" + port
+                    + " remotePort=" + remotePort + " ch=" + ch);
+            return out;
         }
 
         try {
@@ -3911,9 +3914,18 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                             android.util.Log.w("MinTV", "协议解析失败", t);
                         }
                         final String finalUrl = (r != null) ? r : pendingUrl;
+                        // 解析结果一定要打出来：抓包看不到请求时，第一个要确认的
+                        // 就是 VLC 到底拿到了什么地址。没有这行，只能猜。
+                        android.util.Log.w("MinTV", "解析完成 " + pendingUrl
+                                + " -> " + finalUrl);
+                        if (r == null) {
+                            android.util.Log.w("MinTV", "解析返回 null，"
+                                    + "回退用原地址播放");
+                        }
                         ui.post(new Runnable() {
                             @Override public void run() {
                                 if (isFinishing()) return;
+                                android.util.Log.w("MinTV", "交给播放器: " + finalUrl);
                                 playUrl(finalUrl, pendingHeaders, pendingMode);
                             }
                         });
