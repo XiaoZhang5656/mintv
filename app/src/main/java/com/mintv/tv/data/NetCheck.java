@@ -30,7 +30,7 @@ import java.util.Set;
 public final class NetCheck {
 
     /** 公开 STUN，全部实测可用。小米那个是国内的，优先。 */
-    private static final String[][] STUN_SERVERS = {
+    public static final String[][] STUN_SERVERS = {
             {"stun.chat.bilibili.com", "3478"},
             {"stun.cloudflare.com", "3478"},
             {"stun.miwifi.com", "3478"},
@@ -244,6 +244,25 @@ public final class NetCheck {
         }
     }
 
+    /**
+     * 用调用方的 socket 做一次 STUN 探测，返回 {IPv4 整数, 端口}。
+     *
+     * <p>给 {@code UdpHole} 用：它有自己的打洞 socket，必须用那个 socket
+     * 去问 NAT"你给我分配了什么对外地址"，换成别的 socket 问出来的端口
+     * 对别人是无效的 —— 那是另一条映射。
+     *
+     * <p>超时由 socket 自己的 SoTimeout 控制，调用方负责设置。
+     *
+     * @return null 表示没拿到
+     */
+    public static int[] stunProbe(java.net.DatagramSocket sock, String host, int port) {
+        try {
+            return probe(sock, host, port, false);
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
     /** 探测超时。见 {@link #probeWithTimeout} 里的说明。 */
     private static final class ProbeTimeout extends RuntimeException {
         ProbeTimeout() { super("stun probe timeout"); }
@@ -355,7 +374,7 @@ public final class NetCheck {
         return null;
     }
 
-    private static String ipToString(int ip) {
+    public static String ipToString(int ip) {
         return ((ip >>> 24) & 0xFF) + "." + ((ip >>> 16) & 0xFF) + "."
                 + ((ip >>> 8) & 0xFF) + "." + (ip & 0xFF);
     }

@@ -43,6 +43,15 @@ public final class UdpHole {
 
     private final DatagramSocket sock;
     private final int localPort;
+
+    /**
+     * NAT 分配给这个打洞 socket 的对外地址。
+     *
+     * <p>必须由这个 socket 自己问 STUN 拿 —— 换任何别的 socket 问出来的
+     * 都是另一条映射，报给别人就是死地址。
+     */
+    private volatile String publicAddr;
+    private volatile int publicPort;
     private final byte[] nonce;
 
     private UdpHole(DatagramSocket sock, byte[] nonce) {
@@ -85,6 +94,53 @@ public final class UdpHole {
     }
 
     public int localPort() { return localPort; }
+
+    /** 对外 IP；没探测或探测失败返回 null。 */
+    public String publicAddr() { return publicAddr; }
+
+    /** 对外端口；没探测或探测失败返回 0。 */
+    public int publicPort() { return publicPort; }
+
+    /**
+     * 问 STUN：这条 socket 在公网上长什么样。
+     *
+     * <p>必须 bind 之后调用。失败不影响打洞本身，只是别人不知道往哪发。
+     *
+     * <p>对称型 NAT 换目标就换端口，这里拿到的只是"当时那个目标"看到的端口。
+     * 但过滤器宽松的对称型（映射随目标变、过滤不看目标）仍然能被打进来 ——
+     * 对方往这个地址发包，NAT 会放行。所以对称型也要上报。
+     *
+     * @return 拿到返回 true
+     */
+    public boolean discover() {
+        if (sock == null || sock.isClosed()) return false;
+        int oldTmo;
+        try {
+            oldTmo = sock.getSoTimeout();
+        } catch (Throwable t) {
+            oldTmo = 0;
+        }
+        try {
+            sock.setSoTimeout(1500);
+            for (String[] srv : NetCheck.STUN_SERVERS) {
+                int[] m = NetCheck.stunProbe(sock, srv[0], Integer.parseInt(srv[1]));
+                if (m != null && m[0] != 0 && m[1] > 0) {
+                    publicAddr = NetCheck.ipToString(m[0]);
+                    publicPort = m[1];
+                    android.util.Log.i("UdpHole", "对外地址 " + publicAddr + ":" + publicPort
+                            + "（来自 " + srv[0] + "，本地 " + localPort + "）");
+                    return true;
+                }
+            }
+            android.util.Log.w("UdpHole", "STUN 全部无应答，本轮没有对外地址");
+            return false;
+        } catch (Throwable t) {
+            android.util.Log.w("UdpHole", "discover 异常", t);
+            return false;
+        } finally {
+            try { sock.setSoTimeout(oldTmo); } catch (Throwable ignored) { }
+        }
+    }
 
     /**
      * 向一个对端的公网地址打洞，并等待对方的包。

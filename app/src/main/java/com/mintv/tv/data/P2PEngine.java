@@ -84,19 +84,27 @@ public final class P2PEngine {
             this.natType = natResult.natType == NetCheck.NAT_FULL_CONE ? "full_cone"
                     : natResult.natType == NetCheck.NAT_RESTRICTED ? "restricted"
                     : natResult.natType == NetCheck.NAT_SYMMETRIC ? "symmetric" : "unknown";
-            // 只有能被打洞的类型才上报地址，否则别人连不上，报了白占位
-            if (natResult.canServe()) {
-                this.localAddr = natResult.publicIp;
-                this.localPort = natResult.localPort;
-            } else {
-                this.localAddr = null;
-                this.localPort = 0;
-            }
         }
         running = true;
         punched.clear();
+
         // 绑一个固定 UDP 端口用于打洞。失败不影响播放，只是没打洞能力。
         if (hole == null) hole = UdpHole.bind(0);
+
+        // 上报的必须是打洞 socket 自己的对外地址。
+        //
+        // 之前报的是 NetCheck 那个临时 socket 的 localPort —— 那个 socket
+        // 检测完就 close 了，端口对应的映射早没了，别人按这个地址发过来
+        // 是打不通的。
+        //
+        // 对称型也上报：映射端口虽然随目标变，但过滤器宽松的对称型
+        // 照样能被陌生来源打进来，报一个"曾经有效"的映射比不报强。
+        this.localAddr = null;
+        this.localPort = 0;
+        if (hole != null && hole.discover()) {
+            this.localAddr = hole.publicAddr();
+            this.localPort = hole.publicPort();
+        }
 
         heartbeat = new Thread(new Runnable() {
             @Override public void run() {
@@ -226,6 +234,12 @@ public final class P2PEngine {
      */
     private static int scorePeer(TrackerClient.Peer p) {
         if (p == null) return Integer.MAX_VALUE;
+        // 服务端调度给的是 dist（播放位置差），越小越新鲜，直播场景下优先用它。
+        // 位置差太远的分片可能已经被对方淘汰了，试了也是白试。
+        if (p.dist >= 0) {
+            int rtt = p.rtt > 0 ? Math.min(p.rtt, 2000) : 0;
+            return p.dist * 1000 + rtt;
+        }
         int rtt = p.rtt > 0 ? Math.min(p.rtt, 2000) : 800;
         double load = p.load < 0 ? 0 : (p.load > 1 ? 1 : p.load);
         return rtt + (int) (load * 500);

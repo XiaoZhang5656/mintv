@@ -53,6 +53,14 @@ public final class TrackerClient {
         public int port;
         public int rtt;
         public double load;
+        /**
+         * 服务端给的"播放位置距离" = |peer.pos - 请求的 seq|。
+         *
+         * <p>越小说明对方手上那片越新鲜、越可能还没被清理。直播场景下
+         * 这个比 rtt 更该优先 —— 位置差太远的分片可能已经过期。
+         * 服务端没给时保持 -1。
+         */
+        public int dist = -1;
     }
 
     private final android.content.Context appCtx;
@@ -126,11 +134,18 @@ public final class TrackerClient {
     public List<Peer> peers(String channel, int seq) {
         List<Peer> out = new ArrayList<>();
         try {
-            JSONObject b = new JSONObject();
-            b.put("channel", channel);
-            b.put("seq", seq);
+            // 注意：不是 /api/peers。
+            //
+            // /api/peers   是后台监控面板接口（返回全节点明细），线上还有
+            //              Basic Auth 保护，客户端调它只会拿到 401。
+            // /api/fetch   才是候选调度，而且参数从 query string 读，
+            //              不读 JSON body。
+            StringBuilder u = new StringBuilder("/api/fetch?channel=");
+            u.append(java.net.URLEncoder.encode(channel, "UTF-8"));
+            u.append("&seq=").append(seq);
+            u.append("&peerId=").append(java.net.URLEncoder.encode(peerId, "UTF-8"));
 
-            JSONObject r = post("/api/peers", b);
+            JSONObject r = post(u.toString(), new JSONObject());
             if (r == null) return out;
             JSONArray arr = r.optJSONArray("peers");
             if (arr == null) return out;
@@ -143,6 +158,7 @@ public final class TrackerClient {
                 p.port = o.optInt("port", 0);
                 p.rtt = o.optInt("rtt", 0);
                 p.load = o.optDouble("load", 0);
+                p.dist = o.has("dist") ? o.optInt("dist", -1) : -1;
                 // 自己也在列表里，跳过
                 if (p.addr.isEmpty() || p.port <= 0) continue;
                 out.add(p);
