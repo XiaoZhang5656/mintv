@@ -103,6 +103,9 @@ public final class HlsProxy {
     public static byte[] fetch(String remoteUrl) {
         HttpURLConnection conn = null;
         boolean acquired = false;
+        // 是否成功读完。只有读完了才让连接回池；失败时直接 disconnect，
+        // 半截连接留着反而会污染池子。
+        boolean finished = false;
         try {
             // 限并发：拿不到令牌就等，等不到就让调用方失败重试。
             // 5 秒是单个分片能容忍的上限，再久 VLC 也已经判超时了。
@@ -179,13 +182,24 @@ public final class HlsProxy {
                 }
                 bos.write(buf, 0, n);
             }
+            // 读完了，把流关掉让连接回池。
+            //
+            // 这一步是连接复用的关键：HttpURLConnection 只有在「整块读完 +
+            // 流关闭」之后才把连接还给池子。不关的话下一片还得重新
+            // TCP 握手（走代理还要再握一次 SOCKS），每片白花 50~200ms。
+            finished = true;
+            try { in.close(); } catch (Throwable ignored) { }
             return bos.toByteArray();
         } catch (Throwable t) {
             // 异常类型拼进消息里，免得栈被系统日志冲掉后什么都看不出来
             android.util.Log.w("HlsProxy", "拉取失败 " + remoteUrl + " : " + t);
             return null;
         } finally {
-            if (conn != null) try { conn.disconnect(); } catch (Throwable ignored) { }
+            // 成功读完就不 disconnect —— 那样会把可复用的连接掐掉。
+            // 失败路径必须 disconnect，半开的连接不能还给池子。
+            if (conn != null && !finished) {
+                try { conn.disconnect(); } catch (Throwable ignored) { }
+            }
             if (acquired) try { FETCH_LIMIT.release(); } catch (Throwable ignored) { }
         }
     }
