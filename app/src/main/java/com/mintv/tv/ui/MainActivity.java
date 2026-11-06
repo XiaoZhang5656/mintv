@@ -81,6 +81,9 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     /** 四列的水平容器。加/删列只改这里。 */
     private LinearLayout colsRow;
 
+    /** 订阅列右侧那条分隔线。开关「显示订阅列」时要跟着一起加/删。 */
+    private View subLineView;
+
     /**
      * navViews 里前 subItemCount 个是「订阅」，后面才是「分类」。
      *
@@ -1233,6 +1236,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             // 分隔线
             View subLine = new View(this);
             subLine.setBackgroundColor(Theme.LINE);
+            subLineView = subLine;
             FrameLayout.LayoutParams slLp = new FrameLayout.LayoutParams(
                     Theme.px(1), FrameLayout.LayoutParams.MATCH_PARENT);
             slLp.leftMargin = subW;
@@ -3482,6 +3486,64 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             }
         }
         categories = keep;
+    }
+
+    /**
+     * 运行时开关订阅列，不重建 Activity。
+     *
+     * <p>做三件事：加/删 View、重新算焦点区、刷新分类列表。
+     * 播放器完全不动 —— 正在看的节目不受影响。
+     */
+    private void applyShowSubs(boolean show) {
+        if (colsRow == null) return;
+        try {
+            if (show) {
+                if (subColumn != null) return;      // 已经在了
+                int subW = Theme.px(240);
+
+                LinearLayout subCol = new LinearLayout(this);
+                subCol.setOrientation(LinearLayout.VERTICAL);
+                subCol.setPadding(0, Theme.px(26), 0, 0);
+                subCol.setBackgroundColor(0x66000000);
+
+                TextView hd = new TextView(this);
+                hd.setText("订阅");
+                hd.setTextColor(Theme.TEXT);
+                hd.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX,
+                        Theme.sp(Theme.TS_NAV_TITLE));
+                hd.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+                hd.setPadding(Theme.px(18), 0, 0, Theme.px(18));
+                subCol.addView(hd);
+
+                subColumn = subCol;
+                colsRow.addView(subCol, 0, new LinearLayout.LayoutParams(
+                        subW, ViewGroup.LayoutParams.MATCH_PARENT));
+
+                View line = new View(this);
+                line.setBackgroundColor(Theme.LINE);
+                subLineView = line;
+                colsRow.addView(line, 1, new LinearLayout.LayoutParams(
+                        Theme.px(1), ViewGroup.LayoutParams.MATCH_PARENT));
+
+                fillSubColumn();
+                rebuildCategoryColumn();
+            } else {
+                if (subColumn == null) return;      // 已经没了
+                colsRow.removeView(subColumn);
+                subColumn = null;
+                if (subLineView != null) {
+                    colsRow.removeView(subLineView);
+                    subLineView = null;
+                }
+                rebuildCategoryColumn();
+            }
+            // 列数变了，焦点区要重算，否则左右键会跳到不存在的列
+            focus.setZone(FocusEngine.Zone.NAV);
+            focus.setNavIndexSilently(0);
+            updateNavFocus(0);
+        } catch (Throwable t) {
+            android.util.Log.w("MinTV", "切换订阅列失败", t);
+        }
     }
 
     /** 可隐藏的全部分类名（用于管理弹窗），按源里的顺序。 */
@@ -7400,19 +7462,14 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         } else if (row == ROW_THEME) {
             openThemePicker();
         } else if (row == ROW_SHOW_SUBS) {
-            // 整页重建：订阅列出现/消失会改变前三列的横坐标，
-            // 光刷新列表不够，得让 buildOverlay 重新算一遍位置。
-            try {
-                if (playerManager != null) playerManager.release();
-            } catch (Throwable ignored) { }
-            playerManager = null;
-            player = null;
-            new android.os.Handler(android.os.Looper.getMainLooper())
-                    .postDelayed(new Runnable() {
-                        @Override public void run() {
-                            if (!isFinishing()) recreate();
-                        }
-                    }, 120);
+            // 就地加减订阅列，**不 recreate()**。
+            //
+            // 之前这里整个 Activity 重建，代价有三个：
+            //   1. onCreate 里的开屏又放一遍（用户感觉"怎么又开机了"）
+            //   2. 播放器被销毁重建，正在看的节目中断
+            //   3. 频道列表、EPG、焦点全部重来
+            // 而这件事本质上只是"在最左边插一列 / 去掉一列"。
+            applyShowSubs(selections[ROW_SHOW_SUBS] == 1);
         } else if (row == ROW_EPG_POS || row == ROW_SWITCH_UI) {
             applyOsdPrefs();
         } else if (row == ROW_OUTPUT) {
