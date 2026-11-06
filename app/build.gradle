@@ -40,8 +40,8 @@ android {
         // 方法数已超 64K（media3 + libvlc + zxing + androidx.core）
         multiDexEnabled true
         targetSdk 34
-        versionCode 249
-        versionName "0.3.53"
+        versionCode 250
+        versionName "0.3.54"
 
         // native 只编 32 位 —— 跟下面的 splits 一致。
         // 注意：不能写在外层 ndk {} 里，那会跟 splits 冲突；
@@ -89,6 +89,12 @@ android {
         // 这才是"每次签名都不一样"的真正原因。
         debug {
             signingConfig signingConfigs.stable
+            // CI 打的是 debug 包，不混淆的话 jadx 打开就是可读源码。
+            // 混淆 + 资源压缩对调试没有实质影响（这个项目没有 XML 布局，
+            // UI 全是代码画的），代价换来的是逆向门槛。
+            minifyEnabled true
+            shrinkResources true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
         release {
             minifyEnabled true

@@ -139,6 +139,32 @@ public final class PieceCache {
         }
     }
 
+    /**
+     * 落盘队列。
+     *
+     * <p>为什么要异步：evictMem() 里的 writeToDisk 走 SAF，9MB 一片要
+     * 200~500ms。而 put() 是在「把分片发给 VLC 之前」被调的 ——
+     * 同步写盘意味着每片都多等几百毫秒，播放直接卡。
+     *
+     * <p>单线程是因为要在后台维持 LRU 淘汰顺序，多线程反而会乱。
+     */
+    private final java.util.concurrent.ExecutorService diskWriter =
+            java.util.concurrent.Executors.newSingleThreadExecutor(new java.util.concurrent.ThreadFactory() {
+                @Override public Thread newThread(Runnable r) {
+                    Thread t = new Thread(r, "piece-disk");
+                    t.setDaemon(true);
+                    return t;
+                }
+            });
+
+    /** 正在落盘、还没写成功的分片序号。get() 读到这些要等，不能当孤儿删掉。 */
+    private final java.util.Set<Integer> diskPending =
+            new java.util.HashSet<>();
+
+    /** 已排队但还没落盘的字节数，避免队列无限涨。 */
+    private final java.util.concurrent.atomic.AtomicLong pendingBytes =
+            new java.util.concurrent.atomic.AtomicLong(0);
+
     public synchronized void put(int seq, byte[] data) {
         if (data == null || data.length == 0) return;
         if (seq < minSeq) return;          // 窗口外的不要
@@ -171,13 +197,44 @@ public final class PieceCache {
             Piece p = mem.remove(oldest);
             if (p == null) break;
             if (p.data != null) memBytes -= p.data.length;
-            // 落盘：磁盘还有空间才写
+            // 落盘：磁盘还有空间才排队。
+            //
+            // 注意这里是**提交任务**而不是直接写 —— 调用方（HTTP 请求线程）
+            // 正等着把分片发给 VLC，不能让它等 SAF。
             if (p.data != null && canWriteDisk(p.data.length)) {
-                if (writeToDisk(p.seq, p.data)) {
-                    Long prev = disk.put(p.seq, (long) p.data.length);
-                    if (prev != null) diskBytes -= prev;
-                    diskBytes += p.data.length;
-                    enforceDiskLimits();
+                final int fSeq = p.seq;
+                final byte[] fData = p.data;
+                final long fLen = fData.length;
+                // 只有「写成功」才登记进 disk 索引。
+                //
+                // 之前是先登记再写，结果 get() 在写入完成前读到空文件，
+                // 把索引删了 —— 写完之后文件还在、索引没了，成了孤儿文件。
+                diskPending.add(fSeq);
+                pendingBytes.addAndGet(fLen);
+                try {
+                    diskWriter.execute(new Runnable() {
+                        @Override public void run() {
+                            boolean ok = false;
+                            try {
+                                ok = writeToDisk(fSeq, fData);
+                            } catch (Throwable t) {
+                                android.util.Log.w("PieceCache", "落盘异常 seq=" + fSeq, t);
+                            } finally {
+                                synchronized (PieceCache.this) {
+                                    diskPending.remove(fSeq);
+                                    pendingBytes.addAndGet(-fLen);
+                                    if (ok) {
+                                        disk.put(fSeq, fLen);
+                                        diskBytes += fLen;
+                                        enforceDiskLimits();
+                                    }
+                                }
+                            }
+                        }
+                    });
+                } catch (Throwable t) {
+                    diskPending.remove(fSeq);
+                    pendingBytes.addAndGet(-fLen);
                 }
             }
         }
@@ -207,6 +264,9 @@ public final class PieceCache {
         if (len == null) return null;
         byte[] data = readFile(seq);
         if (data == null) {
+            // 还在写盘队列里就等等，别把索引删了 —— 写完之后文件还在、
+            // 索引没了，就成孤儿文件了
+            if (diskPending.contains(seq)) return null;
             disk.remove(seq);
             diskBytes -= len;
             return null;
