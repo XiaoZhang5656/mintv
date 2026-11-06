@@ -31,12 +31,21 @@ public final class NetProxy {
     private NetProxy() { }
 
     public static String url(Context c) {
-        return c.getSharedPreferences(PREF, Context.MODE_PRIVATE).getString(KEY, "");
+        // 和其他设置项一样存进存储目录，不再用 SharedPreferences
+        String v = SettingsStore.getString(c, "proxy", null);
+        if (v != null && !v.isEmpty()) return v;
+        // 首次：从旧的 SharedPreferences 读一次并迁移
+        String legacy = c.getSharedPreferences(PREF, Context.MODE_PRIVATE)
+                .getString(KEY, "");
+        if (legacy != null && !legacy.isEmpty()) {
+            SettingsStore.putString(c, "proxy", legacy);
+            return legacy;
+        }
+        return "";
     }
 
     public static void save(Context c, String url) {
-        c.getSharedPreferences(PREF, Context.MODE_PRIVATE)
-                .edit().putString(KEY, url == null ? "" : url.trim()).apply();
+        SettingsStore.putString(c, "proxy", url == null ? "" : url.trim());
     }
 
     /** 解析成 java.net.Proxy；没配或格式不对返回 null（直连）。 */

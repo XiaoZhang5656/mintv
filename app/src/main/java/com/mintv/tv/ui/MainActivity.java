@@ -3325,7 +3325,19 @@ public class MainActivity extends Activity implements FocusEngine.Host {
      * 其它设置一起冲掉，所以顺手把这块补齐。
      */
     private void loadSelections() {
-        String raw = getSharedPreferences(PREF, MODE_PRIVATE).getString(KEY_SELECTIONS, null);
+        // 优先读存储目录里的 settings.json。
+        String raw = com.mintv.tv.data.SettingsStore.getString(this, "selections", null);
+        if (raw == null || raw.isEmpty()) {
+            // 文件里没有 —— 说明还没迁移过（或者用户手动删了文件）。
+            // 从旧的 SharedPreferences 读一次，顺手写进文件。
+            String legacy = getSharedPreferences(PREF, MODE_PRIVATE)
+                    .getString(KEY_SELECTIONS, null);
+            if (legacy != null && !legacy.isEmpty()) {
+                com.mintv.tv.data.SettingsStore.putString(this, "selections", legacy);
+                raw = legacy;
+                android.util.Log.i("MinTV", "设置已迁移到 config/settings.json");
+            }
+        }
         if (raw == null || raw.isEmpty()) return;
 
         // 新格式：id=value;id=value
@@ -3376,8 +3388,9 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             sb.append(com.mintv.tv.ui.setting.Settings.ALL[i].id)
               .append('=').append(selections[i]);
         }
-        getSharedPreferences(PREF, MODE_PRIVATE).edit()
-                .putString(KEY_SELECTIONS, sb.toString()).apply();
+        // 写进存储目录，文件管理器可见、可备份。
+        // SharedPreferences 那份不再更新 —— 迁移只在首次读取时发生一次。
+        com.mintv.tv.data.SettingsStore.putString(this, "selections", sb.toString());
     }
 
     /**
