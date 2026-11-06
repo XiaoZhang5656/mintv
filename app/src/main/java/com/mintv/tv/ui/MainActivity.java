@@ -328,6 +328,8 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         // 再进来"，副标题会永远停在「正在检测网络…」—— 没有任何代码
         // 去重新跑 NetCheck。
         //
+        // 订阅静默刷新：后台定时拉，不打断播放。
+        startAutoRefresh();
         // 延迟 1.5 秒，等 osd/播放器这些初始化完，避免检测线程跟它们抢资源。
         if (selections[ROW_P2P_BOOST] == 1) {
             ui.postDelayed(new Runnable() {
@@ -1519,6 +1521,233 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         } else if (channels != null && !channels.isEmpty()) {
             SourceStore.clearBad(this);
         }
+    }
+
+    // ---------- 无感刷新订阅 ----------
+
+    /**
+     * 自动刷新总开关。<b>默认关闭</b>：逻辑先备好，等设置项做好再打开。
+     *
+     * <p>打开方式：改成 true，或者调用 {@link #setAutoRefresh(long)}。
+     */
+    private static final boolean AUTO_REFRESH_ENABLED = false;
+
+    /** 默认间隔，6 小时。 */
+    private static final long AUTO_REFRESH_MS = 6L * 60 * 60 * 1000;
+    /**
+     * 启动后第一次刷新的延迟。
+     *
+     * <p>放长到 5 分钟而不是 60 秒 —— 冷启动后那段时间用户可能刚点开某个台，
+     * 这时候在后台重建频道列表纯属添乱。
+     */
+    private static final long AUTO_REFRESH_FIRST_MS = 5L * 60 * 1000;
+
+    /** 数据已换但界面还没重建。面板下次打开时补上。 */
+    private volatile boolean channelsDirty = false;
+    /** 一次只允许一个刷新在跑，防并发把 channels 和 playlist 换岔。 */
+    private volatile boolean refreshBusy = false;
+
+    private final Runnable autoRefreshLoop = new Runnable() {
+        @Override public void run() {
+            refreshSubscriptionsSilently();
+            ui.postDelayed(this, AUTO_REFRESH_MS);
+        }
+    };
+
+    /** 启动自动刷新。受总开关控制；重复调用无害。 */
+    private void startAutoRefresh() {
+        if (!AUTO_REFRESH_ENABLED) return;
+        ui.removeCallbacks(autoRefreshLoop);
+        ui.postDelayed(autoRefreshLoop, AUTO_REFRESH_FIRST_MS);
+    }
+
+    /**
+     * 外部接口：打开自动刷新。
+     *
+     * <p>给以后的设置项用。{@code intervalMs <= 0} 表示关掉。
+     */
+    public void setAutoRefresh(long intervalMs) {
+        ui.removeCallbacks(autoRefreshLoop);
+        if (intervalMs <= 0) return;
+        ui.postDelayed(new Runnable() {
+            @Override public void run() {
+                refreshSubscriptionsSilently();
+                ui.postDelayed(autoRefreshLoop, intervalMs);
+            }
+        }, intervalMs);
+    }
+
+    /** 外部接口：停掉自动刷新。Activity 销毁时也会调。 */
+    public void stopAutoRefresh() {
+        ui.removeCallbacks(autoRefreshLoop);
+    }
+
+    /**
+     * 后台拉一次当前订阅，成功就静默换掉数据。
+     *
+     * <p>拉取失败、内容为空、解析不出频道，都保留旧列表不动 ——
+     * 订阅源抽风的时候不能让正在看的人突然没台了。
+     */
+    private void refreshSubscriptionsSilently() {
+        final String url = currentSourceUrl();
+        if (url == null || url.isEmpty()) return;
+        if (refreshBusy) {
+            android.util.Log.w("MinTV", "上一次刷新还没结束，跳过本轮");
+            return;
+        }
+        refreshBusy = true;
+        final java.util.Map<String, String> hdrs = headersOfActiveSub();
+        new Thread(new Runnable() {
+            @Override public void run() {
+                String body = null;
+                try {
+                    com.mintv.tv.data.Http.Result r =
+                            com.mintv.tv.data.Http.get(url, hdrs, 8000, 12000, false);
+                    if (r != null && r.ok()) body = r.body;
+                } catch (Throwable t) {
+                    android.util.Log.w("MinTV", "无感刷新拉取失败: " + t);
+                }
+                if (body == null) {
+                    android.util.Log.w("MinTV", "无感刷新：拉取失败，保留旧列表");
+                    refreshBusy = false;
+                    return;
+                }
+                final String b = body;
+                ui.post(new Runnable() {
+                    @Override public void run() {
+                        try { applyPlaylistSilently(b); }
+                        catch (Throwable t) {
+                            android.util.Log.w("MinTV", "无感刷新应用失败", t);
+                        }
+                    }
+                });
+            }
+        }, "sub-auto-refresh").start();
+    }
+
+    /** 频道的稳定标识。名字相同但地址不同算两个频道。 */
+    private static String channelKey(PlaylistParser.Channel c) {
+        if (c == null) return "";
+        // URL 在 sources 里，一个频道可能有多个备选源
+        String u = "";
+        if (c.sources != null && !c.sources.isEmpty()
+                && c.sources.get(0) != null && c.sources.get(0).url != null) {
+            u = c.sources.get(0).url;
+        }
+        return c.name + "|" + u;
+    }
+
+    /**
+     * 静默应用新列表：换数据 + 重建列表视图，<b>不碰播放器</b>。
+     *
+     * <p>难点是 playingChannel 是下标，列表一换就指错台。所以先记住
+     * 正在播的那个频道，换完再按名字+地址找回来：
+     * <ul>
+     *   <li><b>找到了</b>：只更新下标。地址变了也不重播，等用户下次切台
+     *       才用新的 —— 正在播的那路流是好的，没必要掐掉。</li>
+     *   <li><b>只找到同名（地址变了）</b>：同上，按名字兜底。</li>
+     *   <li><b>完全找不到</b>：说明这个台被源删了。播放不打断（流还能拉），
+     *       但提示一句，下标钳到合法范围。</li>
+     * </ul>
+     */
+    private void applyPlaylistSilently(String body) {
+        if (body == null || body.trim().isEmpty()) return;
+
+        PlaylistParser.Playlist np;
+        try {
+            np = PlaylistParser.parse(body);
+        } catch (Throwable t) {
+            android.util.Log.w("MinTV", "无感刷新：解析失败", t);
+            return;
+        }
+        List<PlaylistParser.Channel> nc = np == null ? null : np.all;
+        if (nc == null || nc.isEmpty()) {
+            android.util.Log.w("MinTV", "无感刷新：新列表为空，保留旧的");
+            return;
+        }
+
+        // 记住当前在播的
+        String key = null, name = null;
+        int curIdx = playingChannel;
+        if (channels != null && curIdx >= 0 && curIdx < channels.size()) {
+            PlaylistParser.Channel cur = channels.get(curIdx);
+            key = channelKey(cur);
+            name = cur.name;
+        }
+
+        int oldSize = channels == null ? 0 : channels.size();
+
+        // 换数据
+        playlist = np;
+        channels = nc;
+        rebuildCategories();
+
+        // 找回当前频道
+        int found = -1;
+        if (key != null && !key.isEmpty()) {
+            for (int i = 0; i < nc.size(); i++) {
+                if (key.equals(channelKey(nc.get(i)))) { found = i; break; }
+            }
+            if (found < 0 && name != null) {
+                for (int i = 0; i < nc.size(); i++) {
+                    if (name.equals(nc.get(i).name)) { found = i; break; }
+                }
+            }
+        }
+
+        if (found >= 0) {
+            playingChannel = found;
+            android.util.Log.w("MinTV", "无感刷新：当前频道重新定位 "
+                    + curIdx + " -> " + found + "（" + name + "）");
+        } else if (key != null) {
+            // 当前台被删了
+            if (playingChannel >= nc.size()) playingChannel = nc.size() - 1;
+            if (playingChannel < 0) playingChannel = 0;
+            android.util.Log.w("MinTV", "无感刷新：当前频道已被源移除（" + name
+                    + "），播放不打断，下标钳到 " + playingChannel);
+            if (osd != null) osd.toast("当前频道已从源中移除，播放不中断");
+        } else {
+            if (playingChannel >= nc.size()) playingChannel = nc.size() - 1;
+            if (playingChannel < 0) playingChannel = 0;
+        }
+
+        // 缓存
+        try {
+            String curSub = com.mintv.tv.data.SubscriptionStore.activeId(this);
+            if (curSub != null) {
+                sourceCache.put(curSub, playlist);
+                channelCache.put(curSub, channels);
+            }
+        } catch (Throwable ignored) { }
+
+        // 重建列表视图 —— 只在面板可见时做。
+        //
+        // bindChannels 会在主线程 removeAllViews 再逐个建，几百个频道就是
+        // 几百次 measure/layout，几百毫秒的卡顿。播放中这么做直接掉帧，
+        // 而且用户正在翻列表时会跳回顶部、焦点丢失。
+        //
+        // 面板不可见时只把数据换掉，标记 dirty，等下次打开面板再重建 ——
+        // 那时候重建是用户预期的，不会有任何突兀感。
+        if (navPanel != null && panelVisible) {
+            try {
+                rebuildCategoryColumn();
+                bindChannels();
+                updateChannelFocus(Math.min(focus.chanIndex(),
+                        Math.max(0, channels.size() - 1)));
+                fillSubColumn();
+                channelsDirty = false;
+            } catch (Throwable t) {
+                android.util.Log.w("MinTV", "无感刷新重建列表失败", t);
+                channelsDirty = true;
+            }
+        } else if (navPanel != null) {
+            channelsDirty = true;
+            android.util.Log.i("MinTV", "无感刷新：面板未打开，界面延后重建");
+        }
+        refreshBusy = false;
+
+        android.util.Log.i("MinTV", "无感刷新完成：" + oldSize + " -> "
+                + channels.size() + " 个频道，现在播第 " + playingChannel + " 个");
     }
 
     /** 当前订阅自带请求头（可能为 null / 空）。 */
@@ -5589,6 +5818,20 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         final float to = visible ? 1f : 0f;
 
         if (visible) {
+            // 面板打开时才补做延后的列表重建（无感刷新留下的）
+            if (channelsDirty) {
+                channelsDirty = false;
+                try {
+                    rebuildCategoryColumn();
+                    bindChannels();
+                    updateChannelFocus(Math.min(focus.chanIndex(),
+                            Math.max(0, channels.size() - 1)));
+                    fillSubColumn();
+                    android.util.Log.i("MinTV", "补重建频道列表（无感刷新延后）");
+                } catch (Throwable t) {
+                    android.util.Log.w("MinTV", "补重建失败", t);
+                }
+            }
             // 先恢复可见，再做淡入
             setPanelsInteractive(true);
             navPanel.setVisibility(View.VISIBLE);
@@ -7680,6 +7923,9 @@ public class MainActivity extends Activity implements FocusEngine.Host {
 
     @Override
     protected void onDestroy() {
+        // 停掉自动刷新：它是匿名 Runnable，持有 Activity。
+        // 不清掉的话 Activity 销毁了定时器还在跑，既泄漏又会在后台发请求。
+        try { stopAutoRefresh(); } catch (Throwable ignored) { }
         // 释放 tvbus / p2p 的 native 资源。
         //
         // 不做的话：native 线程、socket、以及 UPnP 端口映射（so 里调了
