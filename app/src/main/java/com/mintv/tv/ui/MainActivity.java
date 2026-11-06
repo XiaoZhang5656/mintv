@@ -2820,7 +2820,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         osd.setStatus("加载中…");
         updateMulticastLock(src.url);
         preResolveDns(src.url);
-        playUrl(PlaylistParser.cleanUrl(src.url), src.headers, PlaybackBackend.Mode.LIVE);
+        playUrlEntry(PlaylistParser.cleanUrl(src.url), src.headers, PlaybackBackend.Mode.LIVE);
     }
 
     private final Runnable playbackWatchdog = new Runnable() {
@@ -4213,6 +4213,54 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     /** OSD 提示占位，暂时不弹，避免解析期间刷屏。 */
     private boolean osdShown(String s) { return true; }
 
+    /**
+     * 播放入口。**所有外部调用都从这里进**，不要再直接调 playUrl。
+     *
+     * <p>这一层只做一件事：地址变换（配了代理就把 http 源包成 mintv://）。
+     * {@link #playUrl} 负责执行，且<b>不做任何变换</b>。
+     *
+     * <p>为什么必须分开：playUrl 会被自己递归调用 —— 私有协议解析完
+     * 拿着结果再调一次 playUrl。如果变换写在 playUrl 里，那一轮也会变换：
+     * <pre>
+     *   http://xxx
+     *   → mintv://http://xxx
+     *   → 解析出 http://127.0.0.1:18899/mintv/m3u8?u=&lt;base64&gt;
+     *   → 这个地址也是 http 开头 → 再包一层
+     *   → base64 每轮 ×1.33，几十轮就是几十 MB → OutOfMemoryError
+     * </pre>
+     * 分离之后，递归那一轮走的是 playUrl，天然不会再变换。
+     */
+    private void playUrlEntry(String url, java.util.Map<String, String> headers,
+                              PlaybackBackend.Mode mode) {
+        playUrl(applyProxyWrapper(url), headers, mode);
+    }
+
+    /**
+     * 配了代理且目标是外网 http(s) 时，包一层 mintv:// 交给 HlsProxy。
+     *
+     * <p>为什么要包：VLC 的 --http-proxy 只作用于它自己发起的请求，
+     * 302 跳转和 m3u8 里嵌套的子 playlist 会直连（实测桥只收到一次请求）。
+     * 全部经 HlsProxy 才能真正做到「一个不漏」。
+     *
+     * <p>没配代理时原样返回，行为跟以前完全一样。
+     */
+    private String applyProxyWrapper(String url) {
+        if (url == null || url.isEmpty()) return url;
+        String low = url.toLowerCase(java.util.Locale.US);
+        // 已经是私有协议（包括已经包过的），不再处理
+        if (low.startsWith("mintv://")) return url;
+        // 只管 http(s)，rtsp/udp/rtp 这些不经过 HTTP 代理
+        if (!low.startsWith("http://") && !low.startsWith("https://")) return url;
+        // 本机后端不包装。用解析 host 判断，不用字符串包含 ——
+        // 包装后的 URL 里 u=<base64>，base64 完全可能恰好含 "127.0.0.1"。
+        if (isLoopbackUrl(url)) return url;
+        String px = com.mintv.tv.data.NetProxy.mediaProxyArg(this);
+        if (px == null) return url;
+        String wrapped = "mintv://" + url;
+        android.util.Log.w("MinTV", "配了代理，包装: " + brief(wrapped));
+        return wrapped;
+    }
+
     private void playUrl(String url, java.util.Map<String, String> headers, PlaybackBackend.Mode mode) {
         if (url == null || url.isEmpty()) return;
         if (playerManager == null) return;
@@ -4222,30 +4270,6 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         // 嵌套的子 playlist 不生效，只有全部经过 HlsProxy 才不漏。
         //
         // 没配代理时**完全不变**，行为和以前一模一样。
-        boolean autoWrapped = false;
-        if (url != null && !url.toLowerCase().startsWith("mintv://")) {
-            String low0 = url.toLowerCase();
-            // 必须排除本机地址。
-            //
-            // 包装后的地址是 http://127.0.0.1:18899/mintv/m3u8?u=<base64>，
-            // 它也是 http 开头、也不是 mintv:// —— 如果不排除，递归回 playUrl
-            // 时会被再包一层，base64 每轮膨胀 1.33 倍，几十轮后就是几十 MB，
-            // 直接 OutOfMemoryError: Failed to allocate a 49043712 byte allocation。
-            // 判断是不是本机后端，必须解析 host，不能用字符串包含 ——
-            // 包装后的地址里 u=<base64>，base64 里完全可能恰好含 "127.0.0.1"。
-            boolean local = isLoopbackUrl(url);
-            if (!local) {
-                String px = com.mintv.tv.data.NetProxy.mediaProxyArg(this);
-                if (px != null) {
-                    if (low0.startsWith("http://") || low0.startsWith("https://")) {
-                        url = "mintv://" + url;
-                        autoWrapped = true;
-                        android.util.Log.w("MinTV", "配了代理，自动包装: " + brief(url));
-                    }
-                }
-            }
-        }
-
         // 私有协议转标准 http —— VLC 内核不认 tvbus:// 和 p2p://。
         //
         // tvbus：libtvcore.so 在本机起 HTTP 服务，返回 http://127.0.0.1:port/mpegts_live
@@ -4287,7 +4311,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                         // playUrl 解析完会再调 playUrl，如果解析结果和输入一模一样，
                         // 说明这一层什么都没干成（多半是 expandMintvUrl 返回 null），
                         // 再往下就是死循环。之前那个 49MB OOM 就是这么来的。
-                        if (finalUrl.equals(pendingUrl)) {
+                        if (finalUrl.equals(pendingUrl) && isPrivateProtocol(finalUrl)) {
                             android.util.Log.w("MinTV", "解析无进展，停止重试: "
                                     + brief(pendingUrl));
                             ui.post(new Runnable() {
@@ -6162,7 +6186,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         // 记下这条，节目单里用黄色标出来，用户能看到"现在放的是哪一条"
         replayStartMs = prog.startMs;
         epgPanel.setReplayIndex(idx);
-        playUrl(url, null, PlaybackBackend.Mode.TIMESHIFT);
+        playUrlEntry(url, null, PlaybackBackend.Mode.TIMESHIFT);
         // 不再自动收起节目单：收起就看不到回放高亮了。想全屏看片自己按返回。
     }
 
