@@ -132,6 +132,16 @@ public final class ScriptEngine {
      * @param itemJson   item 对象（url/path/id/params/headers/name/pageUrl）
      */
     public Result invoke(File scriptFile, String entry, JSONObject itemJson) {
+        // 每次调用都会新建 runtime + context，并在 finally 里 close 掉。
+        //
+        // moduleCache 里存的是 JSObject，它属于某一个具体 context ——
+        // 跨调用复用等于拿上一个已关闭 context 的对象去 executeFunction，
+        // 直接 Context disposed error。第二次调用脚本必然失败就是这么来的。
+        //
+        // 清空只影响跨调用；本次执行内 require 同一文件的"只执行一次"
+        // 语义不受影响（loadModule 会重新把本次的结果写进缓存）。
+        moduleCache.clear();
+
         QuickJS rt = null;
         JSContext js = null;
         try {
@@ -195,7 +205,10 @@ public final class ScriptEngine {
                 a.push(itemJsonToJs(c, itemJson));   // JSObject 是 JSValue 子类
                 ret = exports.executeFunction(entry, a);
             } catch (Exception e) {
-                // async 函数返回 Promise，要从 export 里拿再取结果
+                // 原来这里无条件 ret = null，把所有异常都吃掉了 ——
+                // 脚本里第一句就报错的话，外面只看到"没有返回可播放的内容"，
+                // 真实原因（console 未定义、语法错、Context 已关）全被埋掉。
+                ScriptLog.warn(fname, "调用 " + entry + " 异常: " + e);
                 ret = null;
             }
 
