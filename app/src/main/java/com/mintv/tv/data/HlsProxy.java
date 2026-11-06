@@ -36,6 +36,15 @@ public final class HlsProxy {
         int localPort();
         /** 当前生效的请求头（可能为 null）。 */
         Map<String, String> headers();
+        /**
+         * 当前生效的代理，形如 http://127.0.0.1:34647；null 表示直连。
+         *
+         * <p>为什么在 HlsProxy 里也要走代理：VLC 的 media 级代理只作用于
+         * 它自己发起的请求，302 跳转和 m3u8 里嵌套的子 playlist 会直连 ——
+         * 实测桥只收到一次请求，跳转后的地址全漏了。
+         * 由 HlsProxy 统一拉取，才能真正做到「一个不漏」。
+         */
+        String proxy();
     }
 
     public static void init(Context0 c) { ctxRef = c; }
@@ -70,15 +79,36 @@ public final class HlsProxy {
     public static byte[] fetch(String remoteUrl) {
         HttpURLConnection conn = null;
         try {
-            // 先带超时解析域名，把 IP 塞进 URL —— HttpURLConnection 内部的
-            // DNS 不受 setConnectTimeout 约束，网络切换那几秒能卡十几秒。
-            Net.Prepared np = Net.prepare(remoteUrl);
-            if (np == null) {
-                android.util.Log.w("HlsProxy", "域名解析失败/超时: " + remoteUrl);
-                return null;
+            // 配了代理就走代理，否则直连 —— 没配代理时行为跟以前完全一样。
+            java.net.Proxy px = null;
+            String proxyUrl = (ctxRef == null) ? null : ctxRef.proxy();
+            if (proxyUrl != null && !proxyUrl.isEmpty()) {
+                try {
+                    java.net.URI pu = new java.net.URI(proxyUrl);
+                    String ph = pu.getHost();
+                    int pp = pu.getPort();
+                    if (ph != null && pp > 0) {
+                        px = new java.net.Proxy(java.net.Proxy.Type.HTTP,
+                                new java.net.InetSocketAddress(ph, pp));
+                    }
+                } catch (Throwable ignored) { }
             }
-            conn = (HttpURLConnection) new URL(np.url).openConnection();
-            if (np.hostHeader != null) conn.setRequestProperty("Host", np.hostHeader);
+
+            if (px != null) {
+                // 走代理时**不能**把域名换成 IP —— 代理要按域名去连目标。
+                // 而且本地桥自己做过 SOCKS5 握手，不依赖本地 DNS。
+                conn = (HttpURLConnection) new URL(remoteUrl).openConnection(px);
+            } else {
+                // 直连：先带超时解析域名，把 IP 塞进 URL —— HttpURLConnection
+                // 内部的 DNS 不受 setConnectTimeout 约束，网络切换能卡十几秒。
+                Net.Prepared np = Net.prepare(remoteUrl);
+                if (np == null) {
+                    android.util.Log.w("HlsProxy", "域名解析失败/超时: " + remoteUrl);
+                    return null;
+                }
+                conn = (HttpURLConnection) new URL(np.url).openConnection();
+                if (np.hostHeader != null) conn.setRequestProperty("Host", np.hostHeader);
+            }
             conn.setConnectTimeout(CONNECT_TIMEOUT);
             conn.setReadTimeout(READ_TIMEOUT);
             conn.setInstanceFollowRedirects(true);

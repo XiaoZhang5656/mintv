@@ -4187,6 +4187,24 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         if (url == null || url.isEmpty()) return;
         if (playerManager == null) return;
 
+        // 配了代理时，把普通 http 源自动包一层 mintv://，
+        // 让 HlsProxy 统一拉取 —— VLC 自己的代理对 302 跳转和 m3u8 里
+        // 嵌套的子 playlist 不生效，只有全部经过 HlsProxy 才不漏。
+        //
+        // 没配代理时**完全不变**，行为和以前一模一样。
+        boolean autoWrapped = false;
+        if (url != null && !url.toLowerCase().startsWith("mintv://")) {
+            String px = com.mintv.tv.data.NetProxy.mediaProxyArg(this);
+            if (px != null) {
+                String low = url.toLowerCase();
+                if (low.startsWith("http://") || low.startsWith("https://")) {
+                    url = "mintv://" + url;
+                    autoWrapped = true;
+                    android.util.Log.w("MinTV", "配了代理，自动包装: " + url);
+                }
+            }
+        }
+
         // 私有协议转标准 http —— VLC 内核不认 tvbus:// 和 p2p://。
         //
         // tvbus：libtvcore.so 在本机起 HTTP 服务，返回 http://127.0.0.1:port/mpegts_live
@@ -4438,6 +4456,23 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             }
         });
         remotePort = remote.start();
+        // HlsProxy 的上下文以前从来没注入过（ctxRef 一直是 null），
+        // 导致改写后的分片地址固定用 18899、请求头永远为空。
+        // 同时把代理也接进去：VLC 自己的代理对 302 和嵌套 playlist 不生效，
+        // 由 HlsProxy 统一拉取才能做到所有请求都走代理。
+        com.mintv.tv.data.HlsProxy.init(new com.mintv.tv.data.HlsProxy.Context0() {
+            @Override public int localPort() {
+                return remotePort > 0 ? remotePort
+                        : com.mintv.tv.data.RemoteServer.PORT_MAIN;
+            }
+            @Override public java.util.Map<String, String> headers() {
+                return headersOfActiveSub();
+            }
+            @Override public String proxy() {
+                String p = com.mintv.tv.data.NetProxy.mediaProxyArg(MainActivity.this);
+                return p;
+            }
+        });
         if (remotePort < 0) {
             // 这里可能在 osd 还没创建时被调用（服务在 UI 之前启动），必须判空
             android.util.Log.w("MinTV", "手机助手启动失败：18899/18900 端口都被占用");
@@ -6729,6 +6764,16 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         if ("theme".equals(id)) {
             String[] out = base.clone();
             out[0] = Theme.ACCENT_NAMES[Theme.accentIndex];
+            return out;
+        }
+        if ("net_proxy".equals(id)) {
+            // 右侧按钮显示状态而不是固定「设置…」：
+            //   有代理 → 「代理」
+            //   没代理 → 「直连」
+            // 具体地址在副标题里，这里只给一眼能看懂的状态。
+            String[] out = base.clone();
+            String sum = com.mintv.tv.data.NetProxy.summary(this);
+            out[0] = "直连".equals(sum) ? "直连" : "代理";
             return out;
         }
         if ("storage_dir".equals(id)) {

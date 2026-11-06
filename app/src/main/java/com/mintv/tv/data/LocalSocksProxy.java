@@ -200,33 +200,14 @@ public final class LocalSocksProxy {
                 h = hostPort;
             }
 
-            remote = openUpstream(socksHost, socksPort, h, p, upstreamHttp);
-            remote.setSoTimeout(25000);
-
-            // 拼转发请求：请求行换成相对路径，Host 头补上
-            StringBuilder sb = new StringBuilder(256);
-            sb.append(method).append(' ').append(path).append(" HTTP/1.1\r\n");
-            boolean hasHost = false;
-            for (java.util.Map.Entry<String, String> e : headers.entrySet()) {
-                if ("proxy-connection".equalsIgnoreCase(e.getKey())) continue;
-                if ("host".equalsIgnoreCase(e.getKey())) hasHost = true;
-                sb.append(e.getKey()).append(": ").append(e.getValue()).append("\r\n");
-            }
-            if (!hasHost) sb.append("Host: ").append(hostPort).append("\r\n");
-            sb.append("Connection: close\r\n\r\n");
-
-            OutputStream ro = remote.getOutputStream();
-            ro.write(sb.toString().getBytes("ISO-8859-1"));
-            ro.flush();
-
-            // 响应原样吐回
-            InputStream ri = remote.getInputStream();
-            byte[] buf = new byte[16384];
-            int n;
-            while ((n = ri.read(buf)) > 0) {
-                out.write(buf, 0, n);
-                out.flush();
-            }
+            // 自己跟随重定向。
+            //
+            // 关键：VLC 拿到 302 之后会去请求 Location 指向的地址，
+            // 而那个地址（比如 39.134.66.206）直连不通，必须也走代理。
+            // 实测 VLC 不会为跳转后的地址重新走 media 级代理，直接直连失败。
+            // 所以这里由桥跟到底，VLC 只看到最终的 200 + 正文。
+            doGet(out, method, h, p, path, hostPort, headers,
+                    socksHost, socksPort, upstreamHttp, 0);
         } catch (Throwable t) {
             android.util.Log.w(TAG, "转发失败: " + t);
         } finally {
@@ -245,6 +226,115 @@ public final class LocalSocksProxy {
      * </ul>
      * 所以 socks5:// 和 http(s):// 上游走同一段代码，只是类型不同。
      */
+    /**
+     * 转发一次 GET，遇到 3xx 自己跟下去。
+     *
+     * @param depth 已跟随的重定向次数，超过 5 次放弃
+     */
+    private static void doGet(OutputStream out, String method,
+                              String host, int port, String path, String hostPort,
+                              java.util.Map<String, String> headers,
+                              String socksHost, int socksPort,
+                              boolean upstreamHttp, int depth) {
+        if (depth > 5) {
+            writeErr(out, 508);
+            return;
+        }
+        Socket remote = null;
+        try {
+            remote = openUpstream(socksHost, socksPort, host, port, upstreamHttp);
+            remote.setSoTimeout(25000);
+
+            StringBuilder sb = new StringBuilder(256);
+            sb.append(method).append(' ').append(path).append(" HTTP/1.1\r\n");
+            boolean hasHost = false;
+            for (java.util.Map.Entry<String, String> e : headers.entrySet()) {
+                String k = e.getKey();
+                if ("proxy-connection".equalsIgnoreCase(k)) continue;
+                if ("connection".equalsIgnoreCase(k)) continue;
+                if ("host".equalsIgnoreCase(k)) hasHost = true;
+                sb.append(k).append(": ").append(e.getValue()).append("\r\n");
+            }
+            if (!hasHost) sb.append("Host: ").append(hostPort).append("\r\n");
+            sb.append("Connection: close\r\n\r\n");
+
+            OutputStream ro = remote.getOutputStream();
+            ro.write(sb.toString().getBytes("ISO-8859-1"));
+            ro.flush();
+
+            InputStream ri = new java.io.BufferedInputStream(remote.getInputStream(), 16384);
+
+            // 先读状态行和响应头，判断是不是重定向
+            String statusLine = readLine(ri);
+            if (statusLine == null) {
+                writeErr(out, 502);
+                return;
+            }
+            java.util.Map<String, String> respHeaders = new java.util.LinkedHashMap<>();
+            String line;
+            while ((line = readLine(ri)) != null && !line.isEmpty()) {
+                int i = line.indexOf(':');
+                if (i > 0) respHeaders.put(line.substring(0, i).trim(), line.substring(i + 1).trim());
+            }
+
+            int code = 0;
+            try {
+                String[] parts = statusLine.split(" ");
+                code = Integer.parseInt(parts[1]);
+            } catch (Throwable ignored) { }
+
+            if (code >= 300 && code < 400) {
+                String loc = null;
+                for (java.util.Map.Entry<String, String> e : respHeaders.entrySet()) {
+                    if ("location".equalsIgnoreCase(e.getKey())) { loc = e.getValue(); break; }
+                }
+                if (loc != null && loc.toLowerCase().startsWith("http://")) {
+                    // 解析新的目标
+                    String rest = loc.substring(7);
+                    int slash = rest.indexOf('/');
+                    String hp = slash < 0 ? rest : rest.substring(0, slash);
+                    String np = slash < 0 ? "/" : rest.substring(slash);
+                    String nh;
+                    int nport = 80;
+                    int c2 = hp.lastIndexOf(':');
+                    if (c2 > 0) {
+                        nh = hp.substring(0, c2);
+                        try { nport = Integer.parseInt(hp.substring(c2 + 1)); }
+                        catch (Throwable ignored) { }
+                    } else {
+                        nh = hp;
+                    }
+                    android.util.Log.i(TAG, "跟随重定向 " + code + " → " + loc.substring(0, Math.min(80, loc.length())));
+                    doGet(out, "GET", nh, nport, np, hp, headers,
+                            socksHost, socksPort, upstreamHttp, depth + 1);
+                    return;
+                }
+            }
+
+            // 非重定向：原样把状态行 + 头 + body 吐回去
+            StringBuilder head = new StringBuilder(256);
+            head.append(statusLine).append("\r\n");
+            for (java.util.Map.Entry<String, String> e : respHeaders.entrySet()) {
+                head.append(e.getKey()).append(": ").append(e.getValue()).append("\r\n");
+            }
+            head.append("Connection: close\r\n\r\n");
+            out.write(head.toString().getBytes("ISO-8859-1"));
+            out.flush();
+
+            byte[] buf = new byte[16384];
+            int n;
+            while ((n = ri.read(buf)) > 0) {
+                out.write(buf, 0, n);
+                out.flush();
+            }
+        } catch (Throwable t) {
+            android.util.Log.w(TAG, "转发失败: " + t);
+            try { writeErr(out, 502); } catch (Throwable ignored) { }
+        } finally {
+            try { if (remote != null) remote.close(); } catch (Throwable ignored) { }
+        }
+    }
+
     private static Socket openUpstream(String upHost, int upPort,
                                        String host, int port,
                                        boolean upstreamHttp) throws Exception {

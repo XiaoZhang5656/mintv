@@ -252,9 +252,16 @@ public final class VlcBackend implements PlaybackBackend {
         // 顺带说明：这不是 FCC。FCC（Fast Channel Change）是组播技术，
         // 需要运营商部署 FCC 服务器 + RTP 单播 burst，HLS 源用不上，
         // VLC 也没有实现那个协议。
-        // 播放器也走代理 —— 不只是脚本。
-        // VLC 的两个入口互斥，NetProxy.vlcArgs 已经按类型选好。
-        args.addAll(NetProxy.vlcArgs(ctx));
+        // 实例级代理参数删掉了。
+        //
+        // 实测 --http-proxy 在这个版本（libVLC 3.5.1 / Android）不生效：
+        // 参数确实传进了 LibVLC 构造（日志有 vlcArgs 结果=[--http-proxy=...]），
+        // 但 VLC 依然直连目标，桥一条请求都没收到。
+        //
+        // 改用 media 级 :http-proxy=（见 play()）—— media 级优先级更高，
+        // 而且每次换源都会重新读，改代理不用重建 LibVLC。
+        //
+        // 留着这个调用只会误导排查方向。
 
         args.add("--clock-jitter=0");
         args.add("--clock-synchro=0");
@@ -569,10 +576,21 @@ public final class VlcBackend implements PlaybackBackend {
         if (m == Mode.LIVE) media.addOption(":http-reconnect=true");
         // 代理在 media 级设置。实例级的 --http-proxy 实测不生效，
         // 而 media 级每次换源都会重新读，改代理不用重建 LibVLC。
-        String px = NetProxy.mediaProxyArg(appCtx);
-        if (px != null) {
-            media.addOption(":http-proxy=" + px);
-            android.util.Log.w("VLC", "media 级代理: " + px);
+        // 目标已经是本机（mintv:// 自动包装后的地址）就不要再给 VLC 设代理。
+        //
+        // 否则 VLC 会把「连 127.0.0.1:18899」这个请求也发给代理，
+        // 桥收到后又转给 127.0.0.1:18899 —— 无限套娃。
+        // 这种情况 HlsProxy 已经在内部处理代理了，VLC 只管连本地。
+        boolean localTarget = url != null
+                && (url.contains("127.0.0.1") || url.contains("localhost"));
+        if (!localTarget) {
+            String px = NetProxy.mediaProxyArg(appCtx);
+            if (px != null) {
+                media.addOption(":http-proxy=" + px);
+                android.util.Log.w("VLC", "media 级代理: " + px);
+            }
+        } else {
+            android.util.Log.w("VLC", "目标是本机，不设代理（避免套娃）");
         }
         dropped = applyHeaders(media, headers);
         player.setMedia(media);
