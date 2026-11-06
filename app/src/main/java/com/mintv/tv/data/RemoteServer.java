@@ -505,6 +505,12 @@ public final class RemoteServer {
                 send(out, 404, "text/plain; charset=utf-8", "not here");
                 return;
             }
+            // 服务器下发的 upload_min_segs：缓存不够时不上传，
+            // 先保证自己的播放不被别的节点拖累。
+            if (!p2p.canUpload()) {
+                send(out, 503, "text/plain; charset=utf-8", "buffering");
+                return;
+            }
             com.mintv.tv.data.PieceCache.Piece piece = p2p.cache().get(seq);
             if (piece == null || piece.data == null) {
                 send(out, 404, "text/plain; charset=utf-8", "no piece");

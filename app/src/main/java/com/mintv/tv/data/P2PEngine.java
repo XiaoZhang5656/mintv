@@ -46,6 +46,10 @@ public final class P2PEngine {
     private volatile String channelHash;
     private volatile String channelName;
     private volatile String natType = "unknown";
+
+    /** 服务器下发的阈值，默认值只在第一次 join 之前有效。 */
+    private volatile int minBufferSegs = 2;
+    private volatile int uploadMinSegs = 3;
     private volatile String localAddr;
     private volatile int localPort;
     private volatile int pos;
@@ -122,8 +126,14 @@ public final class P2PEngine {
                         TrackerClient.Cfg cfg = tracker.join(channelHash, pos,
                                 cache.seqs(), localAddr, localPort, natType);
                         if (cfg != null) {
-                            // 服务器说窗口多大，就把窗口外的清掉
+                            // 服务器下发的一切都照做：
+                            //   窗口 → 清掉播放位置之前的旧片
+                            //   容量 → 内存/磁盘的片数和字节上限
                             cache.setWindow(Math.max(0, pos - cfg.windowSize));
+                            cache.setLimits(cfg.memMaxSegs, cfg.diskMaxSegs,
+                                    cfg.memMaxBytes, cfg.diskMaxBytes);
+                            P2PEngine.this.minBufferSegs = cfg.minBufferSegs;
+                            P2PEngine.this.uploadMinSegs = cfg.uploadMinSegs;
                         }
                     } catch (Throwable t) {
                         android.util.Log.w("P2P", "心跳异常", t);
@@ -167,6 +177,25 @@ public final class P2PEngine {
      *
      * @return 分片数据；拿不到返回 null（调用方应回源）
      */
+    /**
+     * 现在能不能对外提供分片。
+     *
+     * <p>服务器下发 {@code upload_min_segs}：缓存低于这个片数就不许上传。
+     * 理由是自己都还不够看，先紧着本地播放 —— 否则刚拉下来的片被别的
+     * 节点抢走，本地又要回源，两边都慢。
+     */
+    public boolean canUpload() {
+        if (!running) return false;
+        try {
+            return cache.size() >= uploadMinSegs;
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    /** 服务器下发的缓冲下限：缓存少于这么多片时，新请求一律回源。 */
+    public int minBufferSegs() { return minBufferSegs; }
+
     public byte[] fetchPiece(int seq) {
         if (!running || channelHash == null) return null;
 
@@ -174,7 +203,18 @@ public final class P2PEngine {
         PieceCache.Piece local = cache.get(seq);
         if (local != null) return local.data;
 
-        // 2) 问 tracker 谁有
+        // 2) 缓冲不够就先顾自己。
+        //
+        // 服务器下发 min_buffer_segs：本地缓存低于这个数时，去 peer 拿
+        // 还不如直接回源稳 —— peer 可能是死的、慢的、或者手上那片
+        // 已经被淘汰。这时候优先保证播放流畅。
+        if (cache.size() < minBufferSegs) {
+            android.util.Log.i("P2P", "缓冲不足(" + cache.size() + "/"
+                    + minBufferSegs + ")，跳过 peer 直接回源");
+            return null;
+        }
+
+        // 3) 问 tracker 谁有
         List<TrackerClient.Peer> peers = tracker.peers(channelHash, seq);
         if (peers.isEmpty()) return null;
 

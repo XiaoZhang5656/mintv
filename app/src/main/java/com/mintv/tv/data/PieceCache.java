@@ -8,16 +8,34 @@ import java.util.Map;
 /**
  * P2P 分片缓存：内存 LRU + 落盘。
  *
- * <p>容量按服务器下发的 {@code window_size} 决定（默认 20 片）。
- * 一片 2MB 的话约 40MB，盒子能接受。
+ * <p><b>容量全部由服务器下发</b>（见 {@link TrackerClient.Cfg}），不在本地写死：
+ * <pre>
+ *   mem_max_segs / disk_max_segs      片数上限
+ *   mem_max_bytes / disk_max_bytes    字节上限
+ *   window_size                       播放位置往前多少片之外丢弃
+ * </pre>
+ * 之前 MEM_MAX=10 / DISK_MAX=20 是写死的，跟服务器的 window_size=20 脱节，
+ * 而且按片数算不按字节算 —— 9.35MB 一片的源，20 片就是 187MB。
  *
- * <p>只缓存**最近窗口内**的分片：直播是滚动的，老分片没人要，
- * 存着纯浪费空间。
+ * <p>只缓存**最近窗口内**的分片：直播是滚动的，老分片没人要。
  */
 public final class PieceCache {
 
-    private static final int MEM_MAX = 10;          // 内存最多 10 片
-    private static final int DISK_MAX = 20;         // 磁盘最多 20 片
+    /**
+     * 兜底上限。
+     *
+     * <p>服务器还没下发配置时（第一次 join 之前）用这个，避免无限增长。
+     * join 成功后会被服务器下发的值覆盖。
+     */
+    private static final int DEF_MEM_SEGS = 10;
+    private static final int DEF_DISK_SEGS = 30;
+    private static final long DEF_MEM_BYTES = 32L * 1024 * 1024;
+    private static final long DEF_DISK_BYTES = 200L * 1024 * 1024;
+
+    private int memMaxSegs = DEF_MEM_SEGS;
+    private int diskMaxSegs = DEF_DISK_SEGS;
+    private long memMaxBytes = DEF_MEM_BYTES;
+    private long diskMaxBytes = DEF_DISK_BYTES;
 
     /** 一个分片。 */
     public static final class Piece {
@@ -27,21 +45,16 @@ public final class PieceCache {
         public long ts;
     }
 
-    /** 内存缓存：LinkedHashMap 按访问顺序，超过上限淘汰最老的。 */
+    /** 内存缓存：LinkedHashMap 按访问顺序（accessOrder=true），最老的在头部。 */
     private final LinkedHashMap<Integer, Piece> mem =
-            new LinkedHashMap<Integer, Piece>(16, 0.75f, true) {
-                @Override protected boolean removeEldestEntry(Map.Entry<Integer, Piece> e) {
-                    return size() > MEM_MAX;
-                }
-            };
+            new LinkedHashMap<Integer, Piece>(16, 0.75f, true);
 
-    /** 磁盘上的分片（懒加载，只记元数据）。 */
+    /** 磁盘上的分片：序号 → 字节数。 */
     private final LinkedHashMap<Integer, Long> disk =
-            new LinkedHashMap<Integer, Long>(16, 0.75f, true) {
-                @Override protected boolean removeEldestEntry(Map.Entry<Integer, Long> e) {
-                    return size() > DISK_MAX;
-                }
-            };
+            new LinkedHashMap<Integer, Long>(16, 0.75f, true);
+
+    private long memBytes = 0;
+    private long diskBytes = 0;
 
     private final java.io.File dir;
     private int minSeq = 0;      // 窗口下界，低于它的直接丢弃
@@ -50,6 +63,50 @@ public final class PieceCache {
         this.dir = new java.io.File(ctx.getApplicationContext().getFilesDir(), "p2p");
         //noinspection ResultOfMethodCallIgnored
         dir.mkdirs();
+        loadDiskIndex();
+    }
+
+    /** 启动时扫一遍磁盘，把已有分片登记进索引（上次运行留下的）。 */
+    private synchronized void loadDiskIndex() {
+        java.io.File[] fs = dir.listFiles();
+        if (fs == null) return;
+        for (java.io.File f : fs) {
+            String n = f.getName();
+            if (!n.startsWith("p") || !n.endsWith(".bin")) continue;
+            try {
+                int seq = Integer.parseInt(n.substring(1, n.length() - 4));
+                long len = f.length();
+                if (len <= 0) continue;
+                disk.put(seq, len);
+                diskBytes += len;
+            } catch (Throwable ignored) { }
+        }
+        if (!disk.isEmpty()) {
+            android.util.Log.i("PieceCache", "磁盘已有 " + disk.size()
+                    + " 片，共 " + (diskBytes / 1024 / 1024) + "MB");
+        }
+        enforceDiskLimits();
+    }
+
+    /**
+     * 应用服务器下发的容量。
+     *
+     * <p>每次 join 都会收到一份，值没变就直接返回，避免无谓的淘汰扫描。
+     */
+    public synchronized void setLimits(int memSegs, int diskSegs,
+                                       long memBytes, long diskBytes) {
+        boolean changed = memSegs != memMaxSegs || diskSegs != diskMaxSegs
+                || memBytes != memMaxBytes || diskBytes != diskMaxBytes;
+        if (!changed) return;
+        this.memMaxSegs = Math.max(1, memSegs);
+        this.diskMaxSegs = Math.max(1, diskSegs);
+        this.memMaxBytes = Math.max(1024 * 1024, memBytes);
+        this.diskMaxBytes = Math.max(1024 * 1024, diskBytes);
+        android.util.Log.i("PieceCache", "容量更新: 内存 " + memMaxSegs + "片/"
+                + (memMaxBytes / 1024 / 1024) + "MB, 磁盘 " + diskMaxSegs + "片/"
+                + (diskMaxBytes / 1024 / 1024) + "MB");
+        evictMem();
+        enforceDiskLimits();
     }
 
     /** 服务器下发了新窗口，把窗口外的清掉。 */
@@ -58,11 +115,15 @@ public final class PieceCache {
         this.minSeq = minSeq;
         List<Integer> drop = new ArrayList<>();
         for (Integer s : mem.keySet()) if (s < minSeq) drop.add(s);
-        for (Integer s : drop) mem.remove(s);
+        for (Integer s : drop) {
+            Piece p = mem.remove(s);
+            if (p != null && p.data != null) memBytes -= p.data.length;
+        }
         drop.clear();
         for (Integer s : disk.keySet()) if (s < minSeq) drop.add(s);
         for (Integer s : drop) {
-            disk.remove(s);
+            Long len = disk.remove(s);
+            if (len != null) diskBytes -= len;
             //noinspection ResultOfMethodCallIgnored
             fileOf(s).delete();
         }
@@ -71,30 +132,84 @@ public final class PieceCache {
     public synchronized void put(int seq, byte[] data) {
         if (data == null || data.length == 0) return;
         if (seq < minSeq) return;          // 窗口外的不要
+
+        // 已经在内存里就不重复算字节
+        Piece old = mem.get(seq);
+        if (old != null && old.data != null) memBytes -= old.data.length;
+
         Piece p = new Piece();
         p.seq = seq;
         p.data = data;
         p.sha256 = sha256(data);
         p.ts = System.currentTimeMillis();
         mem.put(seq, p);
-        // 超出内存的部分不主动落盘，等被淘汰时再腾——这里没做，
-        // 因为一步落盘会让下载线程变慢。读的时候 miss 就回源。
+        memBytes += data.length;
+
+        // 放不下就淘汰最老的 —— 淘汰前先落盘
+        evictMem();
+    }
+
+    /**
+     * 内存超限时淘汰最老的，并尝试落盘。
+     *
+     * <p>之前这块是空的：put 只写内存，淘汰时直接丢，磁盘缓存等于不存在。
+     * 现在被淘汰的分片先试写磁盘，写成功才登记进索引。
+     */
+    private void evictMem() {
+        while ((mem.size() > memMaxSegs || memBytes > memMaxBytes) && !mem.isEmpty()) {
+            Integer oldest = mem.keySet().iterator().next();
+            Piece p = mem.remove(oldest);
+            if (p == null) break;
+            if (p.data != null) memBytes -= p.data.length;
+            // 落盘：磁盘还有空间才写
+            if (p.data != null && canWriteDisk(p.data.length)) {
+                if (writeToDisk(p.seq, p.data)) {
+                    Long prev = disk.put(p.seq, (long) p.data.length);
+                    if (prev != null) diskBytes -= prev;
+                    diskBytes += p.data.length;
+                    enforceDiskLimits();
+                }
+            }
+        }
+    }
+
+    private boolean canWriteDisk(int len) {
+        if (disk.containsKey(-1)) return false;   // 占位，永不成立
+        if (disk.size() + 1 > diskMaxSegs) return false;
+        if (diskBytes + len > diskMaxBytes) return false;
+        return true;
+    }
+
+    private void enforceDiskLimits() {
+        while ((disk.size() > diskMaxSegs || diskBytes > diskMaxBytes) && !disk.isEmpty()) {
+            Integer oldest = disk.keySet().iterator().next();
+            Long len = disk.remove(oldest);
+            if (len != null) diskBytes -= len;
+            //noinspection ResultOfMethodCallIgnored
+            fileOf(oldest).delete();
+        }
     }
 
     /** 取分片：先内存，再磁盘；都没有返回 null。 */
     public synchronized Piece get(int seq) {
         Piece p = mem.get(seq);
         if (p != null) return p;
-        Long ts = disk.get(seq);
-        if (ts == null) return null;
+        Long len = disk.get(seq);
+        if (len == null) return null;
         byte[] data = readFile(fileOf(seq));
-        if (data == null) { disk.remove(seq); return null; }
+        if (data == null) {
+            disk.remove(seq);
+            diskBytes -= len;
+            return null;
+        }
         Piece q = new Piece();
         q.seq = seq;
         q.data = data;
         q.sha256 = sha256(data);
-        q.ts = ts;
+        q.ts = System.currentTimeMillis();
         mem.put(seq, q);
+        memBytes += data.length;
+        evictMem();
         return q;
     }
 
@@ -112,9 +227,14 @@ public final class PieceCache {
 
     public synchronized int size() { return mem.size() + disk.size(); }
 
+    /** 内存里的片数，用来判断缓冲够不够。 */
+    public synchronized int memSize() { return mem.size(); }
+
     public synchronized void clear() {
         mem.clear();
         disk.clear();
+        memBytes = 0;
+        diskBytes = 0;
         java.io.File[] fs = dir.listFiles();
         if (fs != null) for (java.io.File f : fs) {
             //noinspection ResultOfMethodCallIgnored
@@ -122,10 +242,26 @@ public final class PieceCache {
         }
     }
 
-    // ---------------- 内部 ----------------
+    // ---------------- 磁盘 ----------------
 
     private java.io.File fileOf(int seq) {
         return new java.io.File(dir, "p" + seq + ".bin");
+    }
+
+    private boolean writeToDisk(int seq, byte[] data) {
+        try {
+            java.io.FileOutputStream o = new java.io.FileOutputStream(fileOf(seq));
+            try {
+                o.write(data);
+                o.flush();
+            } finally {
+                o.close();
+            }
+            return true;
+        } catch (Throwable t) {
+            android.util.Log.w("PieceCache", "落盘失败 seq=" + seq, t);
+            return false;
+        }
     }
 
     private byte[] readFile(java.io.File f) {
@@ -140,7 +276,7 @@ public final class PieceCache {
         }
     }
 
-    /** 分片校验值：用于告诉别人“我这片是对的”。 */
+    /** 分片校验值：用于告诉别人"我这片是对的"。 */
     static String sha256(byte[] data) {
         try {
             java.security.MessageDigest md =

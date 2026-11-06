@@ -45,6 +45,17 @@ public final class TrackerClient {
         public int maxPeersReturn = 3;
         public int minBufferSegs = 2;
         public int uploadMinSegs = 3;
+
+        // 缓存容量也由服务器控制。
+        //
+        // 之前 PieceCache 里写死 MEM_MAX=10 / DISK_MAX=20，跟服务器下发的
+        // window_size=20 完全脱节 —— 服务器说窗口 20 片，本地只留 10 片，
+        // 一半的 peer 请求注定落空。而且按片数算不按字节算，
+        // 现在这种 9.35MB 一片的源，20 片就是 187MB，4K 源能到 600MB+。
+        public int memMaxSegs = 10;
+        public int diskMaxSegs = 30;
+        public long memMaxBytes = 32L * 1024 * 1024;
+        public long diskMaxBytes = 200L * 1024 * 1024;
     }
 
     /** 一个候选节点。 */
@@ -118,6 +129,10 @@ public final class TrackerClient {
                 cfg.maxPeersReturn  = c.optInt("max_peers_return", cfg.maxPeersReturn);
                 cfg.minBufferSegs   = c.optInt("min_buffer_segs", cfg.minBufferSegs);
                 cfg.uploadMinSegs   = c.optInt("upload_min_segs", cfg.uploadMinSegs);
+                cfg.memMaxSegs      = c.optInt("mem_max_segs", cfg.memMaxSegs);
+                cfg.diskMaxSegs     = c.optInt("disk_max_segs", cfg.diskMaxSegs);
+                cfg.memMaxBytes     = c.optLong("mem_max_bytes", cfg.memMaxBytes);
+                cfg.diskMaxBytes    = c.optLong("disk_max_bytes", cfg.diskMaxBytes);
             }
             return cfg;
         } catch (Throwable t) {
