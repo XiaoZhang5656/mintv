@@ -96,6 +96,26 @@ public final class P2PEngine {
         statUpReq++;
     }
 
+    /**
+     * 可信哈希表：seq → sha256。
+     *
+     * <p>来源只有两个，都不来自「发分片给我的那个节点」：
+     * <ul>
+     *   <li>我们自己从源站拉的（回源一次就记一次）</li>
+     *   <li>tracker 聚合后的多数哈希（见 /api/fetch 的 sha 字段）</li>
+     * </ul>
+     *
+     * <p>为什么必须有：对端在 X-Piece-SHA256 头里发的哈希是它自己算的，
+     * 伪造内容 + 对应哈希能完全通过校验。那个头只能发现传输损坏，
+     * 挡不住投毒。
+     */
+    private final java.util.concurrent.ConcurrentHashMap<Integer, String> trustedSha =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
+    /** tracker 聚合出来的哈希（多数节点一致的那个）。 */
+    private final java.util.concurrent.ConcurrentHashMap<Integer, String> serverSha =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
     /** 服务器下发的阈值，默认值只在第一次 join 之前有效。 */
     private volatile String p2pSecret = "";
 
@@ -257,6 +277,16 @@ public final class P2PEngine {
     public void onPieceFetched(int seq, byte[] data) {
         if (!running || data == null) return;
         cache.put(seq, data);
+        // 自己从源站拿到的，这份哈希可信，记下来供后续校验 peer 数据
+        try {
+            String h = PieceCache.sha256(data);
+            if (h != null) {
+                trustedSha.put(seq, h);
+                // 报给 tracker 做多数聚合，别的节点拉这片时能拿它当基准
+                final String ch = channelHash;
+                if (ch != null) tracker.reportHash(ch, seq, h);
+            }
+        } catch (Throwable ignored) { }
     }
 
     /**
@@ -321,6 +351,11 @@ public final class P2PEngine {
 
         // 3) 问 tracker 谁有
         List<TrackerClient.Peer> peers = tracker.peers(channelHash, seq);
+        // tracker 如果对这片有聚合哈希，记下来当可信基准
+        try {
+            String sh = tracker.lastSeqSha();
+            if (sh != null && !sh.isEmpty()) serverSha.put(seq, sh);
+        } catch (Throwable ignored) { }
         if (peers.isEmpty()) return null;
 
         // 3) 排序之后再试。
@@ -456,14 +491,33 @@ public final class P2PEngine {
             byte[] data = bos.toByteArray();
             if (data.length == 0) return null;
 
-            // 校验：对端如果带了哈希就比对，没带就相信它（首片靠源站建立信任）
-            String expect = conn.getHeaderField("X-Piece-SHA256");
-            if (expect != null && !expect.isEmpty()) {
-                String actual = PieceCache.sha256(data);
-                if (actual == null || !actual.equalsIgnoreCase(expect)) {
-                    android.util.Log.w("P2P", "分片校验失败 seq=" + seq);
+            // 校验顺序：先比可信哈希（我们自己回源拿过的 / tracker 聚合的），
+            // 再回头看对端自己报的 —— 后者只能发现传输损坏，不算安全边界。
+            String actual = PieceCache.sha256(data);
+            if (actual == null) return null;
+
+            String trusted = trustedSha.get(seq);
+            if (trusted == null) trusted = serverSha.get(seq);
+            if (trusted != null) {
+                if (!actual.equalsIgnoreCase(trusted)) {
+                    android.util.Log.w("P2P", "分片与可信哈希不符，丢弃 seq=" + seq
+                            + " 来自 " + p.addr + ":" + p.port
+                            + " 期望 " + trusted.substring(0, 12)
+                            + " 实际 " + actual.substring(0, 12));
+                    // 记一笔失败，服务端会降低这个节点的优先级
+                    try { tracker.reportPeerFail(channelHash, p.addr + ":" + p.port); }
+                    catch (Throwable ignored) { }
                     return null;
                 }
+            } else {
+                // 没有可信哈希可比 —— 首次接触，先采信但对端必须自证一致
+                String expect = conn.getHeaderField("X-Piece-SHA256");
+                if (expect != null && !expect.isEmpty()
+                        && !actual.equalsIgnoreCase(expect)) {
+                    android.util.Log.w("P2P", "分片自证不一致，丢弃 seq=" + seq);
+                    return null;
+                }
+                trustedSha.put(seq, actual);
             }
             return data;
         } catch (Throwable t) {

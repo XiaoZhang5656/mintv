@@ -96,6 +96,16 @@ public final class TrackerClient {
 
     public String peerId() { return peerId; }
 
+    /**
+     * 最近一次 /api/fetch 返回的聚合哈希（该分片的多数一致值）。
+     *
+     * <p>为什么要经 tracker 中转：对端自己发的 X-Piece-SHA256 是它自己算的，
+     * 伪造内容能配伪造哈希。只有「多个节点报同一个值」才有参考意义。
+     */
+    private volatile String lastSeqSha = null;
+
+    public String lastSeqSha() { return lastSeqSha; }
+
     public Cfg config() { return cfg; }
 
     /**
@@ -175,6 +185,10 @@ public final class TrackerClient {
 
             JSONObject r = post(u.toString(), new JSONObject());
             if (r == null) return out;
+            // 服务端对该分片的聚合哈希（多数节点一致的那个）
+            lastSeqSha = r.optString("sha", null);
+            if (lastSeqSha != null && lastSeqSha.isEmpty()) lastSeqSha = null;
+
             JSONArray arr = r.optJSONArray("peers");
             if (arr == null) return out;
 
@@ -250,6 +264,25 @@ public final class TrackerClient {
         } catch (Throwable t) {
             android.util.Log.w("Tracker", "reportStat 失败: " + t);
         }
+    }
+
+    /**
+     * 上报某分片的哈希。
+     *
+     * <p>只在自己从**源站**拿到时上报 —— 那是唯一能确认内容正确的时候。
+     * 服务端按 (频道, 序号) 统计，多数一致的才作为可信哈希下发，
+     * 单个节点报的值不足以决定。
+     */
+    public void reportHash(String channel, int seq, String sha) {
+        if (channel == null || sha == null || sha.isEmpty() || seq < 0) return;
+        try {
+            JSONObject b = new JSONObject();
+            b.put("peerId", peerId);
+            b.put("channel", channel);
+            b.put("seq", seq);
+            b.put("sha", sha);
+            post("/api/stat", b);
+        } catch (Throwable ignored) { }
     }
 
     /** 上报一次拉片失败，服务端会降低该节点的优先级。 */
