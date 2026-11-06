@@ -562,11 +562,33 @@ public final class StorageDir {
         }
     }
 
+    /**
+     * 创建文件时用的 MIME 类型。
+     *
+     * <p><b>这个返回值决定文件名会不会被系统改掉</b>：Android 的
+     * DocumentsProvider 看到 {@code text/plain} 会自动补 {@code .txt} 后缀。
+     *
+     * <p>之前 .xml 落到默认的 text/plain，于是：
+     * <pre>
+     *   想创建 epg.xml     → 系统存成 epg.xml.txt
+     *   下次检查 epg.xml   → 不存在（实际叫 .txt）
+     *   → 再创建一次        → epg.xml (1).txt
+     *   → 无限堆积
+     * </pre>
+     * 实测 cache/ 里攒了 32 个 epg.xml (N).txt，每个 1MB，共 34MB。
+     *
+     * <p>未知扩展名一律用 application/octet-stream —— 二进制类型
+     * 不会被追加后缀，从根上避免这个问题。
+     */
     private static String mimeOf(String name) {
         String n = name.toLowerCase(java.util.Locale.US);
         if (n.endsWith(".json")) return "application/json";
-        if (n.endsWith(".js")) return "application/javascript";
-        return "text/plain";
+        if (n.endsWith(".js"))   return "application/javascript";
+        if (n.endsWith(".xml"))  return "application/xml";
+        if (n.endsWith(".m3u"))  return "application/vnd.apple.mpegurl";
+        if (n.endsWith(".m3u8")) return "application/vnd.apple.mpegurl";
+        if (n.endsWith(".txt"))  return "text/plain";   // 本身带 .txt，加了也一样
+        return "application/octet-stream";
     }
 
     /** 未授权时的私有根（和授权根同构）。 */
