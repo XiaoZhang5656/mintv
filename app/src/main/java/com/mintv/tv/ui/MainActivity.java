@@ -1880,9 +1880,57 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         int added = 0;
         added += scanDirForSubs(com.mintv.tv.data.StorageDir.SUB_SOURCES, "local://");
         added += scanDirForSubs(com.mintv.tv.data.StorageDir.SUB_UPLOAD, "upload://");
+        // 声明了 exports.list 的脚本自动变成订阅源 ——
+        // 用户把 .js 丢进 scripts/ 就能在订阅列表里看到，不用手动加
+        // http://127.0.0.1:18899/xxx.m3u 这种地址。
+        scanScriptsForSubs();
         if (added > 0) {
             android.util.Log.w("MinTV", "本次新增 " + added + " 个本地订阅");
             osd.toast("发现 " + added + " 个本地源");
+        }
+    }
+
+    /**
+     * 把声明了 {@code exports.list} 的脚本注册成订阅源。
+     *
+     * <p>约定：脚本导出 {@code exports.list = "/xxx.m3u"} 就说明它能提供
+     * 完整清单，框架把它当成一个订阅。没声明的脚本不注册 —— 不是每个
+     * 脚本都需要对外给清单。
+     *
+     * <p>订阅 id 用 {@code script:<文件名>}，跟用户手动加的订阅区分开；
+     * URL 指向本机 HTTP 服务，端口变了会自动更新。
+     */
+    private void scanScriptsForSubs() {
+        try {
+            com.mintv.tv.data.ScriptStore store = new com.mintv.tv.data.ScriptStore(this);
+            java.util.List<com.mintv.tv.data.ScriptStore.Item> items = store.list();
+            if (items == null || items.isEmpty()) return;
+            int port = remotePort > 0
+                    ? remotePort : com.mintv.tv.data.RemoteServer.PORT_MAIN;
+            int added = 0;
+            for (com.mintv.tv.data.ScriptStore.Item it : items) {
+                if (it.listPath == null || it.listPath.isEmpty()) continue;
+                String id = "script:" + it.name;
+                String url = "http://127.0.0.1:" + port + it.listPath;
+                com.mintv.tv.data.SubscriptionStore.Sub existing =
+                        com.mintv.tv.data.SubscriptionStore.find(this, id);
+                if (existing != null && url.equals(existing.url)) continue;
+                com.mintv.tv.data.SubscriptionStore.Sub sub =
+                        new com.mintv.tv.data.SubscriptionStore.Sub();
+                sub.id = id;
+                sub.name = (it.displayName != null && !it.displayName.isEmpty())
+                        ? it.displayName : it.name;
+                sub.url = url;
+                com.mintv.tv.data.SubscriptionStore.upsert(this, sub);
+                if (existing == null) added++;
+                android.util.Log.w("MinTV", "脚本源已注册: " + sub.name + " → " + url);
+            }
+            if (added > 0) {
+                fillSubColumn();
+                android.util.Log.w("MinTV", "本次新增 " + added + " 个脚本订阅");
+            }
+        } catch (Throwable t) {
+            android.util.Log.w("MinTV", "扫脚本源失败", t);
         }
     }
 

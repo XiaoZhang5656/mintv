@@ -52,6 +52,14 @@ public final class ScriptStore {
         public final List<String> hosts = new ArrayList<>();
         /** 静态解析失败的原因，null 表示没问题。 */
         public String parseError;
+        /**
+         * 脚本导出的订阅清单路径（exports.list）。
+         *
+         * <p>有值的脚本会被自动注册成一个订阅源，用户不用手动加
+         * {@code http://127.0.0.1:18899/xxx.m3u} 这种地址。
+         * 没声明就不注册 —— 不是每个脚本都需要对外提供清单。
+         */
+        public String listPath;
     }
 
     private final File dir;
@@ -313,6 +321,8 @@ public final class ScriptStore {
 
         collectStrings(code, "exports\\.path", it.routes);
         collectStrings(code, "exports\\.host", it.hosts);
+        // 脚本自己导出的订阅清单入口。有就自动注册成订阅源，没就不管。
+        it.listPath = readString(code, "exports\\.list", null);
 
         Matcher rm = Pattern.compile("\\bpath\\s*:\\s*[\"']([^\"']+)[\"']").matcher(code);
         while (rm.find()) it.routes.add(rm.group(1));
