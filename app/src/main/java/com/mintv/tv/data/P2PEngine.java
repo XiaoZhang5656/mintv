@@ -177,6 +177,24 @@ public final class P2PEngine {
      *
      * @return 分片数据；拿不到返回 null（调用方应回源）
      */
+    /** 异步上报 have[]，不阻塞下载。同一秒内多次触发会合并。 */
+    private volatile long lastReportAt = 0;
+
+    private void reportHaveAsync() {
+        final long now = System.currentTimeMillis();
+        if (now - lastReportAt < 1000) return;   // 一秒最多一次，合并密集调用
+        lastReportAt = now;
+        final String ch = channelHash;
+        final int ps = pos;
+        if (ch == null) return;
+        final List<Integer> have = cache.seqs();
+        new Thread(new Runnable() {
+            @Override public void run() {
+                tracker.reportHave(ch, ps, have);
+            }
+        }, "p2p-report").start();
+    }
+
     /**
      * 现在能不能对外提供分片。
      *
@@ -248,6 +266,7 @@ public final class P2PEngine {
             if (data != null) {
                 cache.put(seq, data);
                 android.util.Log.w("P2P", "直连 " + key + " 拿到第 " + seq + " 片");
+                reportHaveAsync();
                 return data;
             }
 
@@ -267,6 +286,7 @@ public final class P2PEngine {
                         cache.put(seq, data);
                         android.util.Log.w("P2P", "打洞后 " + key
                                 + " 拿到第 " + seq + " 片");
+                        reportHaveAsync();
                         return data;
                     }
                 }

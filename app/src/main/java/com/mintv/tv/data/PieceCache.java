@@ -56,26 +56,37 @@ public final class PieceCache {
     private long memBytes = 0;
     private long diskBytes = 0;
 
-    private final java.io.File dir;
+    /**
+     * 缓存目录：{@code <存储根>/cache/p2p/}。
+     *
+     * <p>以前放 {@code getFilesDir()/p2p}，App 私有目录 —— 用户看不到、
+     * 清不掉、卸载就没了。现在跟 EPG、源快照一起放在 cache/ 下，
+     * 文件管理器能看见，也不会占 App 私有空间。
+     *
+     * <p>代价：SAF 读写要过 ContentResolver，比直接 File 慢几倍
+     * （9MB 一片大约 200~500ms）。读取仍在调用线程上做，
+     * 但只有「内存未命中」才会走到磁盘，实际影响很小。
+     */
+    private static final String SUB_DIR = StorageDir.SUB_CACHE + "/p2p";
+
+    private final android.content.Context ctx;
     private int minSeq = 0;      // 窗口下界，低于它的直接丢弃
 
     public PieceCache(android.content.Context ctx) {
-        this.dir = new java.io.File(ctx.getApplicationContext().getFilesDir(), "p2p");
-        //noinspection ResultOfMethodCallIgnored
-        dir.mkdirs();
+        this.ctx = ctx.getApplicationContext();
         loadDiskIndex();
     }
 
     /** 启动时扫一遍磁盘，把已有分片登记进索引（上次运行留下的）。 */
     private synchronized void loadDiskIndex() {
-        java.io.File[] fs = dir.listFiles();
-        if (fs == null) return;
-        for (java.io.File f : fs) {
-            String n = f.getName();
-            if (!n.startsWith("p") || !n.endsWith(".bin")) continue;
+        java.util.List<String> names = StorageDir.listPath(ctx, SUB_DIR);
+        if (names == null || names.isEmpty()) return;
+        for (String n : names) {
+            if (n == null || !n.startsWith("p") || !n.endsWith(".bin")) continue;
             try {
                 int seq = Integer.parseInt(n.substring(1, n.length() - 4));
-                long len = f.length();
+                byte[] probe = StorageDir.readBytesPath(ctx, SUB_DIR + "/" + n);
+                long len = probe == null ? 0 : probe.length;
                 if (len <= 0) continue;
                 disk.put(seq, len);
                 diskBytes += len;
@@ -124,8 +135,7 @@ public final class PieceCache {
         for (Integer s : drop) {
             Long len = disk.remove(s);
             if (len != null) diskBytes -= len;
-            //noinspection ResultOfMethodCallIgnored
-            fileOf(s).delete();
+            StorageDir.deletePath(ctx, pathOf(s));
         }
     }
 
@@ -185,8 +195,7 @@ public final class PieceCache {
             Integer oldest = disk.keySet().iterator().next();
             Long len = disk.remove(oldest);
             if (len != null) diskBytes -= len;
-            //noinspection ResultOfMethodCallIgnored
-            fileOf(oldest).delete();
+            StorageDir.deletePath(ctx, pathOf(oldest));
         }
     }
 
@@ -196,7 +205,7 @@ public final class PieceCache {
         if (p != null) return p;
         Long len = disk.get(seq);
         if (len == null) return null;
-        byte[] data = readFile(fileOf(seq));
+        byte[] data = readFile(seq);
         if (data == null) {
             disk.remove(seq);
             diskBytes -= len;
@@ -235,45 +244,25 @@ public final class PieceCache {
         disk.clear();
         memBytes = 0;
         diskBytes = 0;
-        java.io.File[] fs = dir.listFiles();
-        if (fs != null) for (java.io.File f : fs) {
-            //noinspection ResultOfMethodCallIgnored
-            f.delete();
+        java.util.List<String> names = StorageDir.listPath(ctx, SUB_DIR);
+        if (names != null) for (String n : names) {
+            StorageDir.deletePath(ctx, SUB_DIR + "/" + n);
         }
     }
 
     // ---------------- 磁盘 ----------------
 
-    private java.io.File fileOf(int seq) {
-        return new java.io.File(dir, "p" + seq + ".bin");
+    private String pathOf(int seq) {
+        return SUB_DIR + "/p" + seq + ".bin";
     }
 
     private boolean writeToDisk(int seq, byte[] data) {
-        try {
-            java.io.FileOutputStream o = new java.io.FileOutputStream(fileOf(seq));
-            try {
-                o.write(data);
-                o.flush();
-            } finally {
-                o.close();
-            }
-            return true;
-        } catch (Throwable t) {
-            android.util.Log.w("PieceCache", "落盘失败 seq=" + seq, t);
-            return false;
-        }
+        // 走存储目录（SAF 或私有回退都由 StorageDir 处理）
+        return StorageDir.writeBytesPath(ctx, pathOf(seq), data);
     }
 
-    private byte[] readFile(java.io.File f) {
-        if (!f.isFile()) return null;
-        try {
-            byte[] buf = new byte[(int) f.length()];
-            java.io.FileInputStream in = new java.io.FileInputStream(f);
-            try { in.read(buf); } finally { in.close(); }
-            return buf;
-        } catch (Throwable t) {
-            return null;
-        }
+    private byte[] readFile(int seq) {
+        return StorageDir.readBytesPath(ctx, pathOf(seq));
     }
 
     /** 分片校验值：用于告诉别人"我这片是对的"。 */

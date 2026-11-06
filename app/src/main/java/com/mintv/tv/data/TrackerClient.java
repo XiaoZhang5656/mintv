@@ -186,6 +186,31 @@ public final class TrackerClient {
         return out;
     }
 
+    /**
+     * 立刻上报「我刚拿到了哪些分片」。
+     *
+     * <p>为什么要单独做：心跳是 15 秒一次，B 从 A 那里拉到分片之后，
+     * C/D/E 要等最多 15 秒才知道 B 也有 —— 这 15 秒里所有请求继续压在 A 身上，
+     * 热点节点就是这么被打爆的。
+     *
+     * <p>拿到新分片后异步调一次，几百字节的请求，开销可以忽略。
+     */
+    public void reportHave(String channel, int pos, List<Integer> have) {
+        if (channel == null || have == null || have.isEmpty()) return;
+        try {
+            JSONObject b = new JSONObject();
+            b.put("peerId", peerId);
+            b.put("channel", channel);
+            b.put("pos", pos);
+            JSONArray arr = new JSONArray();
+            for (Integer s : have) arr.put(s.intValue());
+            b.put("have", arr);
+            post("/api/join", b);
+        } catch (Throwable t) {
+            android.util.Log.w("Tracker", "reportHave 失败: " + t);
+        }
+    }
+
     /** 离开频道：服务端立刻把自己摘掉，不用等心跳超时。 */
     public void leave() {
         try {
