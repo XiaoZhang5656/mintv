@@ -7979,6 +7979,8 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         // 停掉自动刷新：它是匿名 Runnable，持有 Activity。
         // 不清掉的话 Activity 销毁了定时器还在跑，既泄漏又会在后台发请求。
         try { stopAutoRefresh(); } catch (Throwable ignored) { }
+        // 关掉 SOCKS→HTTP 本地桥，别让它在后台占端口
+        try { com.mintv.tv.data.LocalSocksProxy.stop(); } catch (Throwable ignored) { }
         // 释放 tvbus / p2p 的 native 资源。
         //
         // 不做的话：native 线程、socket、以及 UPnP 端口映射（so 里调了

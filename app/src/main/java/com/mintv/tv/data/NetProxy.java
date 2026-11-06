@@ -101,9 +101,19 @@ public final class NetProxy {
             String v = s.trim();
             boolean socks = v.toLowerCase(java.util.Locale.US).startsWith("socks");
             if (socks) {
-                // VLC 期望 socks5://host:port 形式
                 if (!v.contains("://")) v = "socks5://" + v;
-                out.add("--socks=" + v);
+                // 关键：--socks 只被 access_smb / access_ftp / access_sftp 读取，
+                // access_http 只认 --http-proxy。所以 HLS 走 SOCKS 必须转一道。
+                //
+                // 在本机起一个 HTTP 代理把请求转成 SOCKS，再把 --http-proxy
+                // 指向它。一个实例服务所有频道（--http-proxy 是实例级参数）。
+                int lp = com.mintv.tv.data.LocalSocksProxy.ensure(v);
+                if (lp > 0) {
+                    out.add("--http-proxy=http://127.0.0.1:" + lp);
+                } else {
+                    // 本地桥起不来，退回原行为（至少 smb/ftp 还能用）
+                    out.add("--socks=" + v);
+                }
             } else {
                 if (!v.contains("://")) v = "http://" + v;
                 out.add("--http-proxy=" + v);
