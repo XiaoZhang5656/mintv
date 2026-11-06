@@ -6674,6 +6674,14 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         try { id = com.mintv.tv.ui.setting.Settings.ALL[rowIndex].id; }
         catch (Throwable t) { return base; }
 
+        if ("net_proxy".equals(id)) {
+            // 副标题显示当前实际链路。SOCKS 会写成
+            //   http://127.0.0.1:45231 → socks5://host:port
+            // 让人看出播放器用的是本地桥，不是直连。
+            String sum = com.mintv.tv.data.NetProxy.summary(this);
+            if ("直连".equals(sum)) return base;
+            return "当前：" + sum;
+        }
         if ("storage_dir".equals(id)) {
             android.net.Uri root = com.mintv.tv.data.StorageDir.rootUri(this);
             if (root == null) return "未授权：脚本和本地源存在 App 私有目录，文件管理器看不到";
@@ -6721,13 +6729,6 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         if ("theme".equals(id)) {
             String[] out = base.clone();
             out[0] = Theme.ACCENT_NAMES[Theme.accentIndex];
-            return out;
-        }
-        if ("net_proxy".equals(id)) {
-            String[] out = base.clone();
-            // 走 summary()：SOCKS 会显示成本地桥 + 上游，
-            // 让人一眼看出"填的是 socks，播放器实际用的是本地 http"
-            out[0] = com.mintv.tv.data.NetProxy.summary(this);
             return out;
         }
         if ("storage_dir".equals(id)) {
