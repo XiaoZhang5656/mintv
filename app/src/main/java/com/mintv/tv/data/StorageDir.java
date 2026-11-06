@@ -428,9 +428,17 @@ public final class StorageDir {
             }
 
             // 2) 旧文件改名成 .bak
+            //
+            // 改名前先清掉已有的 .bak。
+            //
+            // DocumentsContract.renameDocument 到一个已存在的文件名不会覆盖，
+            // 系统会自动加后缀变成「xxx (1).bak」「xxx (2).bak」……
+            // 每写一次就多一个，跑几天能攒出十几个，用户看着莫名其妙，
+            // 还白占空间。
             Uri fileDoc = DocumentsContract.buildDocumentUriUsingTree(root, curDoc + "/" + fileName);
             if (docExists(c, fileDoc)) {
                 try {
+                    cleanOldBackups(c, root, curDoc, fileName);
                     DocumentsContract.renameDocument(c.getContentResolver(), fileDoc, bakName);
                 } catch (Throwable t) {
                     android.util.Log.w("StorageDir", "备份旧文件失败，继续", t);
@@ -444,6 +452,55 @@ public final class StorageDir {
         } catch (Throwable t) {
             android.util.Log.w("StorageDir", "写失败 " + path, t);
             return false;
+        }
+    }
+
+    /**
+     * 删掉某个文件的历史备份（xxx.bak、xxx (1).bak、xxx (2).bak …）。
+     *
+     * <p>只保留「本次要生成的那一个」，其余全清。这样磁盘上永远最多一个 .bak，
+     * 既能用于崩溃恢复，又不会无限堆积。
+     */
+    /** 列某个目录下的文件名（SAF）。 */
+    private static java.util.List<String> listChildren(Context c, Uri root, String dirDocId) {
+        java.util.List<String> out = new java.util.ArrayList<>();
+        try {
+            Uri children = DocumentsContract.buildChildDocumentsUriUsingTree(root, dirDocId);
+            android.database.Cursor cur = c.getContentResolver().query(children,
+                    new String[]{DocumentsContract.Document.COLUMN_DISPLAY_NAME},
+                    null, null, null);
+            if (cur != null) {
+                try {
+                    while (cur.moveToNext()) {
+                        String n = cur.getString(0);
+                        if (n != null) out.add(n);
+                    }
+                } finally {
+                    cur.close();
+                }
+            }
+        } catch (Throwable t) {
+            android.util.Log.w("StorageDir", "列目录失败", t);
+        }
+        return out;
+    }
+
+    private static void cleanOldBackups(Context c, Uri root, String dirDocId, String fileName) {
+        try {
+            java.util.List<String> names = listChildren(c, root, dirDocId);
+            if (names == null || names.isEmpty()) return;
+            String bak = fileName + ".bak";
+            for (String n : names) {
+                if (n == null) continue;
+                boolean isBackup = n.equals(bak) || n.startsWith(fileName + " (") ;
+                if (!isBackup) continue;
+                try {
+                    Uri d = DocumentsContract.buildDocumentUriUsingTree(root, dirDocId + "/" + n);
+                    DocumentsContract.deleteDocument(c.getContentResolver(), d);
+                } catch (Throwable ignored) { }
+            }
+        } catch (Throwable t) {
+            android.util.Log.w("StorageDir", "清理旧备份失败", t);
         }
     }
 
