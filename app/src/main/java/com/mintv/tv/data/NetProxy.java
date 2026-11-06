@@ -82,59 +82,6 @@ public final class NetProxy {
     }
 
     /**
-     * 转成 libVLC 的启动参数。
-     *
-     * <p>VLC 有两个入口，**互斥**：同时给只有一个会生效。
-     * <ul>
-     *   <li>{@code --socks=socks5://host:port}  SOCKS5</li>
-     *   <li>{@code --http-proxy=http://host:port}  HTTP/HTTPS</li>
-     * </ul>
-     *
-     * <p>这样播放器本身也走代理 —— 不只是脚本。
-     * 组播（udp/rtp）不走 HTTP/SOCKS，不受影响。
-     */
-    public static java.util.List<String> vlcArgs(Context c) {
-        java.util.List<String> out = new java.util.ArrayList<>();
-        try {
-            String s = url(c);
-            if (s == null || s.isEmpty()) return out;
-            String v = s.trim();
-            String low = v.toLowerCase(java.util.Locale.US);
-            // http:// 上游 VLC 原生支持，直接给 --http-proxy。
-            // https:// 和 socks*:// 走本地桥：前者 VLC 对 https 上游支持不确定，
-            // 后者 VLC 的 HTTP 模块根本不读 --socks。
-            boolean needBridge = low.startsWith("socks")
-                    || low.startsWith("https://")
-                    || (!v.contains("://") && !low.startsWith("http"));
-            boolean socks = needBridge;
-            if (socks) {
-                if (!v.contains("://")) v = "socks5://" + v;
-                // 关键：--socks 只被 access_smb / access_ftp / access_sftp 读取，
-                // access_http 只认 --http-proxy。所以 HLS 走 SOCKS 必须转一道。
-                //
-                // 在本机起一个 HTTP 代理把请求转成 SOCKS，再把 --http-proxy
-                // 指向它。一个实例服务所有频道（--http-proxy 是实例级参数）。
-                int lp = com.mintv.tv.data.LocalSocksProxy.ensure(v);
-                if (lp > 0) {
-                    out.add("--http-proxy=http://127.0.0.1:" + lp);
-                } else {
-                    // 本地桥起不来，退回原行为（至少 smb/ftp 还能用）
-                    out.add("--socks=" + v);
-                }
-            } else {
-                if (!v.contains("://")) v = "http://" + v;
-                out.add("--http-proxy=" + v);
-            }
-            android.util.Log.w("NetProxy", "vlcArgs 配置=[" + s + "] 结果=" + out);
-        } catch (Throwable t) {
-            // 以前这里是 catch (Throwable ignored)，出问题一点痕迹都没有。
-            // 代理不生效时最需要看到的就是这一行。
-            android.util.Log.w("NetProxy", "vlcArgs 失败 配置=[" + url(c) + "]", t);
-        }
-        return out;
-    }
-
-    /**
      * 原始代理配置（不经过本地桥）。
      *
      * <p>给 HlsProxy 用：它是 Java 代码，HttpURLConnection 原生支持
@@ -153,62 +100,17 @@ public final class NetProxy {
     }
 
     /**
-     * 给 media 级选项用的代理地址。
-     *
-     * <p>实例级的 {@code --http-proxy} 实测不生效（VLC 3.5.1 + LibVLC 构造），
-     * 改在 media 上加 {@code :http-proxy=} —— media 级优先级高于实例级，
-     * 而且换源时会重新设置，改代理不用重建 LibVLC。
-     *
-     * @return 形如 http://127.0.0.1:34647；null 表示不用代理（直连）
-     */
-    public static String mediaProxyArg(Context c) {
-        try {
-            String s = url(c);
-            if (s == null || s.isEmpty()) return null;
-            String v = s.trim();
-            String low = v.toLowerCase(java.util.Locale.US);
-            boolean needBridge = low.startsWith("socks")
-                    || low.startsWith("https://")
-                    || (!v.contains("://") && !low.startsWith("http"));
-            if (needBridge) {
-                if (!v.contains("://")) v = "socks5://" + v;
-                int lp = com.mintv.tv.data.LocalSocksProxy.ensure(v);
-                return lp > 0 ? "http://127.0.0.1:" + lp : null;
-            }
-            if (!v.contains("://")) v = "http://" + v;
-            return v;
-        } catch (Throwable t) {
-            android.util.Log.w("NetProxy", "mediaProxyArg 失败", t);
-            return null;
-        }
-    }
-
-    /**
      * 给界面显示的一句话。
      *
-     * <p>SOCKS 会额外显示本地桥，让人一眼看出"填的是 socks，实际给播放器
-     * 用的是本地 http"：
-     * <pre>
-     *   http://127.0.0.1:45231 → socks5://120.48.182.33:18002
-     * </pre>
-     * 桥还没启动（没播放过）时显示成"播放时转本地 http"。
+     * <p>不再经过本地桥之后，这里直接显示用户填的配置 ——
+     * 播放器实际用的就是它，没有中间层可展示。
      */
     public static String summary(Context c) {
         String s = url(c);
         if (s == null || s.isEmpty()) return "直连";
         String v = s.trim();
-        String low = v.toLowerCase(java.util.Locale.US);
-        boolean socks = low.startsWith("socks")
-                || low.startsWith("https://")
-                || (!v.contains("://") && !low.startsWith("http"));
-        if (socks) {
-            if (!v.contains("://")) v = "socks5://" + v;
-            String local = com.mintv.tv.data.LocalSocksProxy.localAddr();
-            if (local != null) {
-                return local + " → " + v;
-            }
-            return v + "（播放时转本地 http）";
-        }
+        if (v.isEmpty()) return "直连";
+        if (!v.contains("://")) v = "socks5://" + v;
         return v;
     }
 }

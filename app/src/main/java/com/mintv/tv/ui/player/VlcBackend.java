@@ -574,24 +574,14 @@ public final class VlcBackend implements PlaybackBackend {
         // 解码方式在这里给：Media 级选项，切换时不用重建 LibVLC
         media.addOption(":avcodec-hw=" + hwValue(hwMode));
         if (m == Mode.LIVE) media.addOption(":http-reconnect=true");
-        // 代理在 media 级设置。实例级的 --http-proxy 实测不生效，
-        // 而 media 级每次换源都会重新读，改代理不用重建 LibVLC。
-        // 目标已经是本机（mintv:// 自动包装后的地址）就不要再给 VLC 设代理。
+        // VLC 不再设代理。
         //
-        // 否则 VLC 会把「连 127.0.0.1:18899」这个请求也发给代理，
-        // 桥收到后又转给 127.0.0.1:18899 —— 无限套娃。
-        // 这种情况 HlsProxy 已经在内部处理代理了，VLC 只管连本地。
-        boolean localTarget = url != null
-                && (url.contains("127.0.0.1") || url.contains("localhost"));
-        if (!localTarget) {
-            String px = NetProxy.mediaProxyArg(appCtx);
-            if (px != null) {
-                media.addOption(":http-proxy=" + px);
-                android.util.Log.w("VLC", "media 级代理: " + px);
-            }
-        } else {
-            android.util.Log.w("VLC", "目标是本机，不设代理（避免套娃）");
-        }
+        // 配了代理时 playUrl 会把 http(s) 源自动包成 mintv://，VLC 只连
+        // 127.0.0.1；HlsProxy 用 Proxy.Type.SOCKS 直连代理，
+        // 重定向和分片天然全走代理。
+        //
+        // 之前试过实例级 --http-proxy 和 media 级 :http-proxy= 都不行 ——
+        // VLC 的 access_http 在内部 302 跳转时不带代理，跳转后就直连了。
         dropped = applyHeaders(media, headers);
         player.setMedia(media);
         media.release();

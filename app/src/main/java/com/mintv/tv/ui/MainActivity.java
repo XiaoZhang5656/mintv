@@ -4254,8 +4254,8 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         // 本机后端不包装。用解析 host 判断，不用字符串包含 ——
         // 包装后的 URL 里 u=<base64>，base64 完全可能恰好含 "127.0.0.1"。
         if (isLoopbackUrl(url)) return url;
-        String px = com.mintv.tv.data.NetProxy.mediaProxyArg(this);
-        if (px == null) return url;
+        // 只要有代理配置就包装。具体协议（socks5 / http）由 HlsProxy 自己处理。
+        if (com.mintv.tv.data.NetProxy.rawProxy(this) == null) return url;
         String wrapped = "mintv://" + url;
         android.util.Log.w("MinTV", "配了代理，包装: " + brief(wrapped));
         return wrapped;
@@ -8108,8 +8108,6 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         // 停掉自动刷新：它是匿名 Runnable，持有 Activity。
         // 不清掉的话 Activity 销毁了定时器还在跑，既泄漏又会在后台发请求。
         try { stopAutoRefresh(); } catch (Throwable ignored) { }
-        // 关掉 SOCKS→HTTP 本地桥，别让它在后台占端口
-        try { com.mintv.tv.data.LocalSocksProxy.stop(); } catch (Throwable ignored) { }
         // 退出时通知 tracker 摘掉自己。
         //
         // 不做的话要等 peer_timeout（30 秒）服务端才清理，
