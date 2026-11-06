@@ -640,6 +640,12 @@ public class MainActivity extends Activity implements FocusEngine.Host {
 
         ui.post(clockTick);
         ui.post(speedTick);
+        // 启动时记下当前订阅的 EPG 源，后面切订阅才能判断「要不要重载」
+        {
+            com.mintv.tv.data.SubscriptionStore.Sub act =
+                    com.mintv.tv.data.SubscriptionStore.active(this);
+            lastEpgSource = (act == null || act.epgUrl == null) ? "" : act.epgUrl.trim();
+        }
         loadEpgAsync();
     }
 
@@ -5006,6 +5012,23 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     }
 
     /** 切换订阅：设为当前 + 重拉源。 */
+    /** 上次加载 EPG 用的是哪个源（订阅的 epgUrl，空=全局默认）。 */
+    private String lastEpgSource = null;
+
+    /**
+     * 需要重载 EPG 吗。
+     *
+     * <p>EPG 是按频道名 / tvg-id 匹配的 —— 换了订阅但频道名一样的话，
+     * 同一份节目单照样能用，没必要重读 1MB 文件再解析一遍。
+     * 只有「新订阅指定了不同的 epgUrl」或者「还没加载过」才重来。
+     */
+    private boolean needReloadEpg(String subEpgUrl) {
+        String src = (subEpgUrl == null) ? "" : subEpgUrl.trim();
+        if (epg == null) return true;
+        if (lastEpgSource == null) return true;
+        return !src.equals(lastEpgSource);
+    }
+
     private void switchSubscription(String id) {
         com.mintv.tv.data.SubscriptionStore.setActive(this, id);
         com.mintv.tv.data.SubscriptionStore.Sub s = com.mintv.tv.data.SubscriptionStore.active(this);
@@ -5022,8 +5045,13 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             rebuildCategoryColumn();
             bindChannels();
             updateChannelFocus(0);
-            epg = null;
-            loadEpgAsync();
+            // EPG 只在源变了才重载 —— 换订阅但频道名相同时复用现有节目单，
+            // 省掉一次 1MB 文件的读盘 + 解析。
+            if (needReloadEpg(s.epgUrl)) {
+                epg = null;
+                lastEpgSource = (s.epgUrl == null) ? "" : s.epgUrl.trim();
+                loadEpgAsync();
+            }
             rebuildHelperSubs();
             osd.toast("已切换到 " + s.name + " · " + channels.size() + " 个频道");
             return;
@@ -5031,9 +5059,13 @@ public class MainActivity extends Activity implements FocusEngine.Host {
 
         // 没缓存（第一次切过去）：走原来的联网流程
         osd.toast("正在切换到 " + s.name + "…");
-        // 每个订阅绑自己的 EPG，切源必须重载节目单，否则还是上一家的
-        epg = null;
-        loadEpgAsync();
+        // 每个订阅可以绑自己的 EPG。但源没变就不用重载 ——
+        // EPG 是按频道名匹配的，同一份数据对同名频道照样有效。
+        if (needReloadEpg(s.epgUrl)) {
+            epg = null;
+            lastEpgSource = (s.epgUrl == null) ? "" : s.epgUrl.trim();
+            loadEpgAsync();
+        }
         SourceStore.saveBody(this, "#EXTM3U\n");
         // 清空列表让用户看到「正在加载」，而不是继续显示上一个订阅的频道
         // —— 那样点下去会播错台。
@@ -5663,23 +5695,36 @@ public class MainActivity extends Activity implements FocusEngine.Host {
 
     // ================= EPG =================
 
+    /**
+     * 加载 EPG。
+     *
+     * <p><b>读文件也必须在这条后台线程里</b>：之前 EpgStore.cached(this)
+     * 写在方法最前面、跑在主线程上 —— EPG 有 1MB 上下，走 SAF 读一次
+     * 要几百毫秒。而它每次切订阅都会被调用，这就是切订阅卡顿的主因。
+     *
+     * <p>方法名早就是 Async 了，但真正异步的只有「解析」，读盘一直在主线程。
+     */
     private void loadEpgAsync() {
-        final byte[] cached = EpgStore.cached(this);
-        final boolean fresh = EpgStore.isFresh(this);
-        if (cached != null) {
-            new Thread(new Runnable() {
-                @Override public void run() {
+        new Thread(new Runnable() {
+            @Override public void run() {
+                final byte[] cached;
+                final boolean fresh;
+                try {
+                    cached = EpgStore.cached(MainActivity.this);
+                    fresh = EpgStore.isFresh(MainActivity.this);
+                } catch (Throwable t) {
+                    android.util.Log.w("MinTV", "读 EPG 缓存失败", t);
+                    return;
+                }
+
+                if (cached != null) {
                     final EpgParser.Epg e = EpgParser.parse(cached);
                     ui.post(new Runnable() {
                         @Override public void run() { applyEpg(e); }
                     });
                 }
-            }, "epg-parse").start();
-        }
-        if (cached != null && fresh) return;
+                if (cached != null && fresh) return;
 
-        new Thread(new Runnable() {
-            @Override public void run() {
                 for (String url : EpgStore.SOURCES) {
                     byte[] raw = download(url);
                     if (raw == null || raw.length < 1024) continue;
