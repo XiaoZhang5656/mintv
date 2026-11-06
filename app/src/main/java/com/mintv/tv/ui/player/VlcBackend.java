@@ -390,14 +390,36 @@ public final class VlcBackend implements PlaybackBackend {
                 int n = im.getTrackCount();
                 for (int i = 0; i < n; i++) {
                     IMedia.Track t = im.getTrack(i);
-                    if (t instanceof IMedia.AudioTrack) {
+                    // 兜底取分辨率。
+                    //
+                    // getCurrentVideoTrack() 在 HEVC 流上经常一直返回
+                    // width/height = 0（解封装层没填），但解析后的媒体
+                    // 轨道列表里往往已经有真实尺寸。两条路都试一遍，
+                    // 能显示的概率明显提高。
+                    if (res == null && t instanceof IMedia.VideoTrack) {
+                        IMedia.VideoTrack vt = (IMedia.VideoTrack) t;
+                        if (vt.width > 0 && vt.height > 0) {
+                            res = vt.width + "x" + vt.height;
+                        }
+                    }
+                    // 不 break：视频轨道可能排在音频后面，提前跳出就
+                    // 拿不到尺寸了。只取第一条音频的信息，后面继续扫视频。
+                    if (t instanceof IMedia.AudioTrack && ac == null) {
                         IMedia.AudioTrack a = (IMedia.AudioTrack) t;
                         if (a.codec != null) ac = prettyCodec(a.codec);
                         if (a.channels > 0) chs = a.channels + "ch";
-                        break;
                     }
                 }
             }
+            // 拿不到分辨率时打一次原始值 —— 下一轮能直接看出是
+            // getCurrentVideoTrack 返回 0，还是根本没有视频轨道。
+            if (res == null) {
+                int cnt = (im == null) ? -1 : im.getTrackCount();
+                android.util.Log.w("VLC", "分辨率缺失: cur=" + (v == null ? "null"
+                        : (v.width + "x" + v.height))
+                        + " tracks=" + cnt);
+            }
+
             String sig = res + "|" + vc + "|" + ac + "|" + chs + "|" + fps + "|" + br;
             if (sig.equals(tracksSig)) return;   // 没变就不打扰 UI
             tracksSig = sig;
@@ -413,6 +435,10 @@ public final class VlcBackend implements PlaybackBackend {
         @Override public void run() { reportTracks(); }
     };
     private final Runnable tracksRetry2 = new Runnable() {
+        @Override public void run() { reportTracks(); }
+    };
+    /** 再补一次。HEVC 流解封装慢的时候 2 秒还不够。 */
+    private final Runnable tracksRetry3 = new Runnable() {
         @Override public void run() { reportTracks(); }
     };
 
@@ -575,8 +601,10 @@ public final class VlcBackend implements PlaybackBackend {
                         reportTracks();
                         main.removeCallbacks(tracksRetry1);
                         main.removeCallbacks(tracksRetry2);
+                        main.removeCallbacks(tracksRetry3);
                         main.postDelayed(tracksRetry1, 600);
                         main.postDelayed(tracksRetry2, 2000);
+                        main.postDelayed(tracksRetry3, 5000);
                         break;
                     default:
                         break;
