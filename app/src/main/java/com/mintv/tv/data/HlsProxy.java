@@ -70,7 +70,15 @@ public final class HlsProxy {
     public static byte[] fetch(String remoteUrl) {
         HttpURLConnection conn = null;
         try {
-            conn = (HttpURLConnection) new URL(remoteUrl).openConnection();
+            // 先带超时解析域名，把 IP 塞进 URL —— HttpURLConnection 内部的
+            // DNS 不受 setConnectTimeout 约束，网络切换那几秒能卡十几秒。
+            Net.Prepared np = Net.prepare(remoteUrl);
+            if (np == null) {
+                android.util.Log.w("HlsProxy", "域名解析失败/超时: " + remoteUrl);
+                return null;
+            }
+            conn = (HttpURLConnection) new URL(np.url).openConnection();
+            if (np.hostHeader != null) conn.setRequestProperty("Host", np.hostHeader);
             conn.setConnectTimeout(CONNECT_TIMEOUT);
             conn.setReadTimeout(READ_TIMEOUT);
             conn.setInstanceFollowRedirects(true);

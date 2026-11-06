@@ -248,11 +248,115 @@ public final class LocalSocksProxy {
     private static Socket openUpstream(String upHost, int upPort,
                                        String host, int port,
                                        boolean upstreamHttp) throws Exception {
-        Proxy.Type type = upstreamHttp ? Proxy.Type.HTTP : Proxy.Type.SOCKS;
-        Proxy px = new Proxy(type, new InetSocketAddress(upHost, upPort));
-        Socket s = new Socket(px);
-        s.connect(new InetSocketAddress(host, port), 10000);
+        Socket s = new Socket();
+        s.connect(new InetSocketAddress(upHost, upPort), 10000);
+        s.setSoTimeout(10000);
+        if (upstreamHttp) {
+            httpConnect(s, host, port);
+        } else {
+            socks5Connect(s, host, port);
+        }
+        s.setSoTimeout(0);
         return s;
+    }
+
+    /**
+     * 自己发 SOCKS5 握手，把<b>域名</b>交给代理解析（ATYP=0x03）。
+     *
+     * <p>为什么不用 {@code Socket(Proxy.Type.SOCKS)}：那个实现强制先在
+     * 本地解析域名，再把 IP 发过去。app 进程里的 DNS 偶尔会卡住，
+     * 10 秒连接预算全耗在解析上，最后报的是「连不上代理」——
+     * 实际代理好好的，是本地 DNS 拖死的。
+     *
+     * <p>把域名交给代理，语义等价于 curl 的 {@code socks5h://}，
+     * 完全跳过本地 DNS。
+     */
+    private static void socks5Connect(Socket s, String host, int port) throws Exception {
+        java.io.OutputStream o = s.getOutputStream();
+        java.io.InputStream in = s.getInputStream();
+
+        // 1) 握手：VER=5, NMETHODS=1, METHOD=0(无认证)
+        o.write(new byte[]{0x05, 0x01, 0x00});
+        o.flush();
+        byte[] r = new byte[2];
+        readFully(in, r, 2);
+        if (r[0] != 0x05) throw new java.io.IOException("非 SOCKS5 响应");
+        if (r[1] != 0x00) throw new java.io.IOException("代理要求认证 method=" + r[1]);
+
+        // 2) CONNECT，ATYP=0x03 表示后面跟的是域名
+        byte[] h = host.getBytes("UTF-8");
+        if (h.length > 255) throw new java.io.IOException("域名过长");
+        java.io.ByteArrayOutputStream req = new java.io.ByteArrayOutputStream(32);
+        req.write(0x05);          // VER
+        req.write(0x01);          // CMD = CONNECT
+        req.write(0x00);          // RSV
+        req.write(0x03);          // ATYP = 域名
+        req.write(h.length);
+        req.write(h);
+        req.write((port >> 8) & 0xFF);
+        req.write(port & 0xFF);
+        o.write(req.toByteArray());
+        o.flush();
+
+        // 3) 响应：VER REP RSV ATYP + BND.ADDR + BND.PORT
+        byte[] head = new byte[4];
+        readFully(in, head, 4);
+        if (head[0] != 0x05) throw new java.io.IOException("SOCKS5 响应版本错");
+        if (head[1] != 0x00) {
+            throw new java.io.IOException("SOCKS5 CONNECT 被拒 rep=" + head[1]
+                    + "（1=一般错误 3=网络不可达 4=主机不可达 5=连接被拒）");
+        }
+        int atyp = head[3] & 0xFF;
+        if (atyp == 0x01) {
+            skip(in, 4);
+        } else if (atyp == 0x03) {
+            int n = in.read();
+            if (n > 0) skip(in, n);
+        } else if (atyp == 0x04) {
+            skip(in, 16);
+        } else {
+            throw new java.io.IOException("SOCKS5 未知 ATYP=" + atyp);
+        }
+        skip(in, 2);   // BND.PORT
+    }
+
+    /** HTTP 代理：发 CONNECT 建隧道。 */
+    private static void httpConnect(Socket s, String host, int port) throws Exception {
+        java.io.OutputStream o = s.getOutputStream();
+        String req = "CONNECT " + host + ":" + port + " HTTP/1.1"
+                + "\r\n"
+                + "Host: " + host + ":" + port
+                + "\r\n\r\n";
+        o.write(req.getBytes("ISO-8859-1"));
+        o.flush();
+        java.io.InputStream in = s.getInputStream();
+        String status = readLine(in);
+        if (status == null || !status.contains(" 200")) {
+            throw new java.io.IOException("HTTP CONNECT 失败: " + status);
+        }
+        String line;
+        while ((line = readLine(in)) != null && !line.isEmpty()) {
+            // 丢弃剩余头
+        }
+    }
+
+    private static void readFully(java.io.InputStream in, byte[] buf, int n) throws java.io.IOException {
+        int got = 0;
+        while (got < n) {
+            int r = in.read(buf, got, n - got);
+            if (r <= 0) throw new java.io.IOException("连接中断");
+            got += r;
+        }
+    }
+
+    private static void skip(java.io.InputStream in, int n) throws java.io.IOException {
+        int left = n;
+        byte[] tmp = new byte[32];
+        while (left > 0) {
+            int r = in.read(tmp, 0, Math.min(tmp.length, left));
+            if (r <= 0) throw new java.io.IOException("连接中断");
+            left -= r;
+        }
     }
 
     /** CONNECT 隧道的双向复制。 */

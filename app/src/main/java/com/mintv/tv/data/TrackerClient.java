@@ -185,7 +185,15 @@ public final class TrackerClient {
     private JSONObject post(String path, JSONObject body) {
         HttpURLConnection conn = null;
         try {
-            conn = (HttpURLConnection) new URL(BASE + path).openConnection();
+            // 同 HlsProxy：先把 DNS 排掉，失败立刻放弃，别让心跳线程挂十几秒
+            String full = BASE + path;
+            Net.Prepared np = Net.prepare(full);
+            if (np == null) {
+                android.util.Log.w("Tracker", "tracker 解析失败: " + full);
+                return null;
+            }
+            conn = (HttpURLConnection) new URL(np.url).openConnection();
+            if (np.hostHeader != null) conn.setRequestProperty("Host", np.hostHeader);
             conn.setConnectTimeout(TIMEOUT);
             conn.setReadTimeout(TIMEOUT);
             conn.setRequestMethod("POST");
