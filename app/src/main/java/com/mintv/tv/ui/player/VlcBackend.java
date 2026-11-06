@@ -408,6 +408,14 @@ public final class VlcBackend implements PlaybackBackend {
         }
     }
 
+    /** 分辨率补报：Vout 那一刻解码器可能还没吐出尺寸。 */
+    private final Runnable tracksRetry1 = new Runnable() {
+        @Override public void run() { reportTracks(); }
+    };
+    private final Runnable tracksRetry2 = new Runnable() {
+        @Override public void run() { reportTracks(); }
+    };
+
     /** VLC 给的是 "h264"/"hevc"/"mp2a" 这种短名，换成台标栏能看的写法。 */
     private static String prettyCodec(String c) {
         if (c == null) return null;
@@ -556,8 +564,19 @@ public final class VlcBackend implements PlaybackBackend {
                             firstFrame = true;
                             if (cb != null) cb.onFirstFrame();
                         }
-                        // 出画之后轨道信息才准，这时上报给 OSD 底栏。
+                        // 出画之后轨道信息才准。
+                        //
+                        // 但 Vout 触发的那一刻 getCurrentVideoTrack() 经常
+                        // 还拿不到 width/height —— 解码器刚初始化，SPS/PPS
+                        // 还没解析完。实测 OSD 底栏一直缺分辨率就是这个原因。
+                        //
+                        // 所以立刻报一次（编码/音频通常已有），再在 600ms 和
+                        // 2s 各补一次，等解码器把尺寸吐出来。
                         reportTracks();
+                        main.removeCallbacks(tracksRetry1);
+                        main.removeCallbacks(tracksRetry2);
+                        main.postDelayed(tracksRetry1, 600);
+                        main.postDelayed(tracksRetry2, 2000);
                         break;
                     default:
                         break;

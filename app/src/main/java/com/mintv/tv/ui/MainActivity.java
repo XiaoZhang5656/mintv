@@ -2667,8 +2667,11 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         String cur = com.mintv.tv.data.SubscriptionStore.activeId(this);
         if (subId != null && subId.equals(cur)) return;      // 已经是它了
         switchSubscription(subId);
-        // 切完分类全变了，重建列表并把焦点落在第一个分类
-        rebuildCategoryColumn();
+        // 注意：**不要在这里再 rebuildCategoryColumn()**。
+        //
+        // switchSubscription 内部已经重建过一次（缓存命中和联网两条路径都有），
+        // 这里再来一遍等于把几百个 View 全销毁再造一次 —— 切订阅卡顿的主因。
+        // 只补一下订阅列自己的红点/计数就行。
         fillSubColumn();
         focus.setNavIndexSilently(Math.min(subItemCount, Math.max(0, navViews.size() - 1)));
         updateNavFocus(focus.navIndex());
@@ -5032,10 +5035,12 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         epg = null;
         loadEpgAsync();
         SourceStore.saveBody(this, "#EXTM3U\n");
+        // 清空列表让用户看到「正在加载」，而不是继续显示上一个订阅的频道
+        // —— 那样点下去会播错台。
+        //
+        // 这里只重建这一次；网络数据回来时 applyPlaylist 会再重建一次，
+        // 总共两次。之前 onSubClicked 里还有一次重复调用，加起来三次。
         applyPlaylist("#EXTM3U\n");
-        rebuildCategoryColumn();
-        bindChannels();
-        updateChannelFocus(0);
         fetchSourceAsync(s.url);
         rebuildHelperSubs();
     }
