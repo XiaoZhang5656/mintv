@@ -135,6 +135,37 @@ public final class NetProxy {
     }
 
     /**
+     * 给 media 级选项用的代理地址。
+     *
+     * <p>实例级的 {@code --http-proxy} 实测不生效（VLC 3.5.1 + LibVLC 构造），
+     * 改在 media 上加 {@code :http-proxy=} —— media 级优先级高于实例级，
+     * 而且换源时会重新设置，改代理不用重建 LibVLC。
+     *
+     * @return 形如 http://127.0.0.1:34647；null 表示不用代理（直连）
+     */
+    public static String mediaProxyArg(Context c) {
+        try {
+            String s = url(c);
+            if (s == null || s.isEmpty()) return null;
+            String v = s.trim();
+            String low = v.toLowerCase(java.util.Locale.US);
+            boolean needBridge = low.startsWith("socks")
+                    || low.startsWith("https://")
+                    || (!v.contains("://") && !low.startsWith("http"));
+            if (needBridge) {
+                if (!v.contains("://")) v = "socks5://" + v;
+                int lp = com.mintv.tv.data.LocalSocksProxy.ensure(v);
+                return lp > 0 ? "http://127.0.0.1:" + lp : null;
+            }
+            if (!v.contains("://")) v = "http://" + v;
+            return v;
+        } catch (Throwable t) {
+            android.util.Log.w("NetProxy", "mediaProxyArg 失败", t);
+            return null;
+        }
+    }
+
+    /**
      * 给界面显示的一句话。
      *
      * <p>SOCKS 会额外显示本地桥，让人一眼看出"填的是 socks，实际给播放器

@@ -567,6 +567,13 @@ public final class VlcBackend implements PlaybackBackend {
         // 解码方式在这里给：Media 级选项，切换时不用重建 LibVLC
         media.addOption(":avcodec-hw=" + hwValue(hwMode));
         if (m == Mode.LIVE) media.addOption(":http-reconnect=true");
+        // 代理在 media 级设置。实例级的 --http-proxy 实测不生效，
+        // 而 media 级每次换源都会重新读，改代理不用重建 LibVLC。
+        String px = NetProxy.mediaProxyArg(appCtx);
+        if (px != null) {
+            media.addOption(":http-proxy=" + px);
+            android.util.Log.w("VLC", "media 级代理: " + px);
+        }
         dropped = applyHeaders(media, headers);
         player.setMedia(media);
         media.release();
