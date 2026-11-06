@@ -24,7 +24,31 @@ import java.util.Map;
 public final class HlsProxy {
 
     /** 单次拉取上限，防止源返回巨物把内存吃爆。 */
-    private static final int MAX_BYTES = 8 * 1024 * 1024;
+    /**
+     * 单个分片的大小上限。
+     *
+     * <p>原来是 8MB，太低了 —— 实测移动那路源（ottrrs.hl.chinamobile.com）
+     * 每片 9.35MB，固定被这里判成「超过上限」直接丢弃，看起来像源坏了。
+     * 4K 源的 HLS 分片常见 10~20MB。
+     *
+     * <p>放宽到 24MB 是「防止失控」而不是「限制正常内容」：
+     * 正常分片不会到这个量级，真超了说明拿到的不是分片（比如整段点播文件）。
+     */
+    private static final int MAX_BYTES = 24 * 1024 * 1024;
+
+    /**
+     * 同时在拉的分片数上限。
+     *
+     * <p>为什么必须限：RemoteServer 的线程池是 cached(2..32) +
+     * SynchronousQueue，VLC 一并发预取就开新线程。每个线程都要把整片
+     * 读进 byte[]，9.35MB 一片 —— 32 个线程同时跑就是 300MB 瞬时内存，
+     * 1G 盒子上直接 LMK。
+     *
+     * <p>限 3 够用：HLS 播放通常只预取 2~3 片，再多也不会更快，
+     * 只是把带宽和内存同时摊薄。
+     */
+    private static final java.util.concurrent.Semaphore FETCH_LIMIT =
+            new java.util.concurrent.Semaphore(3, true);
     private static final int CONNECT_TIMEOUT = 8000;
     private static final int READ_TIMEOUT = 15000;
 
@@ -78,7 +102,15 @@ public final class HlsProxy {
      */
     public static byte[] fetch(String remoteUrl) {
         HttpURLConnection conn = null;
+        boolean acquired = false;
         try {
+            // 限并发：拿不到令牌就等，等不到就让调用方失败重试。
+            // 5 秒是单个分片能容忍的上限，再久 VLC 也已经判超时了。
+            acquired = FETCH_LIMIT.tryAcquire(5, java.util.concurrent.TimeUnit.SECONDS);
+            if (!acquired) {
+                android.util.Log.w("HlsProxy", "并发已满，跳过本次拉取: " + remoteUrl);
+                return null;
+            }
             // 配了代理就走代理，否则直连 —— 没配代理时行为跟以前完全一样。
             //
             // 这里用**原始配置**，不走本地桥：
@@ -139,7 +171,10 @@ public final class HlsProxy {
             while ((n = in.read(buf)) > 0) {
                 total += n;
                 if (total > MAX_BYTES) {
-                    android.util.Log.w("HlsProxy", "超过上限 " + MAX_BYTES + " 字节，放弃");
+                    // 把实际大小也打出来 —— 之前只说"超过上限"，看不出超了多少，
+                    // 也判断不了是分片太大还是拿错了东西
+                    android.util.Log.w("HlsProxy", "分片超过上限 " + MAX_BYTES
+                            + " 字节，已读到 " + total + "，放弃: " + remoteUrl);
                     return null;
                 }
                 bos.write(buf, 0, n);
@@ -151,6 +186,7 @@ public final class HlsProxy {
             return null;
         } finally {
             if (conn != null) try { conn.disconnect(); } catch (Throwable ignored) { }
+            if (acquired) try { FETCH_LIMIT.release(); } catch (Throwable ignored) { }
         }
     }
 
