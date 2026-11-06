@@ -121,26 +121,12 @@ public final class HlsProxy {
             // 绕一层 HTTP 桥反而出问题 —— 桥会把 HttpURLConnection 写好的
             // Host 头（目标域名）原样转给 CDN，而移动 CDN 只认 IP 形式的 Host，
             // 于是 302 之后的每一跳都 404。
-            java.net.Proxy px = null;
-            String proxyUrl = (ctxRef == null) ? null : ctxRef.proxy();
-            if (proxyUrl != null && !proxyUrl.isEmpty()) {
-                try {
-                    java.net.URI pu = new java.net.URI(proxyUrl);
-                    String ph = pu.getHost();
-                    int pp = pu.getPort();
-                    String scheme = pu.getScheme() == null ? ""
-                            : pu.getScheme().toLowerCase(java.util.Locale.US);
-                    if (ph != null && pp > 0) {
-                        java.net.Proxy.Type type = scheme.startsWith("socks")
-                                ? java.net.Proxy.Type.SOCKS
-                                : java.net.Proxy.Type.HTTP;
-                        px = new java.net.Proxy(type, new java.net.InetSocketAddress(ph, pp));
-                        android.util.Log.w("HlsProxy", "代理 " + type + " " + ph + ":" + pp);
-                    }
-                } catch (Throwable ignored) { }
-            }
-
+            // 代理解析统一走 resolveProxy()。
+            // 之前这段是内联的，openStream() 复制时漏了参数，
+            // 结果 m3u8 走代理、ts 直连，抓包表现为打到 CDN 后超时。
+            java.net.Proxy px = resolveProxy();
             if (px != null) {
+                android.util.Log.w("HlsProxy", "代理 " + px.type() + " " + px.address());
                 // 走代理时**不能**把域名换成 IP —— 代理要按域名去连目标。
                 // 而且本地桥自己做过 SOCKS5 握手，不依赖本地 DNS。
                 conn = (HttpURLConnection) new URL(remoteUrl).openConnection(px);
@@ -291,6 +277,32 @@ public final class HlsProxy {
      *
      * @return 会话；失败返回 null
      */
+    /**
+     * 按当前配置解析出 java.net.Proxy。
+     *
+     * <p>抽出来是因为 fetch() 和 openStream() 都要用 —— 之前 openStream()
+     * 漏了这一步，读 m3u8 走代理、读 ts 直连，抓包表现为请求打到 CDN IP
+     * 后 3 秒超时，界面报 502。
+     */
+    private static java.net.Proxy resolveProxy() {
+        try {
+            String proxyUrl = (ctxRef == null) ? null : ctxRef.proxy();
+            if (proxyUrl == null || proxyUrl.isEmpty()) return null;
+            java.net.URI pu = new java.net.URI(proxyUrl);
+            String ph = pu.getHost();
+            int pp = pu.getPort();
+            String scheme = pu.getScheme() == null ? ""
+                    : pu.getScheme().toLowerCase(java.util.Locale.US);
+            if (ph == null || pp <= 0) return null;
+            java.net.Proxy.Type type = scheme.startsWith("socks")
+                    ? java.net.Proxy.Type.SOCKS
+                    : java.net.Proxy.Type.HTTP;
+            return new java.net.Proxy(type, new java.net.InetSocketAddress(ph, pp));
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
     public static Session openStream(String remoteUrl) {
         boolean acquired = false;
         HttpURLConnection conn = null;
@@ -300,10 +312,20 @@ public final class HlsProxy {
                 android.util.Log.w("HlsProxy", "并发已满，跳过: " + remoteUrl);
                 return null;
             }
-            Net.Prepared np = Net.prepare(remoteUrl);
-            if (np == null) return null;
-            conn = (HttpURLConnection) new URL(np.url).openConnection();
-            if (np.hostHeader != null) conn.setRequestProperty("Host", np.hostHeader);
+            java.net.Proxy px = resolveProxy();
+            if (px != null) {
+                // 走代理必须用原始 URL：域名交给代理解析。
+                // 换成 IP 会让代理按 IP 直连，302 之后拿到的又是 IP，
+                // 后续每一跳都失去域名的意义。
+                conn = (HttpURLConnection) new URL(remoteUrl).openConnection(px);
+                android.util.Log.w("HlsProxy", "流式代理 " + px.type()
+                        + " " + px.address());
+            } else {
+                Net.Prepared np = Net.prepare(remoteUrl);
+                if (np == null) return null;
+                conn = (HttpURLConnection) new URL(np.url).openConnection();
+                if (np.hostHeader != null) conn.setRequestProperty("Host", np.hostHeader);
+            }
             conn.setConnectTimeout(CONNECT_TIMEOUT);
             conn.setReadTimeout(READ_TIMEOUT);
             conn.setInstanceFollowRedirects(true);
