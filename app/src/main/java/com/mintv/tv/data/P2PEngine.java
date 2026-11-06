@@ -99,6 +99,17 @@ public final class P2PEngine {
     /** 服务器下发的阈值，默认值只在第一次 join 之前有效。 */
     private volatile String p2pSecret = "";
 
+    /**
+     * 分片传输密钥。
+     *
+     * <p>优先用 .so 里的（反编译 dex 拿不到），so 不可用时回落到
+     * tracker 下发的 p2p_secret 前 16 字节。两者都没有就不加密。
+     */
+    private volatile byte[] pieceKey = null;
+
+    /** 供 RemoteServer 加密出口分片用。 */
+    public byte[] pieceKey() { return pieceKey; }
+
     /** 给分片请求算签名；没拿到 secret 时返回空串（服务端会拒）。 */
     public String p2pSecret() { return p2pSecret; }
 
@@ -187,6 +198,18 @@ public final class P2PEngine {
                             cache.setLimits(cfg.memMaxSegs, cfg.diskMaxSegs,
                                     cfg.memMaxBytes, cfg.diskMaxBytes);
                             p2pSecret = cfg.p2pSecret == null ? "" : cfg.p2pSecret;
+                            // 传输密钥：native 优先，回落 tracker
+                            byte[] nk = PieceCrypto.nativeOrNull();
+                            if (nk == null) {
+                                nk = PieceCrypto.parseKey(
+                                        cfg.p2pSecret == null ? "" : cfg.p2pSecret);
+                            }
+                            if (nk != null) {
+                                pieceKey = nk;
+                                android.util.Log.i("P2P", "传输加密已启用，key="
+                                        + PieceCrypto.fingerprint(nk)
+                                        + (PieceCrypto.nativeAvailable() ? " (native)" : " (tracker)"));
+                            }
                             flushStats();
                             P2PEngine.this.minBufferSegs = cfg.minBufferSegs;
                             P2PEngine.this.uploadMinSegs = cfg.uploadMinSegs;
@@ -321,6 +344,13 @@ public final class P2PEngine {
             byte[] data = fetchFromPeer(p, seq);
             if (data != null) {
                 cache.put(seq, data);
+                // peer 传过来的是密文，先解
+                byte[] plain = PieceCrypto.process(pieceKey, seq, data);
+                if (plain == null) {
+                    android.util.Log.w("P2P", "解密失败 seq=" + seq + " from " + key);
+                    return null;
+                }
+                data = plain;
                 android.util.Log.w("P2P", "直连 " + key + " 拿到第 " + seq + " 片");
                 statDownBytes += data.length;
                 statDownReq++;

@@ -533,17 +533,26 @@ public final class RemoteServer {
                 send(out, 404, "text/plain; charset=utf-8", "no piece");
                 return;
             }
-            // 带上校验值，对方拿到能自检
+            // 出口加密：peer 收到的是密文，本地缓存里仍是明文。
+            // key 由 PieceCrypto 统一管理（native 优先，回落 tracker）。
+            byte[] outData = piece.data;
+            try {
+                byte[] pk = com.mintv.tv.data.P2PEngine.get(appCtx).pieceKey();
+                byte[] enc = com.mintv.tv.data.PieceCrypto.process(pk, seq, piece.data);
+                if (enc != null && enc.length == piece.data.length) outData = enc;
+            } catch (Throwable ignored) { }
+
+            // Content-Length 要按加密后的长度写
             String head = "HTTP/1.1 200 OK\r\n"
                     + "Content-Type: application/octet-stream\r\n"
-                    + "Content-Length: " + piece.data.length + "\r\n"
+                    + "Content-Length: " + outData.length + "\r\n"
                     + "X-Piece-SHA256: " + (piece.sha256 == null ? "" : piece.sha256) + "\r\n"
                     + "Cache-Control: no-store\r\n"
                     + "Connection: close\r\n\r\n";
             out.write(head.getBytes("UTF-8"));
-            out.write(piece.data);
+            out.write(outData);
             // 记上传量，心跳时报给 tracker
-            try { p2p.onServed(piece.data.length); } catch (Throwable ignored) { }
+            try { p2p.onServed(outData.length); } catch (Throwable ignored) { }
             out.flush();
             return;
         }
