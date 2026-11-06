@@ -3491,7 +3491,8 @@ public class MainActivity extends Activity implements FocusEngine.Host {
      */
     private void rebuildCategories() {
         List<DemoData.Category> all = DemoData.toCategories(playlist);
-        if (!all.isEmpty() && !FAV_CATEGORY.equals(all.get(0).name)) {
+        // 收藏为空时不占一行 —— 点进去是空的，纯粹多一个焦点停靠点。
+        if (!all.isEmpty() && !FAV_CATEGORY.equals(all.get(0).name) && !favorites.isEmpty()) {
             all.add(0, new DemoData.Category(FAV_CATEGORY, favorites.size(), 0));
         }
         List<DemoData.Category> keep = new ArrayList<>();

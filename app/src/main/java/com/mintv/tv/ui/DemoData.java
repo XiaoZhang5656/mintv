@@ -29,7 +29,21 @@ public final class DemoData {
     /** 把解析结果转成左侧导航用的分类。图标按名字粗略匹配，匹配不到就走默认字形。 */
     public static List<Category> toCategories(PlaylistParser.Playlist pl) {
         List<Category> l = new ArrayList<>();
-        l.add(new Category("全部", pl.all.size(), 0));
+        // 「全部」什么时候是多余的：
+        //   只有 1 个分组，且这个分组装了全部频道 —— 那它和「全部」内容一样，
+        //   两行并排显示纯属占地方。
+        //
+        // 注意不能只看分组数。常见情况是 84 个频道里 80 个带「咪咕」分组、
+        // 4 个没有分组标签，此时 byGroup 也只有 1 个 key，但「全部」(84)
+        // 和「咪咕」(80) 不一样，「全部」仍然有用。
+        boolean allRedundant = false;
+        if (pl.byGroup.size() == 1) {
+            List<PlaylistParser.Channel> only = pl.byGroup.values().iterator().next();
+            allRedundant = (only.size() == pl.all.size());
+        }
+        if (!allRedundant) {
+            l.add(new Category("全部", pl.all.size(), 0));
+        }
         for (Map.Entry<String, List<PlaylistParser.Channel>> e : pl.byGroup.entrySet()) {
             l.add(new Category(e.getKey(), e.getValue().size(), glyphOf(e.getKey())));
         }
