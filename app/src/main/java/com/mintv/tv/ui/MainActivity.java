@@ -3183,6 +3183,10 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     /** 按分类名重新算 channels 并重建列表（收藏页会动态变化）。 */
     private void applyCategoryChannels(int catIndex) {
         if (categories == null || catIndex < 0 || catIndex >= categories.size()) return;
+        // playlist 可能为 null —— 删完所有订阅时会置空（confirmDeleteSub 里），
+        // 之后如果用户还能点到分类，这里直接 NPE。manageableCategories()
+        // 早就有这个判断，这里漏了。
+        if (playlist == null || playlist.all == null) return;
         String name = categories.get(catIndex).name;
         List<PlaylistParser.Channel> list;
         if (FAV_CATEGORY.equals(name)) {
@@ -8248,6 +8252,14 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         super.onDestroy();
         ui.removeCallbacks(clockTick);
         ui.removeCallbacks(speedTick);
+        // 这三个都是自续命的 Runnable（内部再 postDelayed 自己），
+        // 不清掉的话 Activity 销毁后还在跑，既泄漏 Activity 又白耗电。
+        //   playbackWatchdog   等起播超时
+        //   autoRefreshLoop    订阅自动刷新
+        //   netCheckLoop       NAT 类型定时重测
+        try { ui.removeCallbacks(playbackWatchdog); } catch (Throwable ignored) { }
+        try { stopAutoRefresh(); } catch (Throwable ignored) { }
+        try { ui.removeCallbacks(netCheckLoop); } catch (Throwable ignored) { }
         if (remote != null) {
             remote.stop();
             remote = null;
