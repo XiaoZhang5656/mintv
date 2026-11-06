@@ -40,15 +40,15 @@ android {
         // 方法数已超 64K（media3 + libvlc + zxing + androidx.core）
         multiDexEnabled true
         targetSdk 34
-        versionCode 237
-        versionName "0.3.41"
+        versionCode 238
+        versionName "0.3.42"
 
         // native 只编 32 位 —— 跟下面的 splits 一致。
         // 注意：不能写在外层 ndk {} 里，那会跟 splits 冲突；
         // 放在 externalNativeBuild.cmake 下是允许的。
         externalNativeBuild {
             cmake {
-                abiFilters 'armeabi-v7a', 'arm64-v8a'
+                abiFilters 'armeabi-v7a'
                 arguments '-DANDROID_STL=none'
                 cFlags '-Os'
             }

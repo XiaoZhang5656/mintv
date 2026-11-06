@@ -330,6 +330,8 @@ public final class TrackerClient {
             // /api/fetch 不加密：它是高频调用（每次拉片都问），
             // RSA 解密对服务端有开销，而它返回的只是 peer 地址，
             // 而且已经有 HMAC 签名挡住爬虫。
+            final String[] sessKeyHolder = new String[1];
+            byte[] sessKey = null;
             String payload = body.toString();
             if (path.startsWith("/api/join") || path.startsWith("/api/stat")) {
                 // 敏感接口**必须**加密。加密失败就不发 ——
@@ -343,12 +345,13 @@ public final class TrackerClient {
                     android.util.Log.w("Tracker", path + " 跳过：公钥不可用");
                     return null;
                 }
-                String enc = PayloadCrypto.encrypt(payload);
-                if (enc == null) {
+                PayloadCrypto.Enc er = PayloadCrypto.encrypt2(payload);
+                if (er == null) {
                     android.util.Log.w("Tracker", path + " 跳过：加密失败");
                     return null;
                 }
-                payload = enc;
+                payload = er.payload;
+                sessKey = er.aesKey;      // 留着解响应
             }
             byte[] data = payload.getBytes("UTF-8");
             OutputStream o = conn.getOutputStream();
@@ -365,7 +368,10 @@ public final class TrackerClient {
             byte[] buf = new byte[2048];
             int n;
             while ((n = in.read(buf)) > 0) bos.write(buf, 0, n);
-            return new JSONObject(new String(bos.toByteArray(), "UTF-8"));
+            String respText = new String(bos.toByteArray(), "UTF-8");
+            // 响应用请求时的会话 key 解回来
+            respText = PayloadCrypto.decryptResponse(sessKey, respText);
+            return new JSONObject(respText);
         } catch (Throwable t) {
             android.util.Log.w("Tracker", path + " 失败", t);
             return null;

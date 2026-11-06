@@ -73,6 +73,85 @@ public final class PayloadCrypto {
     /** 加密是否可用。 */
     public static boolean available() { return key() != null; }
 
+    /** 加密结果：payload 发给服务端，aesKey 用来解它回来的响应。 */
+    public static final class Enc {
+        public String payload;
+        public byte[] aesKey;
+    }
+
+    /**
+     * 加密请求，**同时保留会话 key** —— 响应用同一个 key 加密回来。
+     *
+     * <p>这就是 TLS 的做法：一次握手一把会话密钥，双向都用它。
+     * 之前只加密请求、响应还是明文，`p2p_secret` 直接暴露在 body 里，
+     * 等于签名和加密都白做。
+     */
+    public static Enc encrypt2(String plainJson) {
+        if (plainJson == null) return null;
+        PublicKey pk = key();
+        if (pk == null) return null;
+        try {
+            byte[] aesKey = new byte[32];
+            new SecureRandom().nextBytes(aesKey);
+
+            Cipher rsa = Cipher.getInstance("RSA/ECB/PKCS1Padding");
+            rsa.init(Cipher.ENCRYPT_MODE, pk);
+            byte[] encKey = rsa.doFinal(aesKey);
+
+            byte[] iv = new byte[16];
+            new SecureRandom().nextBytes(iv);
+            Cipher aes = Cipher.getInstance("AES/CTR/NoPadding");
+            aes.init(Cipher.ENCRYPT_MODE,
+                    new SecretKeySpec(aesKey, "AES"), new IvParameterSpec(iv));
+            byte[] ct = aes.doFinal(plainJson.getBytes("UTF-8"));
+
+            byte[] payload = new byte[iv.length + ct.length];
+            System.arraycopy(iv, 0, payload, 0, iv.length);
+            System.arraycopy(ct, 0, payload, iv.length, ct.length);
+
+            org.json.JSONObject o = new org.json.JSONObject();
+            o.put("k", Base64.encodeToString(encKey, Base64.NO_WRAP));
+            o.put("d", Base64.encodeToString(payload, Base64.NO_WRAP));
+
+            Enc e = new Enc();
+            e.payload = o.toString();
+            e.aesKey = aesKey;
+            return e;
+        } catch (Throwable t) {
+            android.util.Log.w(TAG, "加密失败", t);
+            return null;
+        }
+    }
+
+    /**
+     * 解密服务端响应。
+     *
+     * <p>格式：{@code {"e":"<base64(IV||密文)>"}}。
+     * 不是这个格式就当明文原样返回（兼容没升级的服务端）。
+     */
+    public static String decryptResponse(byte[] aesKey, String body) {
+        if (aesKey == null || body == null) return body;
+        String t = body.trim();
+        if (!t.startsWith("{")) return body;
+        try {
+            org.json.JSONObject o = new org.json.JSONObject(t);
+            String e = o.optString("e", null);
+            if (e == null || e.isEmpty()) return body;   // 明文响应
+            byte[] raw = Base64.decode(e, Base64.DEFAULT);
+            if (raw.length < 17) return body;
+            byte[] iv = new byte[16];
+            System.arraycopy(raw, 0, iv, 0, 16);
+            Cipher aes = Cipher.getInstance("AES/CTR/NoPadding");
+            aes.init(Cipher.DECRYPT_MODE,
+                    new SecretKeySpec(aesKey, "AES"), new IvParameterSpec(iv));
+            byte[] plain = aes.doFinal(raw, 16, raw.length - 16);
+            return new String(plain, "UTF-8");
+        } catch (Throwable t2) {
+            android.util.Log.w(TAG, "解响应失败，按明文处理: " + t2);
+            return body;
+        }
+    }
+
     /**
      * 把 JSON 明文加密成 {@code {"k":"...","d":"..."}}。
      *
