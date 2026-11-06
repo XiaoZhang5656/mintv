@@ -82,7 +82,8 @@ public final class HlsProxy {
      * @return 改写后的文本；失败返回 null
      */
     public static String fetchAndRewrite(String remoteUrl) {
-        byte[] raw = fetch(remoteUrl);
+        // 列表不抢令牌，避免分片占满并发时刷不出播放列表
+        byte[] raw = fetch(remoteUrl, false);
         if (raw == null) return null;
         String text;
         try {
@@ -101,6 +102,17 @@ public final class HlsProxy {
      * 拉取任意地址的原始字节（分片、密钥都用这个）。
      */
     public static byte[] fetch(String remoteUrl) {
+        return fetch(remoteUrl, true);
+    }
+
+    /**
+     * @param limit 是否受 {@link #FETCH_LIMIT} 约束。
+     *
+     * <p>播放列表（1~2KB）不该抢分片的令牌 —— 分片占满 3 个槽位时，
+     * VLC 每 10 秒要刷新的 m3u8 会等满 5 秒然后失败，表现就是播放中途断流。
+     * 限流的目的是控制 9MB 分片的并发内存，拿去限制 2KB 的列表没有意义。
+     */
+    private static byte[] fetch(String remoteUrl, boolean limit) {
         HttpURLConnection conn = null;
         boolean acquired = false;
         // 是否成功读完。只有读完了才让连接回池；失败时直接 disconnect，
@@ -109,10 +121,12 @@ public final class HlsProxy {
         try {
             // 限并发：拿不到令牌就等，等不到就让调用方失败重试。
             // 5 秒是单个分片能容忍的上限，再久 VLC 也已经判超时了。
-            acquired = FETCH_LIMIT.tryAcquire(5, java.util.concurrent.TimeUnit.SECONDS);
-            if (!acquired) {
-                android.util.Log.w("HlsProxy", "并发已满，跳过本次拉取: " + remoteUrl);
-                return null;
+            if (limit) {
+                acquired = FETCH_LIMIT.tryAcquire(5, java.util.concurrent.TimeUnit.SECONDS);
+                if (!acquired) {
+                    android.util.Log.w("HlsProxy", "并发已满，跳过本次拉取: " + remoteUrl);
+                    return null;
+                }
             }
             // 配了代理就走代理，否则直连 —— 没配代理时行为跟以前完全一样。
             //
