@@ -26,11 +26,11 @@
 ### 脚本放哪
 
 ```
-设置 → 脚本目录     选一个外部目录（SAF），文件管理器可见
-                    不选则用 Android/data/<包名>/files/scripts
+设置 → 存储目录   选一个外部目录（SAF），文件管理器可见
+                  默认 /sdcard/mintv，脚本放它的 scripts/ 子目录
 ```
 
-目录下的 `.js` 文件自动加载，`lib/` 子目录放公共模块（不会被当成路由脚本）。
+`.js` 文件放进去自动加载，`lib/` 子目录放公共模块（不会被当成路由脚本）。
 
 ### 引擎限制
 
@@ -38,62 +38,106 @@
 
 ```
 没有 require('fs') / require('https') / Buffer / process
-没有 setTimeout
+没有 setTimeout / setInterval
 第三方库只能把源码打包进脚本
 ```
 
-而且**不能写 async/await** —— 引擎不驱动微任务，`async` 函数返回的 Promise 永远 pending。
+**不能写 async/await** —— 引擎不驱动微任务，`async` 函数返回的 Promise 永远 pending。
 所有 API 都是同步返回。
+
+**不能写无界循环**。QuickJS 的 Java 绑定没有暴露中断接口，脚本里
+`while(true){}` 会永久占死一个线程，只能靠线程池隔离，事后在
+`/api/logs` 里看到「执行耗时 xxxx ms」才发现。要循环就带 break 条件。
 
 ### 声明
 
 ```js
-exports.name     = "央视系";      // 显示名
-exports.guard    = false;         // true = 全局守卫，所有请求都先过它
-exports.priority = 100;           // 越大越先匹配，默认 0
+exports.name     = "咪咕直播";     // 显示名，默认用文件名
+exports.priority = 100;            // 越大越先匹配，默认 0
 
-// 路由：四种写法可以混用
-exports.path     = "/cctv/:id";                    // 单条
-exports.path     = ["/a/:id", "/b/:id"];           // 数组，共用 main
-exports.host     = ["*.example.com"];              // 按域名
-exports.urlRegex = "\\.m3u8";
+// 路由
+exports.path = "/cctv/:id";                  // 单条
+exports.path = ["/a/:id", "/b.m3u"];         // 数组，共用 main
+exports.host = ["*.example.com"];            // 按域名
 
-// 或者逐条配置
-exports.routes = [
-    { path: "/demo/:id" },
-    { path: "/demo/hd/:id", handler: "mainHd", priority: 90 },
-    { host: ["*.cdn.com"], headers: { "Referer": "..." } },   // 纯请求头，不跑 JS
-];
+// 订阅清单入口：声明后框架自动把它注册成一个订阅源，
+// 用户不用手动往订阅里加 http://127.0.0.1:18899/xxx.m3u
+exports.list = "/migu.m3u";
 ```
 
-### 三种处理函数
+`:id` 这种路径参数会进 `item.id`，也会进 `item.params.id`。
+
+### 入口函数
+
+**必须挂在 exports 上**：
 
 ```js
-// 1. main —— 返回播放地址（302 给播放器）
-function main(item) {
+exports.main = function (item) {
     return "https://cdn/x.m3u8";
-}
-
-// 2. handler —— 自己造内容
-function handler(req) {
-    return {
-        status: 200,
-        contentType: "application/vnd.apple.mpegurl",
-        body: "#EXTM3U\n..."
-    };
-}
-
-// 3. proxy —— 返回真实地址，由框架拉取并转发二进制
-function proxy(req) {
-    return {
-        url: decrypt(req.params.token),
-        headers: { "Referer": "https://site/" },
-        proxy: "socks5://10.0.0.1:1080"      // 可选，不填用全局设置
-    };
-}
+};
 ```
 
-`proxy` 模式的关键：**播放器永远不知道真实地址**。适合分片要解密、要带防盗链、要走代理的场景。
+写 `function main(item){}` 这种全局函数**不生效**，调用时会报
+`UnsupportedOperationException`。
+
+### item 里有什么
+
+```js
+item.url      // 完整请求路径 + query，如 "/migu/1?x=2"
+item.path     // 只有路径，如 "/migu/1"
+item.id       // 第一个路径参数（:id 的值）
+item.params   // 路径参数 + query 参数，都是字符串
+item.headers  // 这次请求的真实请求头（Referer / Cookie / UA 等）
+item.name     // 脚本名（exports.name）
+item.pageUrl  // 完整地址 http://127.0.0.1:<port><path>?<query>
+```
+
+### 返回值
+
+```js
+// 1. 直接给地址（302 给播放器）
+return "https://cdn/x.m3u8";
+return { url: "https://cdn/x.m3u8", headers: { "Referer": "..." } };
+
+// 2. 多候选，框架按顺序试
+return { urls: ["https://a/x.m3u8", "https://b/x.m3u8"] };
+
+// 3. 自己造内容（清单入口、加密播放列表都走这条）
+return {
+    status: 200,
+    contentType: "application/vnd.apple.mpegurl",
+    body: "#EXTM3U\n#EXTINF:-1,台\nhttp://..."
+};
+
+// 4. 解析失败
+return null;
+```
+
+可选字段：
+
+```
+headers        请求头对象，播放器会带上
+ttlSec         结果缓存多少秒。声明后同样的 path+query 在有效期内直接返回缓存，
+               不再执行脚本 —— 签名类源（每次要 800ms）靠这个才不卡
+proxy          这次转发走哪个代理，如 "socks5://ip:port"
+rewriteSegments  true 时框架会把 m3u8 里的分片改写成绝对地址
+```
+
+### 代理模式
+
+脚本声明 `exports.proxy`（有这个名字就行），框架改用 proxy 入口：
+
+```js
+exports.proxy = function (req) {
+    return {
+        url: decrypt(req.params.token),        // 真实地址
+        headers: { "Referer": "https://site/" },
+        proxy: "socks5://10.0.0.1:1080"        // 可选
+    };
+};
+```
+
+**播放器永远不知道真实地址**，适合分片要解密、要带防盗链、要走代理的场景。
 
 ### 能用的 API
 
@@ -108,58 +152,59 @@ fetch(url, {
 
 md5(text)
 storage.get(key) / set(key, value, ttlMs) / delete(key)
-console.log / info / warn / error
-require("./lib/util.js")        // CommonJS，同一文件只执行一次
-
-// 标准 JS：JSON / Math / Date / RegExp / Map / Set / URL 等
+console.log / info / warn / error        // 写进 /api/logs
+require("./lib/util.js")                 // CommonJS，同一文件只执行一次
 ```
+
+`fetch` 内部是 `HttpURLConnection`，**会自动跟随 302**，`r.url` 是最终地址。
 
 框架**不塞任何默认请求头** —— 有些源恰恰不允许带 UA。带什么头是脚本的决定。
 
-### 返回值
+### 看日志
+
+脚本里 `console.log` 的输出不进 logcat，走内存环形缓冲：
+
+```
+GET  http://127.0.0.1:18899/api/logs          最近 500 条
+DELETE /api/logs                              清空
+GET  /scripts                                 手机助手里的脚本管理页
+```
+
+### 完整例子
 
 ```js
-return "https://cdn/x.m3u8";                    // 地址
-return { url, headers, ttlSec, proxy };         // 带请求头
-return { urls: [...] };                         // 多个候选
-return "#EXTM3U\n..." ;                         // m3u8 文本
-return { status, contentType, body };           // 自定义响应
-return null;                                    // 解析失败
-```
+exports.name = "示例源";
+exports.path = ["/demo/:id", "/demo.m3u"];
+exports.list = "/demo.m3u";
 
-### 在订阅里用
+exports.main = function (item) {
+    // 清单入口：没带 id 就返回全部频道
+    if (!item.id) {
+        var lines = ["#EXTM3U"];
+        lines.push("#EXTINF:-1,CCTV-1");
+        lines.push(item.pageUrl.replace("/demo.m3u", "/demo/1"));
+        return {
+            status: 200,
+            contentType: "application/vnd.apple.mpegurl",
+            body: lines.join("\n")
+        };
+    }
 
-```
-CCTV-3,http://127.0.0.1:18899/cctv/cctv3
-```
-
-`18899` 是手机助手的端口（被占用时自动切 18900，见设置页显示的地址）。
-
-### 示例：签名 + 请求头
-
-```js
-exports.name = "某源";
-exports.path = "/src/:id";
-
-const sign = require("./lib/sign.js");
-
-function main(item) {
-    const r = fetch("https://api.example.com/live?id=" + item.id, {
-        headers: {
-            "Referer": "https://www.example.com/",
-            "User-Agent": "Mozilla/5.0 (Linux; Android 12)"
-        }
+    // 单个频道：解析出播放地址
+    var r = fetch("https://api.example.com/live?id=" + item.id, {
+        headers: { "Referer": item.headers["Referer"] || "https://example.com/" }
     });
-    if (!r.ok) return null;
-
-    const data = r.json();
-    const ts = String(Date.now()).substring(0, 10);
+    if (!r.ok) {
+        console.warn("上游 " + r.status);
+        return null;
+    }
+    var j = r.json();
     return {
-        url: data.url + "&t=" + ts + "&sign=" + sign.make(item.id, ts, data.salt),
-        headers: { "Referer": "https://www.example.com/" },
-        ttlSec: 60
+        url: j.url,
+        headers: { "Referer": "https://example.com/" },
+        ttlSec: 600          // 这个地址 10 分钟内有效，期间不重复解析
     };
-}
+};
 ```
 
 ---
