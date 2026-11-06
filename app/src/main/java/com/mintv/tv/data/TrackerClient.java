@@ -56,6 +56,16 @@ public final class TrackerClient {
         public int diskMaxSegs = 30;
         public long memMaxBytes = 32L * 1024 * 1024;
         public long diskMaxBytes = 200L * 1024 * 1024;
+
+        /**
+         * P2P 分片请求的签名密钥。
+         *
+         * <p>拉片时带 {@code &t=<毫秒>&s=<hmac>}，双方用同一个 key 校验。
+         * 随机扫描器和手写脚本算不出 hmac，拿不到分片。
+         *
+         * <p>局限：key 在客户端里，反编译能拿到。这是提高门槛，不是绝对安全。
+         */
+        public String p2pSecret = "";
     }
 
     /** 一个候选节点。 */
@@ -133,6 +143,7 @@ public final class TrackerClient {
                 cfg.diskMaxSegs     = c.optInt("disk_max_segs", cfg.diskMaxSegs);
                 cfg.memMaxBytes     = c.optLong("mem_max_bytes", cfg.memMaxBytes);
                 cfg.diskMaxBytes    = c.optLong("disk_max_bytes", cfg.diskMaxBytes);
+                cfg.p2pSecret       = c.optString("p2p_secret", cfg.p2pSecret);
             }
             return cfg;
         } catch (Throwable t) {
@@ -220,15 +231,19 @@ public final class TrackerClient {
      * <p>上报的是**增量**，不是累计值 —— 服务端按增量/时间算瞬时带宽。
      */
     public void reportStat(String channel, long upBytes, long downBytes,
-                           int upReq, int downReq) {
+                           long originBytes, int upReq, int downReq) {
         if (channel == null) return;
-        if (upBytes <= 0 && downBytes <= 0 && upReq <= 0 && downReq <= 0) return;
+        if (upBytes <= 0 && downBytes <= 0 && originBytes <= 0
+                && upReq <= 0 && downReq <= 0) return;
         try {
             JSONObject b = new JSONObject();
             b.put("peerId", peerId);
             b.put("channel", channel);
             b.put("up", upBytes);
             b.put("down", downBytes);
+            // 回源字节。跟 down 分开算 —— 单台设备没有 peer 时 down 恒为 0，
+            // 只有 origin 能看出链路是活的；两者比例也就是 P2P 的实际收益。
+            b.put("origin", originBytes);
             b.put("upReq", upReq);
             b.put("downReq", downReq);
             post("/api/stat", b);
@@ -247,6 +262,28 @@ public final class TrackerClient {
             b.put("failAddr", failAddr);
             post("/api/stat", b);
         } catch (Throwable ignored) { }
+    }
+
+    /**
+     * 给分片请求算签名。
+     *
+     * <p>算法：{@code hmac_sha256(secret, channel + ":" + seq + ":" + t)} 前 16 位十六进制。
+     * 带时间戳是为了让签名有时效 —— 服务端拒掉 60 秒前的请求，
+     * 抓包重放也就 60 秒的窗口。
+     */
+    public static String signPiece(String secret, String channel, int seq, long t) {
+        if (secret == null || secret.isEmpty()) return "";
+        try {
+            javax.crypto.Mac mac = javax.crypto.Mac.getInstance("HmacSHA256");
+            mac.init(new javax.crypto.spec.SecretKeySpec(
+                    secret.getBytes("UTF-8"), "HmacSHA256"));
+            byte[] d = mac.doFinal((channel + ":" + seq + ":" + t).getBytes("UTF-8"));
+            StringBuilder sb = new StringBuilder(32);
+            for (int i = 0; i < 8; i++) sb.append(String.format("%02x", d[i]));
+            return sb.toString();
+        } catch (Throwable e) {
+            return "";
+        }
     }
 
     /** 离开频道：服务端立刻把自己摘掉，不用等心跳超时。 */

@@ -505,6 +505,23 @@ public final class RemoteServer {
                 send(out, 404, "text/plain; charset=utf-8", "not here");
                 return;
             }
+            // 验签：t 是客户端发请求时的毫秒时间戳，s 是 HMAC。
+            // 超过 120 秒的拒掉 —— 抓包重放只有 2 分钟窗口。
+            {
+                String secret = p2p.p2pSecret();
+                if (secret != null && !secret.isEmpty()) {
+                    long t = 0;
+                    try { t = Long.parseLong(qparam(query, "t")); } catch (Exception ignored) { }
+                    String s = qparam(query, "s");
+                    long now = System.currentTimeMillis();
+                    if (t <= 0 || Math.abs(now - t) > 120000
+                            || !secret.equals("") && !com.mintv.tv.data.TrackerClient
+                                    .signPiece(secret, ch, seq, t).equals(s)) {
+                        send(out, 403, "text/plain; charset=utf-8", "bad sign");
+                        return;
+                    }
+                }
+            }
             // 服务器下发的 upload_min_segs：缓存不够时不上传，
             // 先保证自己的播放不被别的节点拖累。
             if (!p2p.canUpload()) {
@@ -605,6 +622,9 @@ public final class RemoteServer {
                 try {
                     p2p.onPieceFetched(segSeq, data);
                     p2p.setPos(segSeq);
+                    // 回源字节单独记 —— 单台设备没有 peer 时 down 恒为 0，
+                    // 只有这个能看出链路活着，也能量化 P2P 省了多少。
+                    p2p.onOriginFetched(data.length);
                 } catch (Throwable ignored) { }
             }
             send(out, 200, "application/octet-stream", data);

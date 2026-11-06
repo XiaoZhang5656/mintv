@@ -52,8 +52,10 @@ public final class P2PEngine {
     private volatile long statDownBytes = 0;
     private volatile int statUpReq = 0;
     private volatile int statDownReq = 0;
+    private volatile long statOriginBytes = 0;
     private volatile long statUpSent = 0;
     private volatile long statDownSent = 0;
+    private volatile long statOriginSent = 0;
     private volatile int statUpReqSent = 0;
     private volatile int statDownReqSent = 0;
 
@@ -63,17 +65,29 @@ public final class P2PEngine {
         final long down = statDownBytes - statDownSent;
         final int ur = statUpReq - statUpReqSent;
         final int dr = statDownReq - statDownReqSent;
-        if (up <= 0 && down <= 0 && ur <= 0 && dr <= 0) return;
+        final long origin = statOriginBytes - statOriginSent;
+        if (up <= 0 && down <= 0 && origin <= 0 && ur <= 0 && dr <= 0) return;
         statUpSent = statUpBytes;
         statDownSent = statDownBytes;
+        statOriginSent = statOriginBytes;
         statUpReqSent = statUpReq;
         statDownReqSent = statDownReq;
         final String ch = channelHash;
         new Thread(new Runnable() {
             @Override public void run() {
-                tracker.reportStat(ch, up, down, ur, dr);
+                tracker.reportStat(ch, up, down, origin, ur, dr);
             }
         }, "p2p-stat").start();
+    }
+
+    /**
+     * 从源站拉了一片（不走 peer），记回源量。
+     *
+     * <p>单台设备没有 peer 时 down 恒为 0，只有这个能看出链路是活的，
+     * 也能算出 P2P 到底省了多少带宽。
+     */
+    public void onOriginFetched(int bytes) {
+        if (bytes > 0) statOriginBytes += bytes;
     }
 
     /** 别的节点从我这拿了一片，记上传量。 */
@@ -83,6 +97,11 @@ public final class P2PEngine {
     }
 
     /** 服务器下发的阈值，默认值只在第一次 join 之前有效。 */
+    private volatile String p2pSecret = "";
+
+    /** 给分片请求算签名；没拿到 secret 时返回空串（服务端会拒）。 */
+    public String p2pSecret() { return p2pSecret; }
+
     private volatile int minBufferSegs = 2;
     private volatile int uploadMinSegs = 3;
     private volatile String localAddr;
@@ -167,6 +186,7 @@ public final class P2PEngine {
                             cache.setWindow(Math.max(0, pos - cfg.windowSize));
                             cache.setLimits(cfg.memMaxSegs, cfg.diskMaxSegs,
                                     cfg.memMaxBytes, cfg.diskMaxBytes);
+                            p2pSecret = cfg.p2pSecret == null ? "" : cfg.p2pSecret;
                             flushStats();
                             P2PEngine.this.minBufferSegs = cfg.minBufferSegs;
                             P2PEngine.this.uploadMinSegs = cfg.uploadMinSegs;
@@ -356,8 +376,17 @@ public final class P2PEngine {
     private byte[] fetchFromPeer(TrackerClient.Peer p, int seq) {
         java.net.HttpURLConnection conn = null;
         try {
+            // 带时间戳 + HMAC，服务端验签。
+            //
+            // 没有签名的话，任何人知道 peer 的 IP:端口就能直接拉走分片，
+            // 甚至不用装这个 app。加了之后，随机扫描器和手写爬虫都拿不到 ——
+            // 它们算不出 hmac。
+            long t = System.currentTimeMillis();
+            String sig = com.mintv.tv.data.TrackerClient.signPiece(
+                    p2pSecret, channelHash, seq, t);
             String url = "http://" + p.addr + ":" + p.port
-                    + "/mintv/piece?ch=" + channelHash + "&seq=" + seq;
+                    + "/mintv/piece?ch=" + channelHash + "&seq=" + seq
+                    + "&t=" + t + "&s=" + sig;
             conn = (java.net.HttpURLConnection) new java.net.URL(url).openConnection();
             conn.setConnectTimeout(PEER_TIMEOUT);
             conn.setReadTimeout(PEER_TIMEOUT);
