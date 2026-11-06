@@ -40,24 +40,50 @@ public final class SettingsStore {
 
     private SettingsStore() { }
 
-    /** 读整个对象。文件不存在或损坏返回空对象（不是 null，方便链式调用）。 */
+    /**
+     * 内存里那份。
+     *
+     * <p><b>必须有这一层</b>：之前每次 getString 都直接读文件，走
+     * ContentResolver + 磁盘。设置页有 19 行、每行渲染要读好几次配置，
+     * 一次界面刷新就是几十次 IO —— 设置页卡顿就是这么来的。
+     *
+     * <p>SharedPreferences 本身就有内存缓存，我把它换成文件时漏了这层。
+     */
+    private static volatile JSONObject cache = null;
+
+    /** 读整个对象。命中内存直接返回；文件不存在或损坏返回空对象。 */
     private static JSONObject load(Context c) {
-        try {
-            String text = StorageDir.readPath(c, FILE);
-            if (text == null || text.trim().isEmpty()) return new JSONObject();
-            return new JSONObject(text);
-        } catch (Throwable t) {
-            android.util.Log.w(TAG, "读设置失败", t);
-            return new JSONObject();
+        JSONObject hit = cache;
+        if (hit != null) return hit;
+        synchronized (SettingsStore.class) {
+            if (cache != null) return cache;
+            JSONObject o;
+            try {
+                String text = StorageDir.readPath(c, FILE);
+                o = (text == null || text.trim().isEmpty())
+                        ? new JSONObject() : new JSONObject(text);
+            } catch (Throwable t) {
+                android.util.Log.w(TAG, "读设置失败", t);
+                o = new JSONObject();
+            }
+            cache = o;
+            return o;
         }
     }
 
     private static void save(Context c, JSONObject o) {
+        // 先更新内存，再落盘 —— 落盘失败也不影响本次会话
+        cache = o;
         try {
             StorageDir.writePath(c, FILE, o.toString());
         } catch (Throwable t) {
             android.util.Log.w(TAG, "写设置失败", t);
         }
+    }
+
+    /** 清掉内存缓存（切换存储根、或者外部改了文件时用）。 */
+    public static void invalidate() {
+        cache = null;
     }
 
     // ---------------- 对外 ----------------

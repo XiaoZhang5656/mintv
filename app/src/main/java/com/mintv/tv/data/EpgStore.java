@@ -49,7 +49,30 @@ public final class EpgStore {
         return new File(c.getApplicationContext().getFilesDir(), FILE_NAME);
     }
 
+    /**
+     * 内存里那份 EPG。
+     *
+     * <p>EPG 有 1MB 上下，每次读都要走 ContentResolver + 解压。切订阅、
+     * 刷新界面都会调到这里 —— 之前每次都真读一遍，白白花几百毫秒。
+     * 1MB 常驻内存不算负担，比反复读盘划算得多。
+     */
+    private static volatile byte[] cache = null;
+
+    /** 清掉缓存（外部改了 EPG 文件、或切换存储根时用）。 */
+    public static void invalidate() { cache = null; }
+
     public static byte[] cached(Context c) {
+        byte[] hit = cache;
+        if (hit != null && hit.length > 0) return hit;
+        synchronized (EpgStore.class) {
+            if (cache != null && cache.length > 0) return cache;
+            byte[] v = readFromDisk(c);
+            if (v != null && v.length > 0) cache = v;
+            return v;
+        }
+    }
+
+    private static byte[] readFromDisk(Context c) {
         // EPG 是 gzip 的 XML，走字节级 API
         byte[] data = StorageDir.readBytesPath(c, FILE_NAME);
         if (data != null && data.length > 0) return data;
@@ -90,6 +113,7 @@ public final class EpgStore {
 
     public static void save(Context c, byte[] raw) {
         if (raw == null || raw.length == 0) return;
+        cache = raw;      // 先更新内存，读的时候立刻能看到新的
         // EPG 跟着存储根走：未授权在 getFilesDir()/epg.xml，
         // 授权后在 <授权根>/epg.xml —— 用户可以自己换一份 EPG 丢进去。
         StorageDir.writeBytesPath(c, FILE_NAME, raw);
