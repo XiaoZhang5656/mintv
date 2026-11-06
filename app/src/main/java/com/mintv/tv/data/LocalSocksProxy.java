@@ -268,6 +268,9 @@ public final class LocalSocksProxy {
             }
             sb.append("Connection: close\r\n\r\n");
 
+            // 打印完整请求行。之前只记了 path 前 70 字，看不到 query，
+            // 404 时没法判断是参数丢了还是参数错。
+            android.util.Log.i(TAG, "→ " + method + " " + host + ":" + port + path);
             OutputStream ro = remote.getOutputStream();
             ro.write(sb.toString().getBytes("ISO-8859-1"));
             ro.flush();
