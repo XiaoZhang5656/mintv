@@ -316,7 +316,20 @@ public final class TrackerClient {
             conn.setRequestProperty("Content-Type", "application/json; charset=utf-8");
             conn.setRequestProperty("Connection", "close");
 
-            byte[] data = body.toString().getBytes("UTF-8");
+            // 敏感接口加密请求体。
+            //
+            // /api/join 带 channel（能反查在看哪个台）、have[]（缓存清单）、
+            // addr/port（公网地址）；/api/stat 带流量。这些不该明文过网。
+            //
+            // /api/fetch 不加密：它是高频调用（每次拉片都问），
+            // RSA 解密对服务端有开销，而它返回的只是 peer 地址，
+            // 而且已经有 HMAC 签名挡住爬虫。
+            String payload = body.toString();
+            if (path.startsWith("/api/join") || path.startsWith("/api/stat")) {
+                String enc = PayloadCrypto.encrypt(payload);
+                if (enc != null) payload = enc;
+            }
+            byte[] data = payload.getBytes("UTF-8");
             OutputStream o = conn.getOutputStream();
             try { o.write(data); o.flush(); } finally { o.close(); }
 

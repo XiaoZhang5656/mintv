@@ -198,17 +198,25 @@ public final class P2PEngine {
                             cache.setLimits(cfg.memMaxSegs, cfg.diskMaxSegs,
                                     cfg.memMaxBytes, cfg.diskMaxBytes);
                             p2pSecret = cfg.p2pSecret == null ? "" : cfg.p2pSecret;
-                            // 传输密钥：native 优先，回落 tracker
+                            // 传输密钥：**只认 native**，不回落 tracker。
+                            //
+                            // 为什么不能回落：native 的 key 是固定的，tracker 的
+                            // p2p_secret 每次重启都随机生成。如果 A 用 native、
+                            // B 回落 tracker，两边 key 不同 —— 密文互相解不开，
+                            // P2P 直接瘫。而且 tracker 一重启，所有回落的设备
+                            // 全部失联。
+                            //
+                            // 宁可不加密，也不能出现「半加密」：so 不可用时
+                            // 所有人都不加密，至少互通。
                             byte[] nk = PieceCrypto.nativeOrNull();
-                            if (nk == null) {
-                                nk = PieceCrypto.parseKey(
-                                        cfg.p2pSecret == null ? "" : cfg.p2pSecret);
-                            }
+                            pieceKey = nk;
                             if (nk != null) {
-                                pieceKey = nk;
                                 android.util.Log.i("P2P", "传输加密已启用，key="
-                                        + PieceCrypto.fingerprint(nk)
-                                        + (PieceCrypto.nativeAvailable() ? " (native)" : " (tracker)"));
+                                        + PieceCrypto.fingerprint(nk) + " (native)");
+                            } else {
+                                android.util.Log.i("P2P", "传输不加密：native 库不可用"
+                                        + "（" + android.os.Build.SUPPORTED_ABIS[0]
+                                        + " 没有对应的 so，只有 armeabi-v7a 版）");
                             }
                             flushStats();
                             P2PEngine.this.minBufferSegs = cfg.minBufferSegs;
