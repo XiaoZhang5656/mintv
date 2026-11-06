@@ -135,6 +135,24 @@ public final class NetProxy {
     }
 
     /**
+     * 原始代理配置（不经过本地桥）。
+     *
+     * <p>给 HlsProxy 用：它是 Java 代码，HttpURLConnection 原生支持
+     * Proxy.Type.SOCKS，不需要中间再套一层 HTTP 桥。
+     * 桥只留给 VLC（VLC 不认 SOCKS）。
+     *
+     * @return 形如 socks5://host:port 或 http://host:port；null 表示直连
+     */
+    public static String rawProxy(Context c) {
+        String s = url(c);
+        if (s == null) return null;
+        String v = s.trim();
+        if (v.isEmpty()) return null;
+        if (!v.contains("://")) v = "socks5://" + v;
+        return v;
+    }
+
+    /**
      * 给 media 级选项用的代理地址。
      *
      * <p>实例级的 {@code --http-proxy} 实测不生效（VLC 3.5.1 + LibVLC 构造），

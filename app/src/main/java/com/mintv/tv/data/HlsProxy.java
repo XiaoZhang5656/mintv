@@ -80,6 +80,12 @@ public final class HlsProxy {
         HttpURLConnection conn = null;
         try {
             // 配了代理就走代理，否则直连 —— 没配代理时行为跟以前完全一样。
+            //
+            // 这里用**原始配置**，不走本地桥：
+            // HttpURLConnection 原生支持 Proxy.Type.SOCKS，直接用它就行。
+            // 绕一层 HTTP 桥反而出问题 —— 桥会把 HttpURLConnection 写好的
+            // Host 头（目标域名）原样转给 CDN，而移动 CDN 只认 IP 形式的 Host，
+            // 于是 302 之后的每一跳都 404。
             java.net.Proxy px = null;
             String proxyUrl = (ctxRef == null) ? null : ctxRef.proxy();
             if (proxyUrl != null && !proxyUrl.isEmpty()) {
@@ -87,9 +93,14 @@ public final class HlsProxy {
                     java.net.URI pu = new java.net.URI(proxyUrl);
                     String ph = pu.getHost();
                     int pp = pu.getPort();
+                    String scheme = pu.getScheme() == null ? ""
+                            : pu.getScheme().toLowerCase(java.util.Locale.US);
                     if (ph != null && pp > 0) {
-                        px = new java.net.Proxy(java.net.Proxy.Type.HTTP,
-                                new java.net.InetSocketAddress(ph, pp));
+                        java.net.Proxy.Type type = scheme.startsWith("socks")
+                                ? java.net.Proxy.Type.SOCKS
+                                : java.net.Proxy.Type.HTTP;
+                        px = new java.net.Proxy(type, new java.net.InetSocketAddress(ph, pp));
+                        android.util.Log.w("HlsProxy", "代理 " + type + " " + ph + ":" + pp);
                     }
                 } catch (Throwable ignored) { }
             }

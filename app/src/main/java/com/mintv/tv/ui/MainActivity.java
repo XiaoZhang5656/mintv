@@ -4549,8 +4549,10 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                 return headersOfActiveSub();
             }
             @Override public String proxy() {
-                String p = com.mintv.tv.data.NetProxy.mediaProxyArg(MainActivity.this);
-                return p;
+                // 返回原始配置（socks5://host:port），不是本地桥地址。
+                // HlsProxy 是 Java，HttpURLConnection 原生支持 SOCKS，
+                // 不需要中间套一层 HTTP 桥 —— 那层桥正是 404 的来源。
+                return com.mintv.tv.data.NetProxy.rawProxy(MainActivity.this);
             }
         });
         if (remotePort < 0) {
