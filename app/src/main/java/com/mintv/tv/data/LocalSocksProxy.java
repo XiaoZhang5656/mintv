@@ -206,7 +206,7 @@ public final class LocalSocksProxy {
             // 而那个地址（比如 39.134.66.206）直连不通，必须也走代理。
             // 实测 VLC 不会为跳转后的地址重新走 media 级代理，直接直连失败。
             // 所以这里由桥跟到底，VLC 只看到最终的 200 + 正文。
-            doGet(out, method, h, p, path, hostPort, headers,
+            doGet(out, method, h, p, path, hostPort, h, headers,
                     socksHost, socksPort, upstreamHttp, 0);
         } catch (Throwable t) {
             android.util.Log.w(TAG, "转发失败: " + t);
@@ -233,6 +233,7 @@ public final class LocalSocksProxy {
      */
     private static void doGet(OutputStream out, String method,
                               String host, int port, String path, String hostPort,
+                              String originHost,
                               java.util.Map<String, String> headers,
                               String socksHost, int socksPort,
                               boolean upstreamHttp, int depth) {
@@ -255,7 +256,16 @@ public final class LocalSocksProxy {
                 if ("host".equalsIgnoreCase(k)) hasHost = true;
                 sb.append(k).append(": ").append(e.getValue()).append("\r\n");
             }
-            if (!hasHost) sb.append("Host: ").append(hostPort).append("\r\n");
+            // Host 头用当前目标的 host，不要换成原始域名。
+            //
+            // 之前以为是「CDN 靠原域名分流」所以改成 originHost，实测反了：
+            //   目标 302 到 http://39.134.66.226/wh7f.../index.m3u8 之后
+            //     Host: 39.134.66.226              → 200, 411 字节  ✅
+            //     Host: ottrrs.hl.chinamobile.com  → 404, 0 字节     ❌
+            // 移动的 CDN 认的是 IP 形式。保持 hostPort。
+            if (!hasHost) {
+                sb.append("Host: ").append(hostPort).append("\r\n");
+            }
             sb.append("Connection: close\r\n\r\n");
 
             OutputStream ro = remote.getOutputStream();
@@ -282,6 +292,10 @@ public final class LocalSocksProxy {
                 String[] parts = statusLine.split(" ");
                 code = Integer.parseInt(parts[1]);
             } catch (Throwable ignored) { }
+            // 每个请求的最终状态码都记一笔，404 的时候能看出是哪一跳出的问题
+            android.util.Log.i(TAG, "响应 " + code + " " + host
+                    + " " + path.substring(0, Math.min(70, path.length()))
+                    + " depth=" + depth);
 
             if (code >= 300 && code < 400) {
                 String loc = null;
@@ -305,7 +319,7 @@ public final class LocalSocksProxy {
                         nh = hp;
                     }
                     android.util.Log.i(TAG, "跟随重定向 " + code + " → " + loc.substring(0, Math.min(80, loc.length())));
-                    doGet(out, "GET", nh, nport, np, hp, headers,
+                    doGet(out, "GET", nh, nport, np, hp, originHost, headers,
                             socksHost, socksPort, upstreamHttp, depth + 1);
                     return;
                 }
