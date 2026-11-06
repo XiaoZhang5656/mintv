@@ -467,6 +467,28 @@ public final class ScriptEngine {
     private static void copyObject(JSObject src, JSONObject dst) throws Exception {
         String url = src.getString("url");
         if (url != null) dst.put("url", url);
+
+        // 下面这几个字段原来根本没拷。
+        //
+        // README 里写着脚本可以 return { status, contentType, body }，
+        // 但 copyObject 只处理 url/referer/userAgent/ttlSec —— body 被丢掉后
+        // r.body 是 null、r.url 也是 null，框架直接判「脚本没有返回可播放的内容」。
+        // 所有「自己造 m3u8 正文」的脚本都跑不通，原因就在这。
+        try {
+            String body = src.getString("body");
+            if (body != null) dst.put("body", body);
+        } catch (Throwable ignored) { }
+        try {
+            String ct = src.getString("contentType");
+            if (ct != null) dst.put("contentType", ct);
+        } catch (Throwable ignored) { }
+        try {
+            int st = src.getInteger("status");
+            if (st > 0) dst.put("status", st);
+        } catch (Throwable ignored) { }
+        try {
+            if (src.getBoolean("rewriteSegments")) dst.put("rewriteSegments", true);
+        } catch (Throwable ignored) { }
         String referer = src.getString("referer");
         if (referer != null) {
             JSONObject h = new JSONObject();
