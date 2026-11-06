@@ -6725,8 +6725,9 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         }
         if ("net_proxy".equals(id)) {
             String[] out = base.clone();
-            out[0] = com.mintv.tv.data.NetProxy.url(this).isEmpty()
-                    ? "直连" : com.mintv.tv.data.NetProxy.url(this);
+            // 走 summary()：SOCKS 会显示成本地桥 + 上游，
+            // 让人一眼看出"填的是 socks，播放器实际用的是本地 http"
+            out[0] = com.mintv.tv.data.NetProxy.summary(this);
             return out;
         }
         if ("storage_dir".equals(id)) {

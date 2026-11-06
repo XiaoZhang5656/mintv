@@ -99,7 +99,14 @@ public final class NetProxy {
             String s = url(c);
             if (s == null || s.isEmpty()) return out;
             String v = s.trim();
-            boolean socks = v.toLowerCase(java.util.Locale.US).startsWith("socks");
+            String low = v.toLowerCase(java.util.Locale.US);
+            // http:// 上游 VLC 原生支持，直接给 --http-proxy。
+            // https:// 和 socks*:// 走本地桥：前者 VLC 对 https 上游支持不确定，
+            // 后者 VLC 的 HTTP 模块根本不读 --socks。
+            boolean needBridge = low.startsWith("socks")
+                    || low.startsWith("https://")
+                    || (!v.contains("://") && !low.startsWith("http"));
+            boolean socks = needBridge;
             if (socks) {
                 if (!v.contains("://")) v = "socks5://" + v;
                 // 关键：--socks 只被 access_smb / access_ftp / access_sftp 读取，
@@ -122,10 +129,32 @@ public final class NetProxy {
         return out;
     }
 
-    /** 给界面显示的一句话。 */
+    /**
+     * 给界面显示的一句话。
+     *
+     * <p>SOCKS 会额外显示本地桥，让人一眼看出"填的是 socks，实际给播放器
+     * 用的是本地 http"：
+     * <pre>
+     *   http://127.0.0.1:45231 → socks5://120.48.182.33:18002
+     * </pre>
+     * 桥还没启动（没播放过）时显示成"播放时转本地 http"。
+     */
     public static String summary(Context c) {
         String s = url(c);
         if (s == null || s.isEmpty()) return "直连";
-        return s;
+        String v = s.trim();
+        String low = v.toLowerCase(java.util.Locale.US);
+        boolean socks = low.startsWith("socks")
+                || low.startsWith("https://")
+                || (!v.contains("://") && !low.startsWith("http"));
+        if (socks) {
+            if (!v.contains("://")) v = "socks5://" + v;
+            String local = com.mintv.tv.data.LocalSocksProxy.localAddr();
+            if (local != null) {
+                return local + " → " + v;
+            }
+            return v + "（播放时转本地 http）";
+        }
+        return v;
     }
 }

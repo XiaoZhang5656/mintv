@@ -42,6 +42,7 @@ public final class LocalSocksProxy {
     public static synchronized int ensure(String socksUrl) {
         String host;
         int sp;
+        boolean upstreamHttp;
         try {
             String v = socksUrl.trim();
             if (!v.contains("://")) v = "socks5://" + v;
@@ -49,12 +50,16 @@ public final class LocalSocksProxy {
             host = u.getHost();
             sp = u.getPort();
             if (host == null || sp <= 0) return -1;
+            String scheme = u.getScheme() == null ? "" : u.getScheme().toLowerCase(java.util.Locale.US);
+            // http / https 上游用 CONNECT 隧道；socks* 用 SOCKS 握手
+            upstreamHttp = scheme.startsWith("http");
         } catch (Throwable t) {
-            android.util.Log.w(TAG, "解析 socks 地址失败: " + socksUrl);
+            android.util.Log.w(TAG, "解析代理地址失败: " + socksUrl);
             return -1;
         }
 
-        String key = host + ":" + sp;
+        final boolean fUpstreamHttp = upstreamHttp;
+        String key = (upstreamHttp ? "http://" : "socks://") + host + ":" + sp;
         if (port > 0 && key.equals(curKey) && server != null && !server.isClosed()) {
             return port;   // 已经在跑，复用
         }
@@ -72,7 +77,7 @@ public final class LocalSocksProxy {
 
             acceptThread = new Thread(new Runnable() {
                 @Override public void run() {
-                    acceptLoop(ss, fHost, fPort);
+                    acceptLoop(ss, fHost, fPort, fUpstreamHttp);
                 }
             }, "socks-http-bridge");
             acceptThread.setDaemon(true);
@@ -88,6 +93,16 @@ public final class LocalSocksProxy {
         }
     }
 
+    /** 本地桥地址，没启动返回 null。 */
+    public static String localAddr() {
+        return port > 0 ? "http://127.0.0.1:" + port : null;
+    }
+
+    /** 上游 SOCKS 地址 host:port，没启动返回 null。 */
+    public static String upstream() {
+        return port > 0 && !curKey.isEmpty() ? curKey : null;
+    }
+
     /** 停掉。改代理地址或退出时调。 */
     public static synchronized void stop() {
         port = -1;
@@ -97,13 +112,14 @@ public final class LocalSocksProxy {
         acceptThread = null;
     }
 
-    private static void acceptLoop(ServerSocket ss, String socksHost, int socksPort) {
+    private static void acceptLoop(ServerSocket ss, String socksHost, int socksPort,
+                                   boolean upstreamHttp) {
         while (!ss.isClosed()) {
             try {
                 final Socket c = ss.accept();
                 new Thread(new Runnable() {
                     @Override public void run() {
-                        handle(c, socksHost, socksPort);
+                        handle(c, socksHost, socksPort, upstreamHttp);
                     }
                 }, "socks-http-conn").start();
             } catch (Throwable t) {
@@ -123,7 +139,8 @@ public final class LocalSocksProxy {
      *       双向复制字节</li>
      * </ul>
      */
-    private static void handle(Socket c, String socksHost, int socksPort) {
+    private static void handle(Socket c, String socksHost, int socksPort,
+                               boolean upstreamHttp) {
         Socket remote = null;
         try {
             c.setSoTimeout(20000);
@@ -153,7 +170,7 @@ public final class LocalSocksProxy {
                 String h = target.substring(0, c2);
                 int p = Integer.parseInt(target.substring(c2 + 1));
 
-                remote = openSocks(socksHost, socksPort, h, p);
+                remote = openUpstream(socksHost, socksPort, h, p, upstreamHttp);
                 out.write("HTTP/1.1 200 Connection Established\r\n\r\n".getBytes("ISO-8859-1"));
                 out.flush();
                 pump(in, out, remote);
@@ -182,7 +199,7 @@ public final class LocalSocksProxy {
                 h = hostPort;
             }
 
-            remote = openSocks(socksHost, socksPort, h, p);
+            remote = openUpstream(socksHost, socksPort, h, p, upstreamHttp);
             remote.setSoTimeout(25000);
 
             // 拼转发请求：请求行换成相对路径，Host 头补上
@@ -217,11 +234,21 @@ public final class LocalSocksProxy {
         }
     }
 
-    /** 通过 SOCKS 连目标。Java 的 Socket(Proxy) 原生支持 SOCKS5。 */
-    private static Socket openSocks(String socksHost, int socksPort,
-                                    String host, int port) throws Exception {
-        Proxy px = new Proxy(Proxy.Type.SOCKS,
-                new InetSocketAddress(socksHost, socksPort));
+    /**
+     * 通过上游代理连目标。
+     *
+     * <p>Java 的 {@code Socket(Proxy)} 两种都支持：
+     * <ul>
+     *   <li>{@code Proxy.Type.SOCKS} —— SOCKS5 握手</li>
+     *   <li>{@code Proxy.Type.HTTP} —— 发 CONNECT 建隧道</li>
+     * </ul>
+     * 所以 socks5:// 和 http(s):// 上游走同一段代码，只是类型不同。
+     */
+    private static Socket openUpstream(String upHost, int upPort,
+                                       String host, int port,
+                                       boolean upstreamHttp) throws Exception {
+        Proxy.Type type = upstreamHttp ? Proxy.Type.HTTP : Proxy.Type.SOCKS;
+        Proxy px = new Proxy(type, new InetSocketAddress(upHost, upPort));
         Socket s = new Socket(px);
         s.connect(new InetSocketAddress(host, port), 10000);
         return s;
