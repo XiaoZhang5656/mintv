@@ -34,11 +34,7 @@ public final class TrackerClient {
      * 所以代理能过），好处是隐藏源站 IP，坏处是 CF 免费版有请求数限制 ——
      * 人数上去之后要么降心跳频率，要么改回直连 IP。
      */
-    /**
-     * tracker 地址。密文存在 SecureStrings 里，运行时才解出来 ——
-     * 免得 {@code strings classes.dex | grep http} 一下就捞走。
-     */
-    public static final String BASE = SecureStrings.tracker();
+    public static final String BASE = "http://yun.spup.yunshipin.bbroot.com:2086";
 
     private static final int TIMEOUT = 6000;
 
