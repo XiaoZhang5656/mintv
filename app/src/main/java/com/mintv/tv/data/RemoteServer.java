@@ -625,12 +625,46 @@ public final class RemoteServer {
                 }
             }
 
-            // 2) 回源：整块拉下来（要存缓存，所以不能纯流式）
-            byte[] data = HlsProxy.fetch(u);
-            if (data == null || data.length == 0) {
+            // 2) 回源：边下边吐。
+            //
+            // 原来是 HlsProxy.fetch(u) 整片读完再发 —— 9.35MB 的片子
+            // 在 500KB/s 的代理上要等 18 秒 VLC 才拿到第一个字节，
+            // 那段时间界面全黑，用户以为播不出来。
+            //
+            // 现在连上并预读到 32KB 就开始转发，VLC 一两秒内就能起解码；
+            // 整片照样攒齐，P2P 缓存不受影响。
+            HlsProxy.Session sess = HlsProxy.openStream(u);
+            if (sess == null) {
                 send(out, 502, "text/plain; charset=utf-8", "fetch failed");
                 return;
             }
+            // 预先算不出总长度，只能用分块传输；正常结束要补终止块，
+            // 中途失败就直接断开，让 VLC 重试这一片。
+            String head = "HTTP/1.1 200 OK\r\n"
+                    + "Content-Type: application/octet-stream\r\n"
+                    + "Transfer-Encoding: chunked\r\n"
+                    + "Cache-Control: no-store\r\n"
+                    + "Connection: close\r\n\r\n";
+            out.write(head.getBytes("UTF-8"));
+            out.flush();
+
+            final OutputStream fo = out;
+            byte[] data = sess.pump(new HlsProxy.Session.Sink() {
+                @Override public void write(byte[] b, int off, int len) throws java.io.IOException {
+                    fo.write((Integer.toHexString(len) + "\r\n").getBytes("UTF-8"));
+                    fo.write(b, off, len);
+                    fo.write("\r\n".getBytes("UTF-8"));
+                    fo.flush();
+                }
+            });
+            if (data == null || data.length == 0) {
+                // 已经发 200 了，收不回来；直接断，VLC 会重试这片
+                return;
+            }
+            try {
+                out.write("0\r\n\r\n".getBytes("UTF-8"));
+                out.flush();
+            } catch (Throwable ignored) { }
             if (p2p != null && p2p.running() && segCh != null
                     && segCh.equals(p2p.channelHash())) {
                 try {
@@ -641,7 +675,8 @@ public final class RemoteServer {
                     p2p.onOriginFetched(data.length);
                 } catch (Throwable ignored) { }
             }
-            send(out, 200, "application/octet-stream", data);
+            // 注意：不能再 send() 一次 —— 响应头和 body 已经在上面
+            // 用分块方式写完了，再写一遍会在同一个 socket 里塞第二个响应。
             return;
         }
 

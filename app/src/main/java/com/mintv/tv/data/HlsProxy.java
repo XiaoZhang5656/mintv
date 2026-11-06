@@ -205,6 +205,136 @@ public final class HlsProxy {
     }
 
     /**
+     * 边下边吐的一次会话。
+     *
+     * <p>为什么要有它：{@link #fetch} 会把整片读完才返回。移动那路源一片
+     * 9.35MB，代理只有 500KB/s，要等 18 秒才开始给 VLC —— 起播极慢，
+     * 而且 VLC 那段等待里界面是黑的。
+     *
+     * <p>改成「连上并读到第一段就交给调用方」，VLC 拿到几百 KB 就能开始
+     * 解码，起播时间从十几秒降到一两秒。整片照样攒齐，P2P 缓存不受影响。
+     *
+     * <p>先把响应码和开头一小段读到手，失败的话调用方还能正常回 502 ——
+     * 不会出现「已经给客户端发了 200 却挤不出数据」。
+     */
+    public static final class Session implements java.io.Closeable {
+        private final HttpURLConnection conn;
+        private final InputStream in;
+        private final ByteArrayOutputStream acc;
+        private final String url;
+        private boolean acquired;
+        /** 是否读到了正常结尾。读完整才让连接回池，中途失败必须断开。 */
+        private boolean finished;
+
+        Session(HttpURLConnection c, InputStream i, byte[] head, int headLen,
+                String url, boolean acquired) throws java.io.IOException {
+            this.conn = c;
+            this.in = i;
+            this.url = url;
+            this.acquired = acquired;
+            this.acc = new ByteArrayOutputStream(Math.max(16384, headLen * 4));
+            this.acc.write(head, 0, headLen);
+        }
+
+        /** 累计已收到的字节数。 */
+        public int received() { return acc.size(); }
+
+        /**
+         * 把剩下的数据抽干，边读边交给 sink。
+         *
+         * @return 完整数据；中途失败返回 null（此时已吐出去的部分收不回来，
+         *         调用方应直接断开，让客户端重试）
+         */
+        public byte[] pump(Sink sink) {
+            byte[] buf = new byte[16384];
+            try {
+                int n;
+                while ((n = in.read(buf)) > 0) {
+                    if (acc.size() + n > MAX_BYTES) {
+                        android.util.Log.w("HlsProxy", "分片超过上限 " + MAX_BYTES
+                                + " 字节，已读到 " + (acc.size() + n) + ": " + url);
+                        return null;
+                    }
+                    acc.write(buf, 0, n);
+                    if (sink != null) sink.write(buf, 0, n);
+                }
+                finished = true;   // 读到 EOF，连接可以复用
+                return acc.toByteArray();
+            } catch (Throwable t) {
+                android.util.Log.w("HlsProxy", "流式拉取中断 " + url + " : " + t);
+                return null;
+            } finally {
+                close();
+            }
+        }
+
+        /** 交给 sink 的接口。实现方负责 HTTP 分块封帧。 */
+        public interface Sink {
+            void write(byte[] b, int off, int len) throws java.io.IOException;
+        }
+
+        @Override public void close() {
+            // 关流让连接回池；只有没读完的才 disconnect。
+            try { if (in != null) in.close(); } catch (Throwable ignored) { }
+            if (!finished) {
+                try { if (conn != null) conn.disconnect(); } catch (Throwable ignored) { }
+            }
+            if (acquired) { acquired = false; try { FETCH_LIMIT.release(); } catch (Throwable ignored) { } }
+        }
+    }
+
+    /**
+     * 建立流式会话：连上、检查状态码、预读至多 32KB。
+     *
+     * <p>预读是为了让「源站 404 / 连不上」这类失败在调用方写响应头之前
+     * 就暴露出来 —— 这样还能正常回 502。
+     *
+     * @return 会话；失败返回 null
+     */
+    public static Session openStream(String remoteUrl) {
+        boolean acquired = false;
+        HttpURLConnection conn = null;
+        try {
+            acquired = FETCH_LIMIT.tryAcquire(5, java.util.concurrent.TimeUnit.SECONDS);
+            if (!acquired) {
+                android.util.Log.w("HlsProxy", "并发已满，跳过: " + remoteUrl);
+                return null;
+            }
+            Net.Prepared np = Net.prepare(remoteUrl);
+            if (np == null) return null;
+            conn = (HttpURLConnection) new URL(np.url).openConnection();
+            if (np.hostHeader != null) conn.setRequestProperty("Host", np.hostHeader);
+            conn.setConnectTimeout(CONNECT_TIMEOUT);
+            conn.setReadTimeout(READ_TIMEOUT);
+            conn.setInstanceFollowRedirects(true);
+            conn.setRequestMethod("GET");
+            applyHeaders(conn);
+
+            int code = conn.getResponseCode();
+            if (code < 200 || code >= 300) {
+                android.util.Log.w("HlsProxy", "HTTP " + code + " " + remoteUrl);
+                return null;
+            }
+            InputStream in = conn.getInputStream();
+            byte[] head = new byte[32768];
+            int headLen = 0;
+            // 尽量读满 32KB 或多到 EOF。读满就立刻开始吞吐，
+            // 读不满（小分片）也照样返回，不用等。
+            while (headLen < head.length) {
+                int n = in.read(head, headLen, head.length - headLen);
+                if (n <= 0) break;
+                headLen += n;
+            }
+            return new Session(conn, in, head, headLen, remoteUrl, acquired);
+        } catch (Throwable t) {
+            android.util.Log.w("HlsProxy", "建立流式会话失败 " + remoteUrl + " : " + t);
+            if (conn != null) try { conn.disconnect(); } catch (Throwable ignored) { }
+            if (acquired) try { FETCH_LIMIT.release(); } catch (Throwable ignored) { }
+            return null;
+        }
+    }
+
+    /**
      * 流式转发分片到输出流。不整块缓冲，4K 分片也不会撑爆内存。
      */
     public static void stream(String remoteUrl, OutputStream out) {
