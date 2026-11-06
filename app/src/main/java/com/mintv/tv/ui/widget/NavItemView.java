@@ -63,25 +63,29 @@ public class NavItemView extends BaseCardView {
         float cy = getHeight() / 2f;
         float x = padH;
 
-        // ---- 图标 ----
-        int iconColor = focusProgress > 0.5f ? Theme.TEXT : (active ? Theme.TEXT : 0xFFDEDEE0);
-        iconPaint.setColor(iconColor);
-        drawGlyph(c, glyph, x, cy - iconSize / 2f, iconSize);
+        // ---- 图标（glyph == 0 表示这个条目不要图标，位置让给文字）----
+        boolean hasGlyph = glyph != 0;
+        if (hasGlyph) {
+            int iconColor = focusProgress > 0.5f ? Theme.TEXT : (active ? Theme.TEXT : 0xFFDEDEE0);
+            iconPaint.setColor(iconColor);
+            drawGlyph(c, glyph, x, cy - iconSize / 2f, iconSize);
+        }
 
         // ---- 名称 ----
         textPaint.setColor(focusProgress > 0.5f || active ? Theme.TEXT : 0xFFDEDEE0);
         textPaint.setTextSize(textSize);
         textPaint.setFakeBoldText(active || focusProgress > 0.5f);
-        float tx = x + iconSize + Theme.px(16);
+        float tx = hasGlyph ? x + iconSize + Theme.px(16) : x;
         float ty = cy - (textPaint.descent() + textPaint.ascent()) / 2f;
 
-        // 名称最宽只能到计数胶囊左侧（留 12px 间距），超出截断，避免和胶囊重叠
-        float pillW = pillWidth();
-        float nameMax = getWidth() - padH - pillW - Theme.px(12) - tx;
+        // ---- 计数胶囊（count < 0 表示不显示，名称可以占满整行）----
+        boolean showCount = count >= 0;
+        float pillW = showCount ? pillWidth() : 0f;
+        float nameMax = getWidth() - padH - pillW
+                - (showCount ? Theme.px(12) : 0f) - tx;
         c.drawText(fit(name, nameMax, textSize), tx, ty, textPaint);
 
-        // ---- 计数胶囊 ----
-        drawCountPill(c, cy);
+        if (showCount) drawCountPill(c, cy);
 
         drawFocusStroke(c, Theme.FOCUS_BLUE);
     }

@@ -1015,7 +1015,9 @@ public class MainActivity extends Activity implements FocusEngine.Host {
      * 关闭状态下整个布局和以前完全一样，不会留下空白。
      */
     private int subColW() {
-        return selections[ROW_SHOW_SUBS] == 1 ? Theme.px(200) : 0;
+        // 240 而不是 200：去掉图标和计数之后仍然要给中文名留够位置，
+        // 200 的时候「咪咕直播」只能显示成「咪咕…」
+        return selections[ROW_SHOW_SUBS] == 1 ? Theme.px(240) : 0;
     }
 
     private int chanWidth() {
@@ -2494,7 +2496,10 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             int cnt = channelCache.containsKey(sub.id) ? channelCache.get(sub.id).size() : 0;
 
             NavItemView v = new NavItemView(this);
-            v.bind(sub.name, cnt, (char) 0);
+            // 订阅列不画图标也不画频道数：这一列本来就窄，两个装饰一占，
+            // 名字只能显示两三个字（"咪…"、"模…"），完全看不出是哪个源。
+            // count 传 -1 表示不显示，glyph 传 0 表示不占位。
+            v.bind(sub.name, -1, (char) 0);
             v.setActive(sub.id.equals(activeId));
             v.setClickable(true);
             v.setOnClickListener(new View.OnClickListener() {
