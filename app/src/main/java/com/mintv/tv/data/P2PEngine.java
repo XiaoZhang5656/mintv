@@ -47,6 +47,41 @@ public final class P2PEngine {
     private volatile String channelName;
     private volatile String natType = "unknown";
 
+    // ---- 吞吐统计（用于上报给 tracker，让它算谁真的有带宽）----
+    private volatile long statUpBytes = 0;
+    private volatile long statDownBytes = 0;
+    private volatile int statUpReq = 0;
+    private volatile int statDownReq = 0;
+    private volatile long statUpSent = 0;
+    private volatile long statDownSent = 0;
+    private volatile int statUpReqSent = 0;
+    private volatile int statDownReqSent = 0;
+
+    /** 心跳里带上增量，服务端按 增量/时间 算带宽。 */
+    private void flushStats() {
+        final long up = statUpBytes - statUpSent;
+        final long down = statDownBytes - statDownSent;
+        final int ur = statUpReq - statUpReqSent;
+        final int dr = statDownReq - statDownReqSent;
+        if (up <= 0 && down <= 0 && ur <= 0 && dr <= 0) return;
+        statUpSent = statUpBytes;
+        statDownSent = statDownBytes;
+        statUpReqSent = statUpReq;
+        statDownReqSent = statDownReq;
+        final String ch = channelHash;
+        new Thread(new Runnable() {
+            @Override public void run() {
+                tracker.reportStat(ch, up, down, ur, dr);
+            }
+        }, "p2p-stat").start();
+    }
+
+    /** 别的节点从我这拿了一片，记上传量。 */
+    public void onServed(int bytes) {
+        statUpBytes += bytes;
+        statUpReq++;
+    }
+
     /** 服务器下发的阈值，默认值只在第一次 join 之前有效。 */
     private volatile int minBufferSegs = 2;
     private volatile int uploadMinSegs = 3;
@@ -132,6 +167,7 @@ public final class P2PEngine {
                             cache.setWindow(Math.max(0, pos - cfg.windowSize));
                             cache.setLimits(cfg.memMaxSegs, cfg.diskMaxSegs,
                                     cfg.memMaxBytes, cfg.diskMaxBytes);
+                            flushStats();
                             P2PEngine.this.minBufferSegs = cfg.minBufferSegs;
                             P2PEngine.this.uploadMinSegs = cfg.uploadMinSegs;
                         }
@@ -266,6 +302,8 @@ public final class P2PEngine {
             if (data != null) {
                 cache.put(seq, data);
                 android.util.Log.w("P2P", "直连 " + key + " 拿到第 " + seq + " 片");
+                statDownBytes += data.length;
+                statDownReq++;
                 reportHaveAsync();
                 return data;
             }
@@ -326,7 +364,17 @@ public final class P2PEngine {
             conn.setRequestMethod("GET");
             conn.setRequestProperty("Connection", "close");
 
-            if (conn.getResponseCode() != 200) return null;
+            if (conn.getResponseCode() != 200) {
+                // 记一笔失败，服务端会给这个节点降权
+                final String ch = channelHash;
+                final String addr = p.addr;
+                new Thread(new Runnable() {
+                    @Override public void run() {
+                        tracker.reportPeerFail(ch, addr);
+                    }
+                }, "p2p-fail").start();
+                return null;
+            }
 
             java.io.InputStream in = conn.getInputStream();
             java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream(2 << 20);

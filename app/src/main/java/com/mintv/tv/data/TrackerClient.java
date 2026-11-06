@@ -211,6 +211,44 @@ public final class TrackerClient {
         }
     }
 
+    /**
+     * 上报这段时间的吞吐和请求数。
+     *
+     * <p>服务端靠这个算「谁真的有带宽」。没有它，调度只能按
+     * 「谁闲」（hits 少）来分，会挑到闲但慢的节点。
+     *
+     * <p>上报的是**增量**，不是累计值 —— 服务端按增量/时间算瞬时带宽。
+     */
+    public void reportStat(String channel, long upBytes, long downBytes,
+                           int upReq, int downReq) {
+        if (channel == null) return;
+        if (upBytes <= 0 && downBytes <= 0 && upReq <= 0 && downReq <= 0) return;
+        try {
+            JSONObject b = new JSONObject();
+            b.put("peerId", peerId);
+            b.put("channel", channel);
+            b.put("up", upBytes);
+            b.put("down", downBytes);
+            b.put("upReq", upReq);
+            b.put("downReq", downReq);
+            post("/api/stat", b);
+        } catch (Throwable t) {
+            android.util.Log.w("Tracker", "reportStat 失败: " + t);
+        }
+    }
+
+    /** 上报一次拉片失败，服务端会降低该节点的优先级。 */
+    public void reportPeerFail(String channel, String failAddr) {
+        if (channel == null || failAddr == null) return;
+        try {
+            JSONObject b = new JSONObject();
+            b.put("peerId", peerId);
+            b.put("channel", channel);
+            b.put("failAddr", failAddr);
+            post("/api/stat", b);
+        } catch (Throwable ignored) { }
+    }
+
     /** 离开频道：服务端立刻把自己摘掉，不用等心跳超时。 */
     public void leave() {
         try {

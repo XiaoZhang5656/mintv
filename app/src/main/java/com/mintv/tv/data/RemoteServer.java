@@ -525,6 +525,8 @@ public final class RemoteServer {
                     + "Connection: close\r\n\r\n";
             out.write(head.getBytes("UTF-8"));
             out.write(piece.data);
+            // 记上传量，心跳时报给 tracker
+            try { p2p.onServed(piece.data.length); } catch (Throwable ignored) { }
             out.flush();
             return;
         }
