@@ -78,6 +78,15 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     private final List<NavItemView> navViews = new ArrayList<>();
     /** 最左侧的订阅列。开关关闭时为 null。 */
     private LinearLayout subColumn;
+    /**
+     * 开屏是否已经放过。
+     *
+     * <p>静态的 —— 一个进程只放一次。换主题会 recreate()，
+     * onCreate 重跑，如果这里不做判断，用户会看到"怎么又开机了"。
+     * 换主题是主动操作，不该被当成冷启动。
+     */
+    private static boolean splashDone = false;
+
     /** 四列的水平容器。加/删列只改这里。 */
     private LinearLayout colsRow;
 
@@ -407,93 +416,100 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             }
         }, 1200);
         buildDialog(root);
-        // 开屏：极简一屏，App 名 + 版本，900ms 后淡出。
+        // 开屏：极简一屏，App 名 + 版本，1200ms 后淡出。
         // 作用不是"好看"，是把"正在加载列表/EPG"这段不可避免的等待遮住，
         // 否则用户看到的是空界面闪一下再出内容。
-        final FrameLayout splash = new FrameLayout(this);
-        splash.setBackgroundColor(Theme.BG);
+        //
+        // 只在进程第一次创建时放。换主题等场景会 recreate()、onCreate 重跑，
+        // 那种情况再放一遍就是"怎么又开机了"。
+        final boolean showSplash = !splashDone;
+        splashDone = true;
+        if (showSplash) {
+            final FrameLayout splash = new FrameLayout(this);
+            splash.setBackgroundColor(Theme.BG);
 
-        LinearLayout splashBox = new LinearLayout(this);
-        splashBox.setOrientation(LinearLayout.VERTICAL);
-        splashBox.setGravity(android.view.Gravity.CENTER_HORIZONTAL);
+            LinearLayout splashBox = new LinearLayout(this);
+            splashBox.setOrientation(LinearLayout.VERTICAL);
+            splashBox.setGravity(android.view.Gravity.CENTER_HORIZONTAL);
 
-        // 应用名从包信息读 —— 改名、换图标之后这里自动跟上，
-        // 不用回头改代码。
-        CharSequence appLabel = "MinTV";
-        try {
-            appLabel = getApplicationInfo().loadLabel(getPackageManager());
-        } catch (Throwable ignored) { }
+            // 应用名从包信息读 —— 改名、换图标之后这里自动跟上，
+            // 不用回头改代码。
+            CharSequence appLabel = "MinTV";
+            try {
+                appLabel = getApplicationInfo().loadLabel(getPackageManager());
+            } catch (Throwable ignored) { }
 
-        android.widget.TextView sName = new android.widget.TextView(this);
-        sName.setText(appLabel);
-        sName.setGravity(android.view.Gravity.CENTER);
-        sName.setTextColor(Theme.TEXT);
-        sName.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, Theme.sp(52));
-        sName.setLetterSpacing(0.1f);
-        // letterSpacing 在部分 ROM 上不计入测量宽度，最后一个字会被裁掉
-        // （MinTV 显示成 MinT）。右边补一段内边距把余量让出来。
-        sName.setPadding(0, 0, Theme.px(14), 0);
-        splashBox.addView(sName);
+            android.widget.TextView sName = new android.widget.TextView(this);
+            sName.setText(appLabel);
+            sName.setGravity(android.view.Gravity.CENTER);
+            sName.setTextColor(Theme.TEXT);
+            sName.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, Theme.sp(52));
+            sName.setLetterSpacing(0.1f);
+            // letterSpacing 在部分 ROM 上不计入测量宽度，最后一个字会被裁掉
+            // （MinTV 显示成 MinT）。右边补一段内边距把余量让出来。
+            sName.setPadding(0, 0, Theme.px(14), 0);
+            splashBox.addView(sName);
 
-        // 短线：用强调色，换主题色它跟着变
-        View sLine = new View(this);
-        sLine.setBackgroundColor(Theme.FOCUS_BLUE);
-        LinearLayout.LayoutParams lineLp = new LinearLayout.LayoutParams(
-                Theme.px(56), Theme.px(2));
-        lineLp.topMargin = Theme.px(30);
-        lineLp.gravity = android.view.Gravity.CENTER_HORIZONTAL;
-        splashBox.addView(sLine, lineLp);
+            // 短线：用强调色，换主题色它跟着变
+            View sLine = new View(this);
+            sLine.setBackgroundColor(Theme.FOCUS_BLUE);
+            LinearLayout.LayoutParams lineLp = new LinearLayout.LayoutParams(
+                    Theme.px(56), Theme.px(2));
+            lineLp.topMargin = Theme.px(30);
+            lineLp.gravity = android.view.Gravity.CENTER_HORIZONTAL;
+            splashBox.addView(sLine, lineLp);
 
-        android.widget.TextView sSub = new android.widget.TextView(this);
-        sSub.setText("电视直播播放器");
-        sSub.setGravity(android.view.Gravity.CENTER);
-        sSub.setTextColor(0xFF7D8691);
-        sSub.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, Theme.sp(19));
-        sSub.setLetterSpacing(0.22f);
-        LinearLayout.LayoutParams subLp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        subLp.topMargin = Theme.px(24);
-        subLp.gravity = android.view.Gravity.CENTER_HORIZONTAL;
-        splashBox.addView(sSub, subLp);
+            android.widget.TextView sSub = new android.widget.TextView(this);
+            sSub.setText("电视直播播放器");
+            sSub.setGravity(android.view.Gravity.CENTER);
+            sSub.setTextColor(0xFF7D8691);
+            sSub.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, Theme.sp(19));
+            sSub.setLetterSpacing(0.22f);
+            LinearLayout.LayoutParams subLp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            subLp.topMargin = Theme.px(24);
+            subLp.gravity = android.view.Gravity.CENTER_HORIZONTAL;
+            splashBox.addView(sSub, subLp);
 
-        FrameLayout.LayoutParams boxLp = new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        boxLp.gravity = android.view.Gravity.CENTER;
-        splash.addView(splashBox, boxLp);
+            FrameLayout.LayoutParams boxLp = new FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            boxLp.gravity = android.view.Gravity.CENTER;
+            splash.addView(splashBox, boxLp);
 
-        // 开屏底部的告知。放两行最关键的就够 —— 完整条款在「关于」页。
-        // 位置选底部：中心是用户第一眼看的区域，法律文本放那儿会盖过品牌，
-        // 也显得像在求人同意。
-        android.widget.TextView sDisc = new android.widget.TextView(this);
-        sDisc.setText("本软件仅为本地播放工具，不提供、不存储任何音视频内容。\n"
-                + "所有直播源由用户自行添加，请确保来源合法。\n"
-                + "不主张任何频道内容的著作权，权利归原权利人所有。\n"
-                + "如不接受上述条款，请停止使用并卸载本应用。");
-        sDisc.setGravity(android.view.Gravity.CENTER);
-        // 原来 #4D5560 在深色底上几乎看不见，等于没写。
-        // 但也不能用正文色 —— 它是告知，不该和品牌名争注意力。
-        sDisc.setTextColor(0xFF9AA3AE);
-        sDisc.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, Theme.sp(15));
-        sDisc.setLineSpacing(Theme.px(8), 1.15f);
-        FrameLayout.LayoutParams discLp = new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        discLp.gravity = android.view.Gravity.BOTTOM;
-        discLp.bottomMargin = Theme.px(76);
-        splash.addView(sDisc, discLp);
+            // 开屏底部的告知。放两行最关键的就够 —— 完整条款在「关于」页。
+            // 位置选底部：中心是用户第一眼看的区域，法律文本放那儿会盖过品牌，
+            // 也显得像在求人同意。
+            android.widget.TextView sDisc = new android.widget.TextView(this);
+            sDisc.setText("本软件仅为本地播放工具，不提供、不存储任何音视频内容。\n"
+                    + "所有直播源由用户自行添加，请确保来源合法。\n"
+                    + "不主张任何频道内容的著作权，权利归原权利人所有。\n"
+                    + "如不接受上述条款，请停止使用并卸载本应用。");
+            sDisc.setGravity(android.view.Gravity.CENTER);
+            // 原来 #4D5560 在深色底上几乎看不见，等于没写。
+            // 但也不能用正文色 —— 它是告知，不该和品牌名争注意力。
+            sDisc.setTextColor(0xFF9AA3AE);
+            sDisc.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, Theme.sp(15));
+            sDisc.setLineSpacing(Theme.px(8), 1.15f);
+            FrameLayout.LayoutParams discLp = new FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            discLp.gravity = android.view.Gravity.BOTTOM;
+            discLp.bottomMargin = Theme.px(76);
+            splash.addView(sDisc, discLp);
 
-        root.addView(splash, new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-        splash.postDelayed(new Runnable() {
-            @Override public void run() {
-                if (isFinishing()) return;
-                splash.animate().alpha(0f).setDuration(380)
-                        .withEndAction(new Runnable() {
-                            @Override public void run() {
-                                try { root.removeView(splash); } catch (Throwable ignored) { }
-                            }
-                        }).start();
-            }
-        }, 1200);
+            root.addView(splash, new FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+            splash.postDelayed(new Runnable() {
+                @Override public void run() {
+                    if (isFinishing()) return;
+                    splash.animate().alpha(0f).setDuration(380)
+                            .withEndAction(new Runnable() {
+                                @Override public void run() {
+                                    try { root.removeView(splash); } catch (Throwable ignored) { }
+                                }
+                            }).start();
+                }
+            }, 1200);
+        }
 
         setContentView(root);
 
