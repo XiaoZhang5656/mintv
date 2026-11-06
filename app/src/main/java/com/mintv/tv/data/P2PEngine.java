@@ -18,7 +18,16 @@ import java.util.List;
 public final class P2PEngine {
 
     /** 心跳间隔。服务器 peer_timeout 是 30 秒，留 10 倍容错。 */
-    private static final long HEARTBEAT_MS = 3000L;
+    /**
+     * 心跳间隔。
+     *
+     * <p>原来 3 秒 —— 抓包看是一屏全是 /api/join，每个请求响应 900 多字节，
+     * 一天下来光心跳就是几十 MB 流量，而且对 tracker 是无谓压力。
+     *
+     * <p>服务端 peer_timeout 是 30 秒，15 秒心跳有两次容错，
+     * 网络抖动不会误判离线。
+     */
+    private static final long HEARTBEAT_MS = 15000L;
 
     /** 从对端拉分片的超时。超了就换下一个节点，再不行回源。 */
     private static final int PEER_TIMEOUT = 2000;

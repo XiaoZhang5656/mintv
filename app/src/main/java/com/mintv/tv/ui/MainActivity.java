@@ -8108,6 +8108,12 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         try { stopAutoRefresh(); } catch (Throwable ignored) { }
         // 关掉 SOCKS→HTTP 本地桥，别让它在后台占端口
         try { com.mintv.tv.data.LocalSocksProxy.stop(); } catch (Throwable ignored) { }
+        // 退出时通知 tracker 摘掉自己。
+        //
+        // 不做的话要等 peer_timeout（30 秒）服务端才清理，
+        // 这 30 秒里别的 peer 还会拿到这个已经死掉的地址去连，白白失败。
+        try { com.mintv.tv.data.P2PEngine.get(getApplicationContext()).stop(); }
+        catch (Throwable ignored) { }
         // 释放 tvbus / p2p 的 native 资源。
         //
         // 不做的话：native 线程、socket、以及 UPnP 端口映射（so 里调了
