@@ -320,7 +320,9 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         int base = Math.max(dm.widthPixels, dm.heightPixels);
         android.util.Log.i("MinTV", "screen realMetrics=" + dm.widthPixels + "x" + dm.heightPixels + " base=" + base);
         Theme.init(base);
+        long __tselections = System.currentTimeMillis();
         loadSelections();
+        android.util.Log.w("Startup", "selections " + (System.currentTimeMillis() - __tselections) + "ms");
         // 存档里源力加速是开启状态时，重启后必须重测一次。
         //
         // lastNatResult 是内存变量，重启即 null；而触发检测的只有
@@ -343,7 +345,9 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         // HTTP 服务在 UI 之前就起：手机端要能在任何时候连进来，
         // 不能等到用户去点"手机助手"那一页才有服务。
         startRemoteServer();
+        long __thiddenCats = System.currentTimeMillis();
         loadHiddenCats();
+        android.util.Log.w("Startup", "hiddenCats " + (System.currentTimeMillis() - __thiddenCats) + "ms");
         // 底色固定深色，强调色从设置里读（默认 0 = 盒子蓝）
         Theme.applyAccent(getSharedPreferences(PREF, MODE_PRIVATE).getInt(KEY_ACCENT, 0));
 
@@ -365,7 +369,9 @@ public class MainActivity extends Activity implements FocusEngine.Host {
 
         errorPanel = ErrorPanel.install(this);
         CatchupProbe.init(this);
+        long __tplaylist = System.currentTimeMillis();
         loadPlaylist();
+        android.util.Log.w("Startup", "playlist " + (System.currentTimeMillis() - __tplaylist) + "ms");
 
         FrameLayout root = new FrameLayout(this);
         this.rootView = root;
@@ -493,7 +499,9 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         }, 1800);
 
         focus.attach(this);
+        long __theaders = System.currentTimeMillis();
         loadHeaders();
+        android.util.Log.w("Startup", "headers " + (System.currentTimeMillis() - __theaders) + "ms");
         loadAutoPlayPref();
         loadLinePrefs();
         loadFavorites();
@@ -1447,30 +1455,59 @@ public class MainActivity extends Activity implements FocusEngine.Host {
      * 结果用户从没加过任何源，一打开就看到一堆频道，点开还播不了 ——
      * 那是给开发期做布局预览用的假数据，不该出现在正式包里。
      */
+    /**
+     * 启动时加载订阅。
+     *
+     * <p><b>读文件和解析都丢到后台线程</b>：SAF 读一次要几十到几百毫秒，
+     * 839 个频道的 PlaylistParser.parse 也要上百毫秒 —— 全在主线程的话
+     * 冷启动首屏会明显迟滞。主线程只负责最后的 View 重建。
+     */
     private void loadPlaylist() {
-        String url = currentSourceUrl();
-        String body = null;
-        if (url != null && !url.isEmpty()) {
-            body = SourceStore.cachedBody(this);
-        }
-        if (body == null || body.trim().isEmpty()) {
-            body = "#EXTM3U\n";     // 空源：等网络拉回来再渲染
-        } else if (SourceStore.isBad(this, SourceStore.fingerprint(body))) {
-            // 上次这份内容就解析不出频道（多半是填错地址拿到的 HTML 页）。
-            // 直接跳过，不让它再跑一次解析 —— 否则每次启动都崩。
-            android.util.Log.w("MinTV", "跳过已标记为无效的源缓存");
-            body = "#EXTM3U\n";
-            ui.post(new Runnable() {
-                @Override public void run() {
-                    if (osd != null) osd.toast("上次的源无效已忽略，请更新源或换一个订阅");
+        final String url = currentSourceUrl();
+        new Thread(new Runnable() {
+            @Override public void run() {
+                String body = null;
+                boolean badSource = false;
+                try {
+                    if (url != null && !url.isEmpty()) {
+                        body = SourceStore.cachedBody(MainActivity.this);
+                    }
+                } catch (Throwable t) {
+                    android.util.Log.w("MinTV", "读源缓存失败", t);
                 }
-            });
-        }
-        applyPlaylist(body);
+                if (body == null || body.trim().isEmpty()) {
+                    body = "#EXTM3U\n";     // 空源：等网络拉回来再渲染
+                } else if (SourceStore.isBad(MainActivity.this,
+                        SourceStore.fingerprint(body))) {
+                    // 上次这份内容就解析不出频道（多半是填错地址拿到的 HTML 页）。
+                    // 直接跳过，不让它再跑一次解析。
+                    android.util.Log.w("MinTV", "跳过已标记为无效的源缓存");
+                    body = "#EXTM3U\n";
+                    badSource = true;
+                }
 
-        if (url != null && !url.isEmpty()) {
-            fetchSourceAsync(url);
-        }
+                final PlaylistParser.Playlist parsed;
+                try {
+                    parsed = PlaylistParser.parse(body);
+                } catch (Throwable t) {
+                    android.util.Log.w("MinTV", "解析源失败", t);
+                    return;
+                }
+
+                final String finalBody = body;
+                final boolean finalBad = badSource;
+                ui.post(new Runnable() {
+                    @Override public void run() {
+                        if (isFinishing()) return;
+                        if (finalBad && osd != null) {
+                            osd.toast("上次的源无效已忽略，请更新源或换一个订阅");
+                        }
+                        applyPlaylistParsed(parsed, finalBody);
+                        if (url != null && !url.isEmpty()) fetchSourceAsync(url);
+                    }
+                });
+            }
+        }, "load-playlist").start();
     }
 
     /** 当前生效的订阅地址（没有订阅就返回空串）。 */
@@ -1482,8 +1519,19 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         return SourceStore.hasUserUrl(this) ? SourceStore.url(this) : "";
     }
 
+    /**
+     * 解析 + 应用。保留这个签名给「切源」等调用点用。
+     *
+     * <p>启动路径不走这里 —— 那边在后台线程解析好，直接调
+     * {@link #applyPlaylistParsed}，避免主线程做 839 个频道的解析。
+     */
     private void applyPlaylist(String body) {
-        playlist = PlaylistParser.parse(body);
+        applyPlaylistParsed(PlaylistParser.parse(body), body);
+    }
+
+    /** 只做 UI 部分，解析已经在调用方完成（可能在后台线程）。 */
+    private void applyPlaylistParsed(PlaylistParser.Playlist parsed, String body) {
+        playlist = parsed;
         rebuildCategories();
         channels = playlist.all;
         // 订阅列表的频道数要跟着更新；不刷新的话切完源订阅列还显示旧数字
