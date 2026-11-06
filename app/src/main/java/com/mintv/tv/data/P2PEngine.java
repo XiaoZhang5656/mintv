@@ -351,13 +351,19 @@ public final class P2PEngine {
 
             byte[] data = fetchFromPeer(p, seq);
             if (data != null) {
-                cache.put(seq, data);
-                // peer 传过来的是密文，先解
+                // 先解密再入缓存。
+                //
+                // 原来是「先 cache.put(密文) 再解密」，导致缓存里混着密文和明文
+                // （回源那条路存的是明文）。后果：
+                //   · 本地命中缓存 → 把密文直接给 VLC → 花屏
+                //   · 转给别人时又加密一次 → 双重加密，对端解不开
+                // 单机时不会有 peer 拉取，所以一直没暴露；两台设备一接就中招。
                 byte[] plain = PieceCrypto.process(pieceKey, seq, data);
                 if (plain == null) {
                     android.util.Log.w("P2P", "解密失败 seq=" + seq + " from " + key);
-                    return null;
+                    return null;      // 不解密成功就不进缓存
                 }
+                cache.put(seq, plain);
                 data = plain;
                 android.util.Log.w("P2P", "直连 " + key + " 拿到第 " + seq + " 片");
                 statDownBytes += data.length;

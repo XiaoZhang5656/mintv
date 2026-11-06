@@ -542,11 +542,16 @@ public final class RemoteServer {
                 if (enc != null && enc.length == piece.data.length) outData = enc;
             } catch (Throwable ignored) { }
 
-            // Content-Length 要按加密后的长度写
+            // 哈希必须按**实际发出去的字节**算。
+            //
+            // piece.sha256 是明文哈希，但加密开启后线上传的是密文 ——
+            // 对端拿密文算 sha256 跟这个值永远对不上，所有 peer 拉取都会被判
+            // 「校验失败」，P2P 等于完全失效（只是会静默回源，看不出来）。
+            String sentSha = com.mintv.tv.data.PieceCache.sha256(outData);
             String head = "HTTP/1.1 200 OK\r\n"
                     + "Content-Type: application/octet-stream\r\n"
                     + "Content-Length: " + outData.length + "\r\n"
-                    + "X-Piece-SHA256: " + (piece.sha256 == null ? "" : piece.sha256) + "\r\n"
+                    + "X-Piece-SHA256: " + (sentSha == null ? "" : sentSha) + "\r\n"
                     + "Cache-Control: no-store\r\n"
                     + "Connection: close\r\n\r\n";
             out.write(head.getBytes("UTF-8"));
