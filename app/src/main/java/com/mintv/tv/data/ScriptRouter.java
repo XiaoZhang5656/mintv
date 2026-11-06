@@ -88,7 +88,11 @@ public final class ScriptRouter {
             Matcher m = Pattern.compile("/:([A-Za-z_][A-Za-z0-9_]*)").matcher(pattern);
             int last = 0;
             while (m.find()) {
-                sb.append(Pattern.quote(pattern.substring(last, m.start())));
+                // m.start() 指向 ':id' 前面那个 '/'，必须把它一起保留在
+                // 字面量里。原来切到 m.start() 就停了，等于把 '/' 吃掉，
+                // 生成 ^\Q/migu\E([^/]+)$ —— 结果 /migu.m3u 能匹配，
+                // 真正的 /migu/1 反而匹配不上。
+                sb.append(Pattern.quote(pattern.substring(last, m.start() + 1)));
                 sb.append("([^/]+)");
                 r.paramNames.add(m.group(1));
                 last = m.end();
