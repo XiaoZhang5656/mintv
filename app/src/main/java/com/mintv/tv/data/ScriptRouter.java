@@ -144,15 +144,28 @@ public final class ScriptRouter {
 
         JSONObject item = new JSONObject();
         try {
-            item.put("url", path + (query == null || query.isEmpty() ? "" : "?" + query));
+            String qs = (query == null || query.isEmpty() ? "" : "?" + query);
+            item.put("url", path + qs);
             item.put("path", path);
             item.put("name", r.name);
+            // pageUrl：完整请求地址，脚本拿它拼同源链接用（端口可能切到 18900）
+            item.put("pageUrl", "http://127.0.0.1:18899" + path + qs);
+
             JSONObject params = parseQuery(query);
             for (int i = 0; i < r.paramNames.size(); i++) {
                 String v = i + 1 <= m.groupCount() ? m.group(i + 1) : "";
                 params.put(r.paramNames.get(i), safeDecode(v));
             }
             item.put("params", params);
+
+            // id：第一个路径参数。
+            //
+            // 以前只有 params.<name>，脚本里写 item.id 永远拿到 undefined ——
+            // README 把 id 列为 item 的字段，实际根本没塞进去。
+            if (r.paramNames.size() > 0) {
+                String first = params.optString(r.paramNames.get(0), "");
+                if (!first.isEmpty()) item.put("id", first);
+            }
             item.put("headers", new JSONObject());
         } catch (Exception ignored) { }
 

@@ -104,6 +104,10 @@ public final class ScriptEngine {
     /** 执行结果。 */
     public static final class Result {
         public boolean ok;
+        /** 脚本返回的原始 JSON，框架没识别的字段也在这里，方便以后扩展。 */
+        public org.json.JSONObject raw;
+        /** 多候选地址（脚本返回 { urls: [...] } 时）。 */
+        public java.util.List<String> urls;
         public String url;                 // main 返回的播放地址
         public Map<String,String> headers; // 返回的请求头
         public String proxy;               // 这次转发用哪个代理（可空）
@@ -233,7 +237,8 @@ public final class ScriptEngine {
             if (raw instanceof String) {
                 out.put("url", raw);
             } else if (raw instanceof JSObject) {
-                copyObject((JSObject) raw, out);
+                // 通用转换：脚本返回什么字段就拿什么，不做白名单
+                out = jsToJson((JSObject) raw);
             } else if (raw instanceof JSONObject) {
                 out = (JSONObject) raw;
             }
@@ -432,6 +437,7 @@ public final class ScriptEngine {
     private Result toResult(JSONObject o) {
         Result r = new Result();
         r.ok = true;
+        r.raw = o;   // 原始返回全留着，框架没识别的字段也不丢
         r.url = o.optString("url", o.optString("playUrl", o.optString("playurl", null)));
         r.body = o.optString("body", maybem3u8(o));
         r.contentType = o.optString("contentType", null);
@@ -451,6 +457,20 @@ public final class ScriptEngine {
                 r.headers.put(k, h.optString(k));
             }
         }
+        // 多候选地址。框架先按顺序试，第一个不通就换下一个。
+        // README 里一直写着 { urls: [...] }，但这里从来没实现过 —— 返回了等于没返回。
+        try {
+            org.json.JSONArray us = o.optJSONArray("urls");
+            if (us != null && us.length() > 0) {
+                r.urls = new java.util.ArrayList<>();
+                for (int i = 0; i < us.length(); i++) {
+                    String u = us.optString(i, null);
+                    if (u != null && !u.isEmpty()) r.urls.add(u);
+                }
+                if (r.url == null && !r.urls.isEmpty()) r.url = r.urls.get(0);
+            }
+        } catch (Throwable ignored) { }
+
         if (r.url == null && r.body == null) {
             return Result.fail("脚本没有返回可播放的内容");
         }
@@ -464,46 +484,80 @@ public final class ScriptEngine {
         return o.optString("content", null);
     }
 
-    private static void copyObject(JSObject src, JSONObject dst) throws Exception {
-        String url = src.getString("url");
-        if (url != null) dst.put("url", url);
+    /**
+     * JS 对象 → JSON，遍历所有键。
+     *
+     * <p>以前这里是白名单：只拷 url / referer / userAgent / ttlSec。
+     * 脚本返回 body / status / contentType / headers / urls 全部被丢掉，
+     * 而 README 里明明写了能用 —— 文档说一套、实现做一套。
+     *
+     * <p>改成通用转换：脚本返回什么字段，框架就拿到什么字段。
+     * 以后加新字段不用再改引擎。
+     */
+    private static JSONObject jsToJson(JSObject src) {
+        JSONObject out = new JSONObject();
+        if (src == null) return out;
+        String[] keys;
+        try {
+            keys = src.getKeys();
+        } catch (Throwable t) {
+            return out;
+        }
+        if (keys == null) return out;
+        for (String k : keys) {
+            if (k == null) continue;
+            try {
+                com.quickjs.JSValue.TYPE t = src.getType(k);
+                if (t == com.quickjs.JSValue.TYPE.STRING) {
+                    String v = src.getString(k);
+                    if (v != null) out.put(k, v);
+                } else if (t == com.quickjs.JSValue.TYPE.INTEGER) {
+                    out.put(k, src.getInteger(k));
+                } else if (t == com.quickjs.JSValue.TYPE.DOUBLE) {
+                    out.put(k, src.getDouble(k));
+                } else if (t == com.quickjs.JSValue.TYPE.BOOLEAN) {
+                    out.put(k, src.getBoolean(k));
+                } else if (t == com.quickjs.JSValue.TYPE.JS_ARRAY) {
+                    out.put(k, jsArrayToJson(src.getArray(k)));
+                } else if (t == com.quickjs.JSValue.TYPE.JS_OBJECT) {
+                    out.put(k, jsToJson(src.getObject(k)));
+                }
+            } catch (Throwable ignored) { }
+        }
+        return out;
+    }
 
-        // 下面这几个字段原来根本没拷。
-        //
-        // README 里写着脚本可以 return { status, contentType, body }，
-        // 但 copyObject 只处理 url/referer/userAgent/ttlSec —— body 被丢掉后
-        // r.body 是 null、r.url 也是 null，框架直接判「脚本没有返回可播放的内容」。
-        // 所有「自己造 m3u8 正文」的脚本都跑不通，原因就在这。
+    /** JS 数组 → JSON 数组。 */
+    private static org.json.JSONArray jsArrayToJson(JSArray arr) {
+        org.json.JSONArray out = new org.json.JSONArray();
+        if (arr == null) return out;
+        int n;
         try {
-            String body = src.getString("body");
-            if (body != null) dst.put("body", body);
-        } catch (Throwable ignored) { }
-        try {
-            String ct = src.getString("contentType");
-            if (ct != null) dst.put("contentType", ct);
-        } catch (Throwable ignored) { }
-        try {
-            int st = src.getInteger("status");
-            if (st > 0) dst.put("status", st);
-        } catch (Throwable ignored) { }
-        try {
-            if (src.getBoolean("rewriteSegments")) dst.put("rewriteSegments", true);
-        } catch (Throwable ignored) { }
-        String referer = src.getString("referer");
-        if (referer != null) {
-            JSONObject h = new JSONObject();
-            h.put("Referer", referer);
-            dst.put("headers", h);
+            n = arr.length();
+        } catch (Throwable t) {
+            return out;
         }
-        String ua = src.getString("userAgent");
-        if (ua != null) {
-            JSONObject h = dst.optJSONObject("headers");
-            if (h == null) h = new JSONObject();
-            h.put("User-Agent", ua);
-            dst.put("headers", h);
+        for (int i = 0; i < n; i++) {
+            try {
+                com.quickjs.JSValue.TYPE t = arr.getType(i);
+                if (t == com.quickjs.JSValue.TYPE.STRING) {
+                    out.put(arr.getString(i));
+                } else if (t == com.quickjs.JSValue.TYPE.INTEGER) {
+                    out.put(arr.getInteger(i));
+                } else if (t == com.quickjs.JSValue.TYPE.DOUBLE) {
+                    out.put(arr.getDouble(i));
+                } else if (t == com.quickjs.JSValue.TYPE.BOOLEAN) {
+                    out.put(arr.getBoolean(i));
+                } else if (t == com.quickjs.JSValue.TYPE.JS_ARRAY) {
+                    out.put(jsArrayToJson(arr.getArray(i)));
+                } else if (t == com.quickjs.JSValue.TYPE.JS_OBJECT) {
+                    out.put(jsToJson(arr.getObject(i)));
+                } else {
+                    out.put(org.json.JSONObject.NULL);
+                }
+            } catch (Throwable ignored) { }
         }
-        int ttl = src.getInteger("ttlSec");
-        if (ttl > 0) dst.put("ttlSec", ttl);
+        return out;
     }
 
     private static JSObject itemJsonToJs(JSContext c, JSONObject item) {
