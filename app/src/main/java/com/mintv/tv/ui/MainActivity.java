@@ -1752,6 +1752,36 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                 + channels.size() + " 个频道，现在播第 " + playingChannel + " 个");
     }
 
+    /** URL 的 host 是不是回环地址。解析失败按「不是」处理。 */
+    private static boolean isLoopbackUrl(String url) {
+        if (url == null) return false;
+        try {
+            String h = new java.net.URL(url).getHost();
+            if (h == null) return false;
+            h = h.toLowerCase(java.util.Locale.US);
+            return "127.0.0.1".equals(h)
+                    || "localhost".equals(h)
+                    || "::1".equals(h)
+                    || "[::1]".equals(h)
+                    || h.startsWith("127.");
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    /**
+     * 日志用的短字符串。    /**
+     * 日志用的短字符串。
+     *
+     * <p>解析后的地址可能很长（mintv:// 里面套了 base64），直接拼进日志
+     * 是有风险的 —— 之前就在这里 OOM 过一次（49MB 的 StringBuilder）。
+     */
+    private static String brief(String s) {
+        if (s == null) return "null";
+        if (s.length() <= 200) return s;
+        return s.substring(0, 200) + "...(len=" + s.length() + ")";
+    }
+
     /** 当前订阅自带请求头（可能为 null / 空）。 */
     private java.util.Map<String, String> headersOfActiveSub() {
         com.mintv.tv.data.SubscriptionStore.Sub sub =
@@ -4194,13 +4224,24 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         // 没配代理时**完全不变**，行为和以前一模一样。
         boolean autoWrapped = false;
         if (url != null && !url.toLowerCase().startsWith("mintv://")) {
-            String px = com.mintv.tv.data.NetProxy.mediaProxyArg(this);
-            if (px != null) {
-                String low = url.toLowerCase();
-                if (low.startsWith("http://") || low.startsWith("https://")) {
-                    url = "mintv://" + url;
-                    autoWrapped = true;
-                    android.util.Log.w("MinTV", "配了代理，自动包装: " + url);
+            String low0 = url.toLowerCase();
+            // 必须排除本机地址。
+            //
+            // 包装后的地址是 http://127.0.0.1:18899/mintv/m3u8?u=<base64>，
+            // 它也是 http 开头、也不是 mintv:// —— 如果不排除，递归回 playUrl
+            // 时会被再包一层，base64 每轮膨胀 1.33 倍，几十轮后就是几十 MB，
+            // 直接 OutOfMemoryError: Failed to allocate a 49043712 byte allocation。
+            // 判断是不是本机后端，必须解析 host，不能用字符串包含 ——
+            // 包装后的地址里 u=<base64>，base64 里完全可能恰好含 "127.0.0.1"。
+            boolean local = isLoopbackUrl(url);
+            if (!local) {
+                String px = com.mintv.tv.data.NetProxy.mediaProxyArg(this);
+                if (px != null) {
+                    if (low0.startsWith("http://") || low0.startsWith("https://")) {
+                        url = "mintv://" + url;
+                        autoWrapped = true;
+                        android.util.Log.w("MinTV", "配了代理，自动包装: " + brief(url));
+                    }
                 }
             }
         }
@@ -4241,10 +4282,25 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                             android.util.Log.w("MinTV", "协议解析失败", t);
                         }
                         final String finalUrl = (r != null) ? r : pendingUrl;
+                        // 递归保护。
+                        //
+                        // playUrl 解析完会再调 playUrl，如果解析结果和输入一模一样，
+                        // 说明这一层什么都没干成（多半是 expandMintvUrl 返回 null），
+                        // 再往下就是死循环。之前那个 49MB OOM 就是这么来的。
+                        if (finalUrl.equals(pendingUrl)) {
+                            android.util.Log.w("MinTV", "解析无进展，停止重试: "
+                                    + brief(pendingUrl));
+                            ui.post(new Runnable() {
+                                @Override public void run() {
+                                    if (osd != null) osd.toast("源地址无法解析，换一个试试");
+                                }
+                            });
+                            return;
+                        }
                         // 解析结果一定要打出来：抓包看不到请求时，第一个要确认的
                         // 就是 VLC 到底拿到了什么地址。没有这行，只能猜。
-                        android.util.Log.w("MinTV", "解析完成 " + pendingUrl
-                                + " -> " + finalUrl);
+                        android.util.Log.w("MinTV", "解析完成 " + brief(pendingUrl)
+                                + " -> " + brief(finalUrl));
                         if (r == null) {
                             android.util.Log.w("MinTV", "解析返回 null，"
                                     + "回退用原地址播放");
@@ -4252,7 +4308,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                         ui.post(new Runnable() {
                             @Override public void run() {
                                 if (isFinishing()) return;
-                                android.util.Log.w("MinTV", "交给播放器: " + finalUrl);
+                                android.util.Log.w("MinTV", "交给播放器: " + brief(finalUrl));
                                 playUrl(finalUrl, pendingHeaders, pendingMode);
                             }
                         });
