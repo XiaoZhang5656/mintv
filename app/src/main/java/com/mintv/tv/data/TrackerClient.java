@@ -300,15 +300,21 @@ public final class TrackerClient {
     private JSONObject post(String path, JSONObject body) {
         HttpURLConnection conn = null;
         try {
-            // 同 HlsProxy：先把 DNS 排掉，失败立刻放弃，别让心跳线程挂十几秒
+            // 先试着自己解析（带超时 + 缓存），把 DNS 从连接预算里摘出去。
+            //
+            // 但**解析失败不能直接放弃** —— 之前写 return null，
+            // 结果 DNS 慢一点就整个 tracker 连不上（online 变 0）。
+            // 解析不出来就交给 HttpURLConnection 自己去解，它至少会按
+            // setConnectTimeout 超时，而不是我们主动放弃。
             String full = BASE + path;
             Net.Prepared np = Net.prepare(full);
-            if (np == null) {
-                android.util.Log.w("Tracker", "tracker 解析失败: " + full);
-                return null;
+            if (np != null) {
+                conn = (HttpURLConnection) new URL(np.url).openConnection();
+                if (np.hostHeader != null) conn.setRequestProperty("Host", np.hostHeader);
+            } else {
+                android.util.Log.w("Tracker", "预解析失败，交给系统解析: " + full);
+                conn = (HttpURLConnection) new URL(full).openConnection();
             }
-            conn = (HttpURLConnection) new URL(np.url).openConnection();
-            if (np.hostHeader != null) conn.setRequestProperty("Host", np.hostHeader);
             conn.setConnectTimeout(TIMEOUT);
             conn.setReadTimeout(TIMEOUT);
             conn.setRequestMethod("POST");
@@ -326,8 +332,23 @@ public final class TrackerClient {
             // 而且已经有 HMAC 签名挡住爬虫。
             String payload = body.toString();
             if (path.startsWith("/api/join") || path.startsWith("/api/stat")) {
+                // 敏感接口**必须**加密。加密失败就不发 ——
+                // 之前是失败回落明文，等于加密形同虚设：
+                // 只要在传输链路上做点手脚（比如注入证书失败、改包），
+                // 就会静默降级成明文，用户完全无感。
+                //
+                // 现在失败直接报错，宁可连不上也不能明文泄露
+                // channel / have / addr 这些信息。
+                if (!PayloadCrypto.available()) {
+                    android.util.Log.w("Tracker", path + " 跳过：公钥不可用");
+                    return null;
+                }
                 String enc = PayloadCrypto.encrypt(payload);
-                if (enc != null) payload = enc;
+                if (enc == null) {
+                    android.util.Log.w("Tracker", path + " 跳过：加密失败");
+                    return null;
+                }
+                payload = enc;
             }
             byte[] data = payload.getBytes("UTF-8");
             OutputStream o = conn.getOutputStream();

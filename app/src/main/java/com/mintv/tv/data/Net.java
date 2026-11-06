@@ -30,7 +30,13 @@ public final class Net {
     private static final String TAG = "Net";
 
     /** 默认解析预算。DNS 正常时 50ms 内就回来，3 秒已经非常宽松。 */
-    public static final long DNS_TIMEOUT_MS = 3000L;
+    /**
+     * 单次解析预算。
+     *
+     * <p>3 秒实测不够 —— tracker 走 Cloudflare，移动网络首次解析
+     * 经常要 4~5 秒。给 6 秒，超时后调用方仍有降级路径。
+     */
+    public static final long DNS_TIMEOUT_MS = 6000L;
 
     /** 解析结果缓存多久。太短没意义，太长换网络后不刷新。 */
     private static final long CACHE_TTL_MS = 60_000L;
