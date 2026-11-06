@@ -321,6 +321,23 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         android.util.Log.i("MinTV", "screen realMetrics=" + dm.widthPixels + "x" + dm.heightPixels + " base=" + base);
         Theme.init(base);
         loadSelections();
+        // 存档里源力加速是开启状态时，重启后必须重测一次。
+        //
+        // lastNatResult 是内存变量，重启即 null；而触发检测的只有
+        // applyP2pBoost（用户点开关那一下）。所以"开着的情况下杀后台
+        // 再进来"，副标题会永远停在「正在检测网络…」—— 没有任何代码
+        // 去重新跑 NetCheck。
+        //
+        // 延迟 1.5 秒，等 osd/播放器这些初始化完，避免检测线程跟它们抢资源。
+        if (selections[ROW_P2P_BOOST] == 1) {
+            ui.postDelayed(new Runnable() {
+                @Override public void run() {
+                    if (selections[ROW_P2P_BOOST] != 1) return;
+                    android.util.Log.w("MinTV", "启动时源力加速为开启，补一次网络检测");
+                    netCheckLoop.run();
+                }
+            }, 1500);
+        }
         // HTTP 服务在 UI 之前就起：手机端要能在任何时候连进来，
         // 不能等到用户去点"手机助手"那一页才有服务。
         startRemoteServer();
