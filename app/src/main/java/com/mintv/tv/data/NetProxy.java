@@ -125,7 +125,12 @@ public final class NetProxy {
                 if (!v.contains("://")) v = "http://" + v;
                 out.add("--http-proxy=" + v);
             }
-        } catch (Throwable ignored) { }
+            android.util.Log.w("NetProxy", "vlcArgs 配置=[" + s + "] 结果=" + out);
+        } catch (Throwable t) {
+            // 以前这里是 catch (Throwable ignored)，出问题一点痕迹都没有。
+            // 代理不生效时最需要看到的就是这一行。
+            android.util.Log.w("NetProxy", "vlcArgs 失败 配置=[" + url(c) + "]", t);
+        }
         return out;
     }
 

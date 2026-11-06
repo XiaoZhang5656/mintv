@@ -40,6 +40,7 @@ public final class LocalSocksProxy {
      * @return 本地端口；失败返回 -1
      */
     public static synchronized int ensure(String socksUrl) {
+        android.util.Log.w(TAG, "ensure 被调用: " + socksUrl);
         String host;
         int sp;
         boolean upstreamHttp;
