@@ -57,6 +57,18 @@ public final class ScriptRouter {
         return match(path) != null;
     }
 
+    /** 脚本返回 ttlSec 时缓存结果，避免每个分片都重新调一次上游。 */
+    private static final class CacheEntry {
+        String url;
+        String body;
+        String contentType;
+        int status;
+        long expireAt;
+    }
+
+    private final java.util.Map<String, CacheEntry> respCache =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
     private Route match(String path) {
         List<ScriptStore.Item> items = store.list();
         Route best = null;
@@ -119,7 +131,13 @@ public final class ScriptRouter {
             java.io.FileInputStream in = new java.io.FileInputStream(f);
             try { in.read(b); } finally { in.close(); }
             String src = new String(b, "UTF-8");
-            return src.contains("exports.proxy") || src.matches("(?s).*\\bfunction\\s+proxy\\s*\\(.*");
+            // 先剥掉注释再判断。否则脚本里写一行
+            //   // exports.proxy = function(req){...}  ← 示例
+            // 就会被误判成代理脚本，走错分支。
+            src = src.replaceAll("(?s)/\\*.*?\\*/", " ")
+                     .replaceAll("//[^\n]*", " ");
+            return src.contains("exports.proxy")
+                    || src.matches("(?s).*\\bfunction\\s+proxy\\s*\\(.*");
         } catch (Throwable t) {
             return false;
         }
@@ -133,7 +151,9 @@ public final class ScriptRouter {
      * <p>成功时写 302（main 返回地址）或 200 + 正文（handler）。
      * 失败写 502，并记一条脚本日志 —— 用户在手机页面上能看到原因。
      */
-    public void handle(String path, String query, OutputStream out) {
+    public void handle(String path, String query,
+                       java.util.Map<String, String> reqHeaders,
+                       OutputStream out) {
         Route r = match(path);
         if (r == null) {
             write(out, 404, "text/plain; charset=utf-8", "no script route: " + path);
@@ -170,7 +190,15 @@ public final class ScriptRouter {
                 String first = params.optString(r.paramNames.get(0), "");
                 if (!first.isEmpty()) item.put("id", first);
             }
-            item.put("headers", new JSONObject());
+            // 把真实请求头交给脚本。以前这里是 new JSONObject()，
+            // 永远是空的 —— 需要 Referer/Cookie 的源在脚本里没法处理。
+            JSONObject hdrs = new JSONObject();
+            if (reqHeaders != null) {
+                for (java.util.Map.Entry<String, String> e : reqHeaders.entrySet()) {
+                    try { hdrs.put(e.getKey(), e.getValue()); } catch (Throwable ignored) { }
+                }
+            }
+            item.put("headers", hdrs);
         } catch (Exception ignored) { }
 
         File f = new File(r.file);
@@ -178,6 +206,30 @@ public final class ScriptRouter {
         // 脚本声明了 exports.proxy：返回的是"真实地址"，由框架拉取并转发二进制。
         // 这条路径下播放器永远不知道真实地址 —— 解密、拼接、防盗链都在脚本里。
         boolean isProxy = hasProxyExport(f);
+
+        // 缓存 key 用 脚本名 + 完整路径 + query，不同频道互不干扰
+        final String cacheKey = r.name + "|" + path
+                + "|" + (query == null ? "" : query);
+        try {
+            CacheEntry ce = respCache.get(cacheKey);
+            if (ce != null) {
+                if (ce.expireAt > System.currentTimeMillis()) {
+                    if (ce.body != null) {
+                        write(out, ce.status <= 0 ? 200 : ce.status,
+                                ce.contentType != null ? ce.contentType
+                                        : "application/vnd.apple.mpegurl; charset=utf-8",
+                                ce.body);
+                        return;
+                    }
+                    if (ce.url != null) {
+                        writeRedirect(out, ce.url);
+                        return;
+                    }
+                } else {
+                    respCache.remove(cacheKey);
+                }
+            }
+        } catch (Throwable ignored) { }
 
         long t0 = System.currentTimeMillis();
         ScriptEngine.Result res = engine.invoke(f, isProxy ? "proxy" : "main", item);
@@ -192,11 +244,39 @@ public final class ScriptRouter {
 
         ScriptLog.info(r.name, "解析成功 · " + cost + "ms"
                 + (res.url != null ? (" · " + res.url) : " · 返回正文"));
+        // 正常脚本几十毫秒。超过 5 秒基本是死循环或者上游卡死，
+        // QuickJS 没有中断接口，只能靠这条日志事后定位是哪个脚本。
+        if (cost > 5000) {
+            ScriptLog.warn(r.name, "执行耗时 " + cost + "ms，检查是否有死循环或上游超时");
+        }
 
         // 代理模式：流式拉取并原样吐回去
         if (isProxy && res.url != null) {
             streamBinary(res.url, res.headers, res.proxy, out);
             return;
+        }
+
+        // 脚本声明了 ttlSec 才缓存。以前这个字段返回了也没人读，
+        // 每个分片请求都要重新走一遍签名流程（咪咕那种要 800ms）。
+        if (res.ttlSec > 0) {
+            try {
+                CacheEntry ce = new CacheEntry();
+                ce.url = res.url;
+                ce.body = res.body;
+                ce.contentType = res.contentType;
+                ce.status = res.status;
+                ce.expireAt = System.currentTimeMillis() + res.ttlSec * 1000L;
+                respCache.put(cacheKey, ce);
+                // 顺手清掉过期的，别让表无限长
+                if (respCache.size() > 200) {
+                    long now = System.currentTimeMillis();
+                    java.util.Iterator<java.util.Map.Entry<String, CacheEntry>> it =
+                            respCache.entrySet().iterator();
+                    while (it.hasNext()) {
+                        if (it.next().getValue().expireAt <= now) it.remove();
+                    }
+                }
+            } catch (Throwable ignored) { }
         }
 
         if (res.body != null) {

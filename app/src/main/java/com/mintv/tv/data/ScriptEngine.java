@@ -279,10 +279,29 @@ public final class ScriptEngine {
      * <p>用 CommonJS 的包装方式执行：{@code (function(module, exports, require){...})}，
      * 这样脚本里的 {@code exports.xxx = ...} 和 {@code require("./lib/x.js")} 都能用。
      */
+    /** 正在加载的模块，用来挡住 A require B、B require A 这种循环。 */
+    private final java.util.Set<String> loadingModules =
+            java.util.Collections.synchronizedSet(new java.util.HashSet<String>());
+
     private JSObject loadModule(JSContext c, File file, String fname) throws IOException {
         String key = file.getAbsolutePath();
         JSObject cached = moduleCache.get(key);
         if (cached != null) return cached;
+        // 循环 require 会让递归无限展开直到栈溢出，这里直接掐断
+        if (loadingModules.contains(key)) {
+            ScriptLog.warn(fname, "循环 require: " + key);
+            return null;
+        }
+        loadingModules.add(key);
+        try {
+            return loadModuleInner(c, file, fname, key);
+        } finally {
+            loadingModules.remove(key);
+        }
+    }
+
+    private JSObject loadModuleInner(JSContext c, File file, String fname, String key)
+            throws IOException {
 
         String code = readText(file);
 

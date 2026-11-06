@@ -154,15 +154,28 @@ public final class RemoteServer {
      *
      * <p>池子固定大小，避免被 VLC 的预加载打爆。
      */
+    /**
+     * 每连接一线程，空闲回收，上限 32。
+     *
+     * <p>原来固定 6 个。脚本里一个死循环（QuickJS 没有中断接口，
+     * 详见 ScriptEngine 的注释）就会永久占死一个线程 —— 6 个脚本各卡一次，
+     * 整个手机助手连 /api/logs 都打不开。
+     *
+     * <p>改成 cached + 上限 32：最坏情况占满 32 个线程，服务还能响应。
+     * 线程回收不了是引擎的限制，这里只能保证不被拖死。
+     */
     private final java.util.concurrent.ExecutorService workers =
-            java.util.concurrent.Executors.newFixedThreadPool(6,
+            new java.util.concurrent.ThreadPoolExecutor(
+                    2, 32, 60L, java.util.concurrent.TimeUnit.SECONDS,
+                    new java.util.concurrent.SynchronousQueue<Runnable>(),
                     new java.util.concurrent.ThreadFactory() {
                         @Override public Thread newThread(Runnable r) {
                             Thread t = new Thread(r, "remote-http");
                             t.setDaemon(true);
                             return t;
                         }
-                    });
+                    },
+                    new java.util.concurrent.ThreadPoolExecutor.AbortPolicy());
 
     /**
      * 进程级随机盐，用来给 u 参数签名。
@@ -270,11 +283,20 @@ public final class RemoteServer {
 
             // 读完请求头，拿到 Content-Length
             int contentLength = 0;
+            // 请求头全收下来传给脚本。以前只取 Content-Length，
+            // 脚本的 item.headers 永远是空对象 —— 需要 Referer/Cookie
+            // 的源（防盗链）在脚本里根本没法处理。
+            final java.util.Map<String, String> reqHeaders = new java.util.HashMap<>();
             String line;
             while ((line = readLine(in)) != null && !line.isEmpty()) {
                 int c = line.indexOf(':');
-                if (c > 0 && "content-length".equalsIgnoreCase(line.substring(0, c).trim())) {
-                    try { contentLength = Integer.parseInt(line.substring(c + 1).trim()); }
+                if (c <= 0) continue;
+                String hn = line.substring(0, c).trim();
+                String hv = line.substring(c + 1).trim();
+                if (hn.isEmpty()) continue;
+                reqHeaders.put(hn, hv);
+                if ("content-length".equalsIgnoreCase(hn)) {
+                    try { contentLength = Integer.parseInt(hv); }
                     catch (Throwable ignored) { }
                 }
             }
@@ -290,14 +312,15 @@ public final class RemoteServer {
                 body = new String(buf, 0, read, "UTF-8");
             }
 
-            route(method, path, query, body, out);
+            route(method, path, query, body, reqHeaders, out);
             out.flush();
         } catch (Throwable t) {
             Log.w(TAG, "请求处理失败: " + t);
         }
     }
 
-    private void route(String method, String path, String query, String body, OutputStream out)
+    private void route(String method, String path, String query, String body,
+                       java.util.Map<String, String> reqHeaders, OutputStream out)
             throws IOException {
         // ---- API ----
         if ("/api/state".equals(path)) {
@@ -587,7 +610,7 @@ public final class RemoteServer {
             try {
                 ScriptRouter sr = router();
                 if (sr.canHandle(path)) {
-                    sr.handle(path, query, out);
+                    sr.handle(path, query, reqHeaders, out);
                     return;
                 }
             } catch (Throwable t) {
