@@ -120,7 +120,8 @@ public class MainActivity extends Activity implements FocusEngine.Host {
 
     // ---- 状态 ----
     private final FocusEngine focus = new FocusEngine();
-    private List<DemoData.Category> categories;
+    /** 分类列表。同样要空 List 初始值，理由见 channels。 */
+    private List<DemoData.Category> categories = new java.util.ArrayList<>();
     private PlaylistParser.Playlist playlist;
 
     /**
@@ -137,7 +138,14 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             new java.util.HashMap<>();
     private final java.util.Map<String, java.util.List<PlaylistParser.Channel>> channelCache =
             new java.util.HashMap<>();
-    private List<PlaylistParser.Channel> channels;
+    /**
+     * 频道列表。
+     *
+     * <p><b>初始必须是空 List 而不是 null</b>：loadPlaylist 现在跑在后台线程，
+     * onCreate 里的 buildOverlay 会在数据到位之前跑 —— null 的话直接 NPE
+     * 闪退（buildOverlay:1161 那次就是这么崩的）。
+     */
+    private List<PlaylistParser.Channel> channels = new java.util.ArrayList<>();
     private final LogoLoader logos = new LogoLoader();
     private boolean panelVisible = true;
     private int playingChannel = 0;
