@@ -201,9 +201,23 @@ public final class ScriptEngine {
 
             Object ret;
             try {
+                // 先找 exports.<entry>，找不到再找全局函数。
+                // 两种写法都支持：
+                //   exports.main = function(item){...}
+                //   function main(item){...}
+                JSObject fnObj = null;
+                try { fnObj = exports.getObject(entry); } catch (Throwable ignored) { }
+                if (fnObj == null) {
+                    try { fnObj = c.getObject(entry); } catch (Throwable ignored) { }
+                }
+                if (fnObj == null) {
+                    ScriptLog.warn(fname, "脚本没有导出 " + entry);
+                    return Result.fail("脚本没有导出 " + entry);
+                }
                 JSArray a = new JSArray(c);
-                a.push(itemJsonToJs(c, itemJson));   // JSObject 是 JSValue 子类
-                ret = exports.executeFunction(entry, a);
+                a.push(c.getObject("globalThis"));            // thisArg
+                a.push(itemJsonToJs(c, itemJson));             // 真正的参数
+                ret = fnObj.executeFunction("call", a);
             } catch (Exception e) {
                 // 原来这里无条件 ret = null，把所有异常都吃掉了 ——
                 // 脚本里第一句就报错的话，外面只看到"没有返回可播放的内容"，
@@ -293,11 +307,29 @@ public final class ScriptEngine {
         mod.set("exports", exp);
 
         if (fn instanceof JSObject) {
-            JSArray a = new JSArray(c);
-            a.push(mod);
-            a.push(exp);
-            a.push(c.getObject("__require"));
-            try { ((JSObject) fn).executeFunction("call", a); } catch (Throwable ignored) { }
+            // 注意：必须传三个独立参数。
+            //
+            // 原来是把它们塞进一个 JSArray 再传，executeFunction 会把数组当成
+            // 单个实参，等价于 fn.call([mod, exp, require]) —— 包装函数的
+            // module 变成整个数组，exports / require 全是 undefined。
+            // 结果脚本里 exports.xxx = ... 全写到错地方，main 永远找不到。
+            try {
+                // 数组第一个元素是 thisArg，后面才是实参。
+                //
+                // 之前只放了 [mod, exp, require]，等价于
+                //   fn.call(mod, exp, require)
+                // —— this 变成了 mod，包装函数的 module=exp、exports=require、
+                // require=undefined，三个参数整体错位一格。脚本里 exports.xxx
+                // 全写到错地方，main 永远找不到，报 TypeError: not a function。
+                JSArray a = new JSArray(c);
+                a.push(c.getObject("globalThis"));  // thisArg
+                a.push(mod);
+                a.push(exp);
+                a.push(c.getObject("__require"));
+                ((JSObject) fn).executeFunction("call", a);
+            } catch (Throwable t) {
+                ScriptLog.warn(fname, "包装函数执行异常: " + t);
+            }
         }
 
         JSObject out = mod.getObject("exports");
