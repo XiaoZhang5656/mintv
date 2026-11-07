@@ -8,6 +8,10 @@ buildscript {
         // 字符串加密插件：构建期把字符串字面量换成「密文 + 运行时解密」，
         // 反编译只能看到乱码。R8 只混淆类名/方法名，不碰字符串。
         classpath 'com.github.megatronking.stringfog:gradle-plugin:5.2.0'
+        // 加解密实现在配置阶段就要被插件加载（它要校验 implementation 指向的类
+        // 是否存在），而 app 的 implementation 依赖要等配置结束才解析 ——
+        // 所以这里也必须放一份，否则报 "implementation class not found"。
+        classpath 'com.github.megatronking.stringfog:xor:5.0.0'
     }
 }
 

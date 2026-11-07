@@ -63,8 +63,8 @@ android {
         // 方法数已超 64K（media3 + libvlc + zxing + androidx.core）
         multiDexEnabled true
         targetSdk 34
-        versionCode 271
-        versionName "0.3.75"
+        versionCode 272
+        versionName "0.3.76"
 
         // native 只编 32 位 —— 跟下面的 splits 一致。
         // 注意：不能写在外层 ndk {} 里，那会跟 splits 冲突；
