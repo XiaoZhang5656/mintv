@@ -1,4 +1,16 @@
 // 顶层构建脚本。目前只在根上挂 AGP，插件版本集中在 gradle/libs.versions.toml 里改。
+buildscript {
+    repositories {
+        mavenCentral()
+        google()
+    }
+    dependencies {
+        // 字符串加密插件：构建期把字符串字面量换成「密文 + 运行时解密」，
+        // 反编译只能看到乱码。R8 只混淆类名/方法名，不碰字符串。
+        classpath 'com.github.megatronking.stringfog:gradle-plugin:5.2.0'
+    }
+}
+
 plugins {
     id 'com.android.application' version '8.5.2' apply false
 }

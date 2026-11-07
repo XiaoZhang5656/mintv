@@ -2,6 +2,28 @@ plugins {
     id 'com.android.application'
 }
 
+// 字符串加密。R8 只处理类名/方法名，dex 里的字符串常量原样保留 ——
+// `strings classes.dex | grep http` 就能拿到 tracker 地址。
+// 这个插件把字面量替换成密文，运行时用 StringFogImpl 解。
+apply plugin: 'stringfog'
+
+stringfog {
+    enable true
+    // xor 比 aes 快，对「挡 strings」这个目标已经够用。
+    // 真要抗逆向得靠加壳，字符串加密只能提高门槛。
+    mode 'xor'
+    implementation 'com.github.megatronking.stringfog.xor.StringFogImpl'
+    // 密钥：改动会让旧版本的密文失效，只在发新版时改
+    kg 'MinTV2026StrFog'
+}
+
+android {
+    buildFeatures {
+        // StringFog 5.x 依赖 BuildConfig，AGP 8.0 起默认不生成
+        buildConfig true
+    }
+}
+
 android {
     signingConfigs {
         // 固定签名。以前 CI 每次用 keytool 现场生成 debug.keystore，
@@ -40,8 +62,8 @@ android {
         // 方法数已超 64K（media3 + libvlc + zxing + androidx.core）
         multiDexEnabled true
         targetSdk 34
-        versionCode 268
-        versionName "0.3.72"
+        versionCode 269
+        versionName "0.3.73"
 
         // native 只编 32 位 —— 跟下面的 splits 一致。
         // 注意：不能写在外层 ndk {} 里，那会跟 splits 冲突；
@@ -131,6 +153,9 @@ android {
 }
 
 dependencies {
+    // StringFog 运行时（零依赖纯 Java JAR）
+    implementation 'com.github.megatronking.stringfog:xor:5.0.0'
+
     // 三个播放内核并存，UI 层零第三方依赖。切换逻辑在 PlayerManager。
     //
     // Exo：HLS/TS 最稳、起播最快，默认

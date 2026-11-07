@@ -43,3 +43,11 @@
     public static int i(...);
     public static int v(...);
 }
+
+# ============================================================
+# StringFog 运行时
+# ============================================================
+# 插桩后每个字符串都变成 StringFogImpl.decrypt(...) 调用，
+# 这个类被混淆或裁掉，所有字符串就解不出来了。
+-keep class com.github.megatronking.stringfog.** { *; }
+-dontwarn com.github.megatronking.stringfog.**
