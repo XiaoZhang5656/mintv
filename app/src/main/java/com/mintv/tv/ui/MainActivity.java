@@ -7480,7 +7480,66 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     }
 
     /** 调起系统安装器。Android 7+ 必须给 FileProvider 的 uri，直接 file:// 会抛异常。 */
+    /** 等用户从「安装未知应用」设置页回来后再装的包。 */
+    private java.io.File pendingInstallApk;
+
+    /**
+     * 调起系统安装器。
+     *
+     * <p>Android 8.0（API 26）起，应用内安装需要用户先授权「安装未知应用」
+     * （canRequestPackageInstalls 返回 false 时直接 startActivity 会被系统
+     * 静默拦掉，用户看不到任何提示）。这里先检查，没权限就引导去设置页，
+     * 回来后 onResume 自动继续。
+     */
     private void installApk(java.io.File apk) {
+        if (android.os.Build.VERSION.SDK_INT >= 26) {
+            boolean allowed;
+            try {
+                allowed = getPackageManager().canRequestPackageInstalls();
+            } catch (Throwable t) {
+                allowed = true;   // 查不出来就别拦着
+            }
+            if (!allowed) {
+                askInstallPermission(apk);
+                return;
+            }
+        }
+        doInstall(apk);
+    }
+
+    /** 弹「需要安装权限」，点「去设置」跳到本应用的未知来源开关。 */
+    private void askInstallPermission(final java.io.File apk) {
+        new android.app.AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+                .setTitle("需要安装权限")
+                .setMessage("Android 8.0 起，应用内更新要先允许「安装未知应用」。\n\n"
+                        + "点「去设置」后，找到 MinTV 打开开关，返回来自动继续安装。")
+                .setNegativeButton("取消", null)
+                .setPositiveButton("去设置", new android.content.DialogInterface.OnClickListener() {
+                    @Override public void onClick(android.content.DialogInterface d, int w) {
+                        pendingInstallApk = apk;
+                        try {
+                            android.content.Intent i = new android.content.Intent(
+                                    android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES);
+                            i.setData(android.net.Uri.parse("package:" + getPackageName()));
+                            startActivity(i);
+                        } catch (Throwable t) {
+                            // 个别 ROM 没有这个设置页，退回应用详情页
+                            try {
+                                android.content.Intent i2 = new android.content.Intent(
+                                        android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
+                                i2.setData(android.net.Uri.parse("package:" + getPackageName()));
+                                startActivity(i2);
+                            } catch (Throwable t2) {
+                                pendingInstallApk = null;
+                                tip("请到系统设置里允许本应用安装应用");
+                            }
+                        }
+                    }
+                })
+                .show();
+    }
+
+    private void doInstall(java.io.File apk) {
         try {
             android.content.Intent i = new android.content.Intent(android.content.Intent.ACTION_VIEW);
             android.net.Uri uri;
@@ -8661,6 +8720,25 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     @Override
     protected void onResume() {
         super.onResume();
+
+        // 从「安装未知应用」设置页回来：授权了就接着装
+        if (pendingInstallApk != null) {
+            final java.io.File f = pendingInstallApk;
+            pendingInstallApk = null;
+            boolean ok = true;
+            if (android.os.Build.VERSION.SDK_INT >= 26) {
+                try {
+                    ok = getPackageManager().canRequestPackageInstalls();
+                } catch (Throwable ignored) { }
+            }
+            if (ok && f.exists()) {
+                // 稍延迟，让设置页完全退场，否则安装器可能被系统吞掉
+                ui.postDelayed(new Runnable() {
+                    @Override public void run() { doInstall(f); }
+                }, 350);
+            }
+        }
+
         if (playerManager == null) return;
         // 重新绑定画面输出（Surface/TextureView 在后台可能已经失效）
         if (selections[ROW_OUTPUT] == OUTPUT_TEXTURE) {
