@@ -7129,17 +7129,16 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             return;
         }
         int remote;
-        String remoteName, apkUrl, msg;
+        String apkUrl;
+        final org.json.JSONObject o;
         try {
-            org.json.JSONObject o = new org.json.JSONObject(json);
+            o = new org.json.JSONObject(json);
             remote = o.optInt("versionCode", -1);
-            remoteName = o.optString("versionName", "");
             apkUrl = o.optString("apk", "");
             if (remote <= 0 || apkUrl.isEmpty()) {
                 tip("检查更新失败：版本信息不完整");
                 return;
             }
-            msg = buildUpdateMessage(o);
         } catch (Throwable t) {
             tiplog("解析版本信息失败", t);
             return;
@@ -7151,7 +7150,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             return;
         }
 
-        showUpdateDialog(remoteName, msg, apkUrl);
+        showUpdateDialog(o, apkUrl);
     }
 
     /**
@@ -7161,47 +7160,127 @@ public class MainActivity extends Activity implements FocusEngine.Host {
      * 而且没法放进度条。这里自己搭一个：深灰卡片 + 圆角 + 可滚动正文 +
      * 一条默认隐藏的下载进度条。
      */
-    private void showUpdateDialog(String remoteName, String msg, final String apkUrl) {
-        final android.widget.LinearLayout box = new android.widget.LinearLayout(this);
-        box.setOrientation(android.widget.LinearLayout.VERTICAL);
-        box.setPadding(Theme.px(22), Theme.px(18), Theme.px(22), Theme.px(10));
+    /**
+     * 更新对话框。
+     *
+     * <p>自己搭布局，不用 setMessage：系统默认消息区是纯文本，版本号、日期、
+     * 要点全挤成一坨，长内容还会溢出。这里按区块渲染：
+     *
+     * <pre>
+     *   ┌────────────────────────────┐
+     *   │ 发现新版本        0.3.88 [新]│
+     *   ├────────────────────────────┤
+     *   │ 2026-11-07 20:15            │
+     *   │  · OSD 进度条重做            │
+     *   │  · 底轨统一成深灰实心         │   ← ScrollView
+     *   │                             │
+     *   │ 2026-11-07 19:50            │
+     *   │  · ...                      │
+     *   ├────────────────────────────┤
+     *   │ ▓▓▓▓▓░░░░░░  12.3 / 48.2 MB │   ← 点更新后出现
+     *   │            稍后   立即更新   │
+     *   └────────────────────────────┘
+     * </pre>
+     */
+    private void showUpdateDialog(final org.json.JSONObject info, final String apkUrl) {
+        final String remoteName = info.optString("versionName", "");
 
-        final android.widget.TextView body = new android.widget.TextView(this);
-        body.setText(msg);
-        body.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, Theme.sp(14));
-        body.setTextColor(0xFFC6CDD6);
-        body.setLineSpacing(Theme.px(5), 1f);
-        box.addView(body, new android.widget.LinearLayout.LayoutParams(
+        final android.widget.LinearLayout body =
+                new android.widget.LinearLayout(this);
+        body.setOrientation(android.widget.LinearLayout.VERTICAL);
+
+        // ── 顶部：版本号徽标 + 日期 ──
+        final android.widget.LinearLayout head =
+                new android.widget.LinearLayout(this);
+        head.setOrientation(android.widget.LinearLayout.HORIZONTAL);
+        head.setGravity(android.view.Gravity.CENTER_VERTICAL);
+        head.setPadding(Theme.px(22), Theme.px(16), Theme.px(22), Theme.px(2));
+
+        android.widget.TextView ver = new android.widget.TextView(this);
+        ver.setText(remoteName);
+        ver.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, Theme.sp(21));
+        ver.setTextColor(0xFFF2F5FA);
+        ver.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+        head.addView(ver);
+
+        android.widget.TextView badge = new android.widget.TextView(this);
+        badge.setText("新版本");
+        badge.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, Theme.sp(11));
+        badge.setTextColor(0xFF7AA8FF);
+        badge.setBackground(makeTagBg());
+        badge.setPadding(Theme.px(7), Theme.px(2), Theme.px(7), Theme.px(2));
+        android.widget.LinearLayout.LayoutParams blp0 =
+                new android.widget.LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT);
+        blp0.leftMargin = Theme.px(10);
+        head.addView(badge, blp0);
+
+        body.addView(head, new android.widget.LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
-        // 下载进度：平时藏着，点「立即更新」才显示
+        // ── 中间：可滚动的更新日志 ──
+        android.widget.LinearLayout log = new android.widget.LinearLayout(this);
+        log.setOrientation(android.widget.LinearLayout.VERTICAL);
+        log.setPadding(Theme.px(22), Theme.px(6), Theme.px(22), Theme.px(8));
+
+        org.json.JSONArray hist = info.optJSONArray("history");
+        boolean first = true;
+        if (hist != null && hist.length() > 0) {
+            for (int i = 0; i < hist.length() && i < 6; i++) {
+                org.json.JSONObject h = hist.optJSONObject(i);
+                if (h == null) continue;
+                if (!first) log.addView(makeDivider());
+                first = false;
+                addLogBlock(log, h.optString("date", ""),
+                        h.optJSONArray("changes"));
+            }
+        } else {
+            addLogBlock(log, info.optString("date", ""),
+                    info.optJSONArray("changes"));
+        }
+
+        android.widget.ScrollView sv = new android.widget.ScrollView(this);
+        sv.setVerticalScrollBarEnabled(false);
+        sv.addView(log, new ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        body.addView(sv, new android.widget.LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));   // weight=1 撑满剩余
+
+        // ── 底部：下载进度（初始隐藏）──
+        final android.widget.LinearLayout foot =
+                new android.widget.LinearLayout(this);
+        foot.setOrientation(android.widget.LinearLayout.VERTICAL);
+        foot.setPadding(Theme.px(22), Theme.px(4), Theme.px(22), Theme.px(2));
+        foot.setVisibility(View.GONE);
+
         final android.widget.ProgressBar bar = new android.widget.ProgressBar(
                 this, null, android.R.attr.progressBarStyleHorizontal);
-        bar.setMax(100);
+        bar.setMax(1000);
         bar.setProgress(0);
-        bar.setVisibility(View.GONE);
-        android.widget.LinearLayout.LayoutParams blp = new android.widget.LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, Theme.px(6));
-        blp.topMargin = Theme.px(16);
-        box.addView(bar, blp);
+        bar.setProgressDrawable(makeBarBg());
+        foot.addView(bar, new android.widget.LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, Theme.px(5)));
 
         final android.widget.TextView status = new android.widget.TextView(this);
-        status.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, Theme.sp(13));
+        status.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, Theme.sp(12));
         status.setTextColor(0xFF9AA0AA);
-        status.setVisibility(View.GONE);
-        android.widget.LinearLayout.LayoutParams slp = new android.widget.LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        slp.topMargin = Theme.px(8);
-        box.addView(status, slp);
+        android.widget.LinearLayout.LayoutParams slp0 =
+                new android.widget.LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT);
+        slp0.topMargin = Theme.px(7);
+        foot.addView(status, slp0);
+
+        body.addView(foot);
 
         new android.app.AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
-                .setTitle("发现新版本 " + (remoteName == null ? "" : remoteName))
-                .setView(box)
+                .setTitle("发现新版本")
+                .setView(body)
                 .setNegativeButton("稍后", null)
                 .setPositiveButton("立即更新", new android.content.DialogInterface.OnClickListener() {
                     @Override public void onClick(android.content.DialogInterface d, int w) {
-                        bar.setVisibility(View.VISIBLE);
-                        status.setVisibility(View.VISIBLE);
+                        foot.setVisibility(View.VISIBLE);
                         status.setText("正在下载…");
                         downloadAndInstall(apkUrl, bar, status);
                     }
@@ -7209,42 +7288,100 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                 .show();
     }
 
-    /** 拼「版本号 + 各版本日期与要点 + 手动下载提示」。 */
-    private String buildUpdateMessage(org.json.JSONObject o) {
-        StringBuilder sb = new StringBuilder();
-        sb.append(o.optString("versionName", "")).append("\n");
-
-        org.json.JSONArray hist = o.optJSONArray("history");
-        if (hist != null && hist.length() > 0) {
-            for (int i = 0; i < hist.length() && i < 6; i++) {
-                org.json.JSONObject h = hist.optJSONObject(i);
-                if (h == null) continue;
-                String date = h.optString("date", "");
-                if (!date.isEmpty()) sb.append("\n").append(date).append("\n");
-                org.json.JSONArray ch = h.optJSONArray("changes");
-                if (ch != null) {
-                    for (int k = 0; k < ch.length(); k++) {
-                        String line = ch.optString(k, "");
-                        if (line.isEmpty()) continue;
-                        sb.append(k + 1).append(". ").append(line).append("\n");
-                    }
-                }
-            }
-        } else {
-            org.json.JSONArray ch = o.optJSONArray("changes");
-            if (ch != null) {
-                for (int k = 0; k < ch.length(); k++) {
-                    String line = ch.optString(k, "");
-                    if (line.isEmpty()) continue;
-                    sb.append(k + 1).append(". ").append(line).append("\n");
-                }
-            }
+    /** 一个版本的日志区块：日期小字 + 圆点要点。 */
+    private void addLogBlock(android.widget.LinearLayout parent, String date,
+                             org.json.JSONArray changes) {
+        if (date != null && !date.isEmpty()) {
+            android.widget.TextView d = new android.widget.TextView(this);
+            d.setText(date);
+            d.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, Theme.sp(11));
+            d.setTextColor(0xFF6E7887);
+            android.widget.LinearLayout.LayoutParams lp =
+                    new android.widget.LinearLayout.LayoutParams(
+                            ViewGroup.LayoutParams.WRAP_CONTENT,
+                            ViewGroup.LayoutParams.WRAP_CONTENT);
+            lp.topMargin = Theme.px(10);
+            lp.bottomMargin = Theme.px(6);
+            parent.addView(d, lp);
         }
+        if (changes == null) return;
+        for (int k = 0; k < changes.length(); k++) {
+            String line = changes.optString(k, "");
+            if (line.isEmpty()) continue;
 
-        sb.append("\n如果无法自动更新，请手动下载安装包：\n");
-        sb.append("https://github.com/XiaoZhang5656/mintv-apk");
-        return sb.toString();
+            android.widget.LinearLayout row = new android.widget.LinearLayout(this);
+            row.setOrientation(android.widget.LinearLayout.HORIZONTAL);
+
+            android.widget.TextView dot = new android.widget.TextView(this);
+            dot.setText("·");
+            dot.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, Theme.sp(15));
+            dot.setTextColor(0xFF4E8FEB);
+            dot.setPadding(0, 0, Theme.px(8), 0);
+            row.addView(dot);
+
+            android.widget.TextView t = new android.widget.TextView(this);
+            t.setText(line);
+            t.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, Theme.sp(13));
+            t.setTextColor(0xFFC6CDD6);
+            t.setLineSpacing(Theme.px(3), 1f);
+            row.addView(t, new android.widget.LinearLayout.LayoutParams(
+                    0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+            android.widget.LinearLayout.LayoutParams lp =
+                    new android.widget.LinearLayout.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            ViewGroup.LayoutParams.WRAP_CONTENT);
+            lp.bottomMargin = Theme.px(4);
+            parent.addView(row, lp);
+        }
     }
+
+    /** 版本之间的细分隔线。 */
+    private View makeDivider() {
+        View v = new View(this);
+        android.widget.LinearLayout.LayoutParams lp =
+                new android.widget.LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, Theme.px(1));
+        lp.topMargin = Theme.px(8);
+        lp.bottomMargin = Theme.px(2);
+        v.setLayoutParams(lp);
+        v.setBackgroundColor(0x14FFFFFF);
+        return v;
+    }
+
+    /** 「新版本」小标签的底。 */
+    private android.graphics.drawable.Drawable makeTagBg() {
+        android.graphics.drawable.GradientDrawable g =
+                new android.graphics.drawable.GradientDrawable();
+        g.setCornerRadius(Theme.px(4));
+        g.setColor(0x2E4E8FEB);
+        return g;
+    }
+
+    /** 下载进度条：圆角 + 主题色。 */
+    private android.graphics.drawable.Drawable makeBarBg() {
+        android.graphics.drawable.GradientDrawable bg =
+                new android.graphics.drawable.GradientDrawable();
+        bg.setCornerRadius(Theme.px(3));
+        bg.setColor(0x24FFFFFF);
+
+        android.graphics.drawable.GradientDrawable fill =
+                new android.graphics.drawable.GradientDrawable();
+        fill.setCornerRadius(Theme.px(3));
+        fill.setColor(Theme.FOCUS_BLUE);
+
+        android.graphics.drawable.ClipDrawable clip =
+                new android.graphics.drawable.ClipDrawable(
+                        fill, android.view.Gravity.LEFT, android.graphics.drawable.ClipDrawable.HORIZONTAL);
+
+        android.graphics.drawable.LayerDrawable ld =
+                new android.graphics.drawable.LayerDrawable(
+                        new android.graphics.drawable.Drawable[]{bg, clip});
+        ld.setId(0, android.R.id.background);
+        ld.setId(1, android.R.id.progress);
+        return ld;
+    }
+
 
     private void tiplog(String msg, Throwable t) {
         android.util.Log.w("MinTV", msg, t);
