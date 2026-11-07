@@ -64,6 +64,14 @@ public final class SettingsStore {
                         ? new JSONObject() : new JSONObject(text);
             } catch (Throwable t) {
                 android.util.Log.w(TAG, "读设置失败", t);
+                // 读失败**不能**覆盖缓存。
+                //
+                // 之前的写法是 o = new JSONObject() 然后 cache = o，
+                // 于是 SAF 偶发失败一次（比如刚好在文件被替换的瞬间读），
+                // 缓存就被永久污染成空对象，之后所有 getString 全返回 null ——
+                // 表现为「代理输入框是空的」「设置项全部还原」「保存了也没用」，
+                // 而磁盘上的 settings.json 其实是好的。
+                if (cache != null) return cache;
                 o = new JSONObject();
             }
             cache = o;
