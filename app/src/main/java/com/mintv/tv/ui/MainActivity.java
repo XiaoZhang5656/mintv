@@ -3293,6 +3293,20 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         return anchor;
     }
 
+    /**
+     * 默认选中哪个分类。
+     *
+     * <p>优先「全部」——那是「所有频道」的完整视图。只有 1 个分组时
+     * 0.3.62 会把冗余的「全部」省掉，此时退回第一个分类。
+     *
+     * <p>不能直接写 activeCategory = 0：分类列表是动态的，
+     * 索引 0 今天可能是「全部」，明天可能是「我的收藏」。
+     */
+    private int defaultCategoryIndex() {
+        int all = indexOfCategory("\u5168\u90e8");
+        return all >= 0 ? all : 0;
+    }
+
     private int indexOfCategory(String name) {
         if (categories == null || name == null) return -1;
         for (int i = 0; i < categories.size(); i++) {
@@ -3491,9 +3505,20 @@ public class MainActivity extends Activity implements FocusEngine.Host {
      */
     private void rebuildCategories() {
         List<DemoData.Category> all = DemoData.toCategories(playlist);
-        // 收藏为空时不占一行 —— 点进去是空的，纯粹多一个焦点停靠点。
-        if (!all.isEmpty() && !FAV_CATEGORY.equals(all.get(0).name) && !favorites.isEmpty()) {
-            all.add(0, new DemoData.Category(FAV_CATEGORY, favorites.size(), 0));
+        // 收藏计数只算「当前订阅里真实存在的」。
+        //
+        // favorites 是全局的（按「频道名|地址」的 hash 存），换订阅之后
+        // 之前收藏的台可能不在这份列表里。原来直接用 favorites.size()，
+        // 结果就是「我的收藏 1」点进去空空如也 —— 那个 1 是别的订阅里的台。
+        int favHits = 0;
+        if (playlist != null && playlist.all != null) {
+            for (PlaylistParser.Channel ch : playlist.all) {
+                if (favorites.contains(favKey(ch))) favHits++;
+            }
+        }
+        // 一个都对不上就不显示这一项，不然它只是个空壳。
+        if (!all.isEmpty() && !FAV_CATEGORY.equals(all.get(0).name) && favHits > 0) {
+            all.add(0, new DemoData.Category(FAV_CATEGORY, favHits, 0));
         }
         List<DemoData.Category> keep = new ArrayList<>();
         for (DemoData.Category c : all) {
@@ -5122,11 +5147,18 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         if (cached != null && cachedCh != null && !cachedCh.isEmpty()) {
             playlist = cached;
             channels = cachedCh;
-            activeCategory = 0;
             focus.setChanIndexSilently(0);
             rebuildCategories();
+            // 分类和数据必须同源。
+            //
+            // 原来这里是 activeCategory = 0 然后直接 bindChannels()，
+            // 隐含假设 categories[0] 就是「全部」。0.3.62 把冗余的「全部」
+            // 省掉之后，categories[0] 可能变成「我的收藏」，于是界面上
+            // 高亮收藏、列表却显示全部频道，下一次任何分类操作都会按
+            // 收藏过滤成空。
+            activeCategory = defaultCategoryIndex();
             rebuildCategoryColumn();
-            bindChannels();
+            applyCategoryChannels(activeCategory);
             updateChannelFocus(0);
             // EPG 只在源变了才重载 —— 换订阅但频道名相同时复用现有节目单，
             // 省掉一次 1MB 文件的读盘 + 解析。
