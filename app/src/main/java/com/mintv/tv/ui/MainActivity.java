@@ -238,14 +238,14 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     private TextView infoPageText;
     /** 关于页的免责声明块，独立成形，不混在正文里。 */
     private LinearLayout disclaimerBox;
-    /** 当前设置页的 Tab：0 登录 / 1 设置 / 2 关于 / 3 订阅 */
+    /** 当前设置页的 Tab：0 登录 / 1 设置 / 2 订阅 / 3 关于 */
     private int currentTab = 1;
     /** 焦点是否在顶部 Tab 条上。第一行按「上」进入，左右切页，下回列表。 */
     private boolean tabFocus = false;
-    /** Tab 下标：0 登录 / 1 设置 / 2 关于 / 3 订阅 */
+    /** Tab 下标：0 登录 / 1 设置 / 2 订阅 / 3 关于 */
     private static final int TAB_SETTINGS = 1;
-    private static final int TAB_ABOUT    = 2;
-    private static final int TAB_HELPER   = 3;
+    private static final int TAB_HELPER   = 2;
+    private static final int TAB_ABOUT    = 3;
     private final int[] selections = DemoData.ROW_DEFAULT.clone();
 
     /**
@@ -1602,6 +1602,17 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             android.util.Log.w("MinTV", "这份源解析不出频道，已标记为无效");
         } else if (channels != null && !channels.isEmpty()) {
             SourceStore.clearBad(this);
+        }
+
+        // 列表就绪了，补一次「恢复上次没看完的台」。
+        //
+        // onCreate 里的 restoreLastChannel() 是同步跑的，那时 channels /
+        // categories 还是空的（loadPlaylist 已经挪到后台线程），
+        // tryRestoreIfPending 会因为条件不满足直接 return 且不置 restoreDone。
+        // 之后没人再调用，结果就是每次冷启动都停在第一台不自动播。
+        if (restoreChanKey != null) {
+            restoreDone = false;
+            tryRestoreIfPending();
         }
     }
 
