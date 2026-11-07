@@ -66,10 +66,18 @@ def target_name(apk_path):
     同时保留一份不带版本号的固定名，老链接继续可用。
     返回 (带版本号路径, 固定名路径)。
     """
-    base = os.path.basename(apk_path)              # app-arm64-v8a-debug.apk
-    abi = base.replace('app-', '').replace('-debug.apk', '')
+    base = os.path.basename(apk_path)              # app-arm64-v8a-release.apk
+    # CI 已改为 assembleRelease（debug 变体不能混淆），后缀变成 -release。
+    # 两种后缀都要认，否则 abi 会解析成 "arm64-v8a-release"。
+    abi = base.replace('app-', '')
+    for suf in ('-release.apk', '-debug.apk'):
+        if abi.endswith(suf):
+            abi = abi[:-len(suf)]
+            break
     ver = read_version_name()
-    fixed = 'public/apk/' + base
+    # 固定文件名统一用 -debug.apk，保持已发布的下载链接不变。
+    # 文件名只是历史遗留标识，实际内容是 release 构建。
+    fixed = 'public/apk/app-%s-debug.apk' % abi
     if not ver:
         return fixed, None
     versioned = 'public/apk/mintv-%s-%s.apk' % (ver, abi)

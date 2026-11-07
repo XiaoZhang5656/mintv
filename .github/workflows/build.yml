@@ -44,14 +44,18 @@ jobs:
       - name: Build debug APK
         run: |
           set -o pipefail
-          gradle assembleDebug --no-daemon --stacktrace --console=plain
+          # 必须用 release：AGP 强制禁止 debuggable 变体做混淆
+          #   WARNING: BuildType 'debug' is both debuggable and has
+          #   'isMinifyEnabled' set to true. ...obfuscation will be disabled.
+          # 之前一直打 debug，所以代码从未真正混淆过（只有资源压缩生效）。
+          gradle assembleRelease --no-daemon --stacktrace --console=plain
           echo "---- outputs ----"
           find app/build/outputs -name '*.apk' -type f || true
 
       - uses: actions/upload-artifact@v4
         with:
-          name: tvui-java-debug
-          path: app/build/outputs/apk/debug/*.apk
+          name: tvui-java-release
+          path: app/build/outputs/apk/release/*.apk
 
       # git push 到 github.com 在 runner 上常被断，改用 REST API 回写
       # 回写 APK：先试 git push（快），失败再走 Contents API（绕开 443 断连）。
@@ -69,7 +73,7 @@ jobs:
         run: |
           mkdir -p public/apk
           # ABI 分包后会产出多个 apk，全部拷进去，由 publish 脚本按 ABI 分别命名上传
-          cp app/build/outputs/apk/debug/*.apk public/apk/
+          cp app/build/outputs/apk/release/*.apk public/apk/
           ls -la public/apk
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
