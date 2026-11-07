@@ -45,7 +45,6 @@ public final class PieceCrypto {
             // 顺手验一下版本，防止拿到旧 so
             ok = nativeVersion() >= 1;
         } catch (Throwable t) {
-            android.util.Log.w(TAG, "native 库不可用，回落到 tracker 密钥: " + t);
         }
         NATIVE_OK = ok;
     }
@@ -67,7 +66,6 @@ public final class PieceCrypto {
         try {
             return parseKey(nativeKey());
         } catch (Throwable t) {
-            android.util.Log.w(TAG, "nativeKey 调用失败", t);
             return null;
         }
     }
@@ -123,7 +121,6 @@ public final class PieceCrypto {
                     new IvParameterSpec(iv));
             return c.doFinal(data);
         } catch (Throwable t) {
-            android.util.Log.w(TAG, "加解密失败 seq=" + seq, t);
             return null;
         }
     }

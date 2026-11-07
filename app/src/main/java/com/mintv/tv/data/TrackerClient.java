@@ -150,7 +150,6 @@ public final class TrackerClient {
         } catch (Throwable t) {
             // 把异常类型拼进消息里 —— 之前只有 "join 失败"，栈又被系统的
             // GC 日志冲掉，根本看不出是超时、DNS 还是 401。
-            android.util.Log.w("Tracker", "join 失败: " + t, t);
             return null;
         }
     }
@@ -193,7 +192,6 @@ public final class TrackerClient {
                 out.add(p);
             }
         } catch (Throwable t) {
-            android.util.Log.w("Tracker", "peers 失败: " + t, t);
         }
         return out;
     }
@@ -219,7 +217,6 @@ public final class TrackerClient {
             b.put("have", arr);
             post("/api/join", b);
         } catch (Throwable t) {
-            android.util.Log.w("Tracker", "reportHave 失败: " + t);
         }
     }
 
@@ -249,7 +246,6 @@ public final class TrackerClient {
             b.put("downReq", downReq);
             post("/api/stat", b);
         } catch (Throwable t) {
-            android.util.Log.w("Tracker", "reportStat 失败: " + t);
         }
     }
 
@@ -313,7 +309,6 @@ public final class TrackerClient {
                 conn = (HttpURLConnection) new URL(np.url).openConnection();
                 if (np.hostHeader != null) conn.setRequestProperty("Host", np.hostHeader);
             } else {
-                android.util.Log.w("Tracker", "预解析失败，交给系统解析: " + full);
                 conn = (HttpURLConnection) new URL(full).openConnection();
             }
             conn.setConnectTimeout(TIMEOUT);
@@ -343,12 +338,10 @@ public final class TrackerClient {
                 // 现在失败直接报错，宁可连不上也不能明文泄露
                 // channel / have / addr 这些信息。
                 if (!PayloadCrypto.available()) {
-                    android.util.Log.w("Tracker", path + " 跳过：公钥不可用");
                     return null;
                 }
                 PayloadCrypto.Enc er = PayloadCrypto.encrypt2(payload);
                 if (er == null) {
-                    android.util.Log.w("Tracker", path + " 跳过：加密失败");
                     return null;
                 }
                 payload = er.payload;
@@ -360,8 +353,6 @@ public final class TrackerClient {
 
             int code = conn.getResponseCode();
             if (code < 200 || code >= 300) {
-                android.util.Log.w("Tracker", path + " HTTP " + code
-                        + " u=" + BASE);
                 return null;
             }
             InputStream in = conn.getInputStream();
@@ -374,7 +365,6 @@ public final class TrackerClient {
             respText = PayloadCrypto.decryptResponse(sessKey, respText);
             return new JSONObject(respText);
         } catch (Throwable t) {
-            android.util.Log.w("Tracker", path + " 失败", t);
             return null;
         } finally {
             if (conn != null) try { conn.disconnect(); } catch (Throwable ignored) { }

@@ -356,7 +356,6 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             ui.postDelayed(new Runnable() {
                 @Override public void run() {
                     if (selections[ROW_P2P_BOOST] != 1) return;
-                    android.util.Log.w("MinTV", "启动时源力加速为开启，补一次网络检测");
                     netCheckLoop.run();
                 }
             }, 1500);
@@ -2071,10 +2070,8 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             try {
                 com.mintv.tv.data.P2PEngine.get(getApplicationContext()).stop();
             } catch (Throwable t) {
-                android.util.Log.w("MinTV", "停止 P2P 失败", t);
             }
             osd.toast("源力加速已关闭");
-            android.util.Log.w("MinTV", "p2p boost off");
             return;
         }
         osd.toast("源力加速已开启");
@@ -2089,8 +2086,6 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                 @Override public void run() {
                     final com.mintv.tv.data.NetCheck.Result r =
                             com.mintv.tv.data.NetCheck.run();
-                    android.util.Log.w("MinTV", "p2p 定时检测 nat=" + r.typeName()
-                            + " ip=" + r.publicIp + " · " + r.note);
                     lastNatResult = r;
                     ui.post(new Runnable() {
                         @Override public void run() {
@@ -4282,7 +4277,6 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             }
             return com.mintv.tv.data.ChannelHash.id(c.name);
         } catch (Throwable t) {
-            android.util.Log.w("MinTV", "p2pChannel 失败", t);
             return null;
         }
     }
@@ -4368,7 +4362,6 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             android.net.Uri uri = android.net.Uri.parse(url);
             String last = uri.getLastPathSegment();
             if (last == null || last.isEmpty()) {
-                android.util.Log.w("MinTV", "p2p 地址没有路径段: " + url);
                 return null;
             }
 
@@ -4410,7 +4403,6 @@ public class MainActivity extends Activity implements FocusEngine.Host {
 
             return playUrl;
         } catch (Throwable t) {
-            android.util.Log.w("MinTV", "构造 p2p 地址失败", t);
             return null;
         }
     }

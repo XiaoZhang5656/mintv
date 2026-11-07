@@ -211,19 +211,13 @@ public final class P2PEngine {
                             byte[] nk = PieceCrypto.nativeOrNull();
                             pieceKey = nk;
                             if (nk != null) {
-                                android.util.Log.i("P2P", "传输加密已启用，key="
-                                        + PieceCrypto.fingerprint(nk) + " (native)");
                             } else {
-                                android.util.Log.i("P2P", "传输不加密：native 库不可用"
-                                        + "（" + android.os.Build.SUPPORTED_ABIS[0]
-                                        + " 没有对应的 so，只有 armeabi-v7a 版）");
                             }
                             flushStats();
                             P2PEngine.this.minBufferSegs = cfg.minBufferSegs;
                             P2PEngine.this.uploadMinSegs = cfg.uploadMinSegs;
                         }
                     } catch (Throwable t) {
-                        android.util.Log.w("P2P", "心跳异常", t);
                     }
                     try { Thread.sleep(HEARTBEAT_MS); } catch (InterruptedException e) { break; }
                 }
@@ -231,8 +225,6 @@ public final class P2PEngine {
         }, "p2p-heartbeat");
         heartbeat.setDaemon(true);
         heartbeat.start();
-        android.util.Log.w("P2P", "start ch=" + h + " nat=" + natType
-                + " addr=" + localAddr + ":" + localPort);
     }
 
     /** 停止：通知服务端离开，清缓存。 */
@@ -245,7 +237,6 @@ public final class P2PEngine {
         channelName = null;
         punched.clear();
         if (hole != null) { try { hole.close(); } catch (Throwable ignored) { } hole = null; }
-        android.util.Log.w("P2P", "stop");
     }
 
     /** 播放进度变了：影响上报的 pos 和窗口。 */
@@ -314,8 +305,6 @@ public final class P2PEngine {
         // 还不如直接回源稳 —— peer 可能是死的、慢的、或者手上那片
         // 已经被淘汰。这时候优先保证播放流畅。
         if (cache.size() < minBufferSegs) {
-            android.util.Log.i("P2P", "缓冲不足(" + cache.size() + "/"
-                    + minBufferSegs + ")，跳过 peer 直接回源");
             return null;
         }
 
@@ -343,7 +332,6 @@ public final class P2PEngine {
                         }
                     });
         } catch (Throwable t) {
-            android.util.Log.w("P2P", "peer 排序失败，按原顺序试", t);
         }
 
         for (TrackerClient.Peer p : ordered) {
@@ -360,12 +348,10 @@ public final class P2PEngine {
                 // 单机时不会有 peer 拉取，所以一直没暴露；两台设备一接就中招。
                 byte[] plain = PieceCrypto.process(pieceKey, seq, data);
                 if (plain == null) {
-                    android.util.Log.w("P2P", "解密失败 seq=" + seq + " from " + key);
                     return null;      // 不解密成功就不进缓存
                 }
                 cache.put(seq, plain);
                 data = plain;
-                android.util.Log.w("P2P", "直连 " + key + " 拿到第 " + seq + " 片");
                 statDownBytes += data.length;
                 statDownReq++;
                 reportHaveAsync();
@@ -379,15 +365,12 @@ public final class P2PEngine {
                 try {
                     ok = hole.punch(p.addr, p.port);
                 } catch (Throwable t) {
-                    android.util.Log.w("P2P", "打洞异常 " + key, t);
                 }
                 if (ok) {
                     punched.add(key);
                     data = fetchFromPeer(p, seq);
                     if (data != null) {
                         cache.put(seq, data);
-                        android.util.Log.w("P2P", "打洞后 " + key
-                                + " 拿到第 " + seq + " 片");
                         reportHaveAsync();
                         return data;
                     }
@@ -467,7 +450,6 @@ public final class P2PEngine {
             if (expect != null && !expect.isEmpty()) {
                 String actual = PieceCache.sha256(data);
                 if (actual == null || !actual.equalsIgnoreCase(expect)) {
-                    android.util.Log.w("P2P", "分片校验失败 seq=" + seq);
                     return null;
                 }
             }

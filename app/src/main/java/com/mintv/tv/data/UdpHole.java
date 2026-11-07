@@ -87,7 +87,6 @@ public final class UdpHole {
             new Random().nextBytes(n);
             return new UdpHole(s, n);
         } catch (Throwable t) {
-            android.util.Log.w("UdpHole", "bind 失败", t);
             if (s != null) try { s.close(); } catch (Throwable ignored) { }
             return null;
         }
@@ -127,15 +126,11 @@ public final class UdpHole {
                 if (m != null && m[0] != 0 && m[1] > 0) {
                     publicAddr = NetCheck.ipToString(m[0]);
                     publicPort = m[1];
-                    android.util.Log.i("UdpHole", "对外地址 " + publicAddr + ":" + publicPort
-                            + "（来自 " + srv[0] + "，本地 " + localPort + "）");
                     return true;
                 }
             }
-            android.util.Log.w("UdpHole", "STUN 全部无应答，本轮没有对外地址");
             return false;
         } catch (Throwable t) {
-            android.util.Log.w("UdpHole", "discover 异常", t);
             return false;
         } finally {
             try { sock.setSoTimeout(oldTmo); } catch (Throwable ignored) { }
@@ -179,9 +174,6 @@ public final class UdpHole {
                         DatagramPacket in = new DatagramPacket(buf, buf.length);
                         sock.receive(in);
                         if (isPunchFrom(in, peerAddr)) {
-                            android.util.Log.w("UdpHole", "打洞成功 "
-                                    + peerAddr + ":" + peerPort
-                                    + " 本地端口 " + localPort);
                             return true;
                         }
                     } catch (java.net.SocketTimeoutException te) {
@@ -192,11 +184,8 @@ public final class UdpHole {
                 }
             }
         } catch (Throwable t) {
-            android.util.Log.w("UdpHole", "punch 异常", t);
         }
 
-        android.util.Log.w("UdpHole", "打洞失败 " + peerAddr + ":" + peerPort
-                + "（对称型 NAT 或对端未在发包）");
         return false;
     }
 

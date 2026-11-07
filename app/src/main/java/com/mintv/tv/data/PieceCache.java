@@ -100,7 +100,6 @@ public final class PieceCache {
                 try { StorageDir.deletePath(ctx, OLD_DIR + "/" + f); n++; }
                 catch (Throwable ignored) { }
             }
-            android.util.Log.w("PieceCache", "已清理旧缓存目录 cache/p2p：" + n + " 个文件");
         } catch (Throwable ignored) { }
     }
 
@@ -120,8 +119,6 @@ public final class PieceCache {
             } catch (Throwable ignored) { }
         }
         if (!disk.isEmpty()) {
-            android.util.Log.i("PieceCache", "磁盘已有 " + disk.size()
-                    + " 片，共 " + (diskBytes / 1024 / 1024) + "MB");
         }
         enforceDiskLimits();
     }
@@ -140,9 +137,6 @@ public final class PieceCache {
         this.diskMaxSegs = Math.max(1, diskSegs);
         this.memMaxBytes = Math.max(1024 * 1024, memBytes);
         this.diskMaxBytes = Math.max(1024 * 1024, diskBytes);
-        android.util.Log.i("PieceCache", "容量更新: 内存 " + memMaxSegs + "片/"
-                + (memMaxBytes / 1024 / 1024) + "MB, 磁盘 " + diskMaxSegs + "片/"
-                + (diskMaxBytes / 1024 / 1024) + "MB");
         evictMem();
         enforceDiskLimits();
     }
@@ -245,7 +239,6 @@ public final class PieceCache {
                             try {
                                 ok = writeToDisk(fSeq, fData);
                             } catch (Throwable t) {
-                                android.util.Log.w("PieceCache", "落盘异常 seq=" + fSeq, t);
                             } finally {
                                 synchronized (PieceCache.this) {
                                     diskPending.remove(fSeq);

@@ -62,9 +62,7 @@ public final class PayloadCrypto {
             byte[] der = Base64.decode(PUB_B64, Base64.DEFAULT);
             X509EncodedKeySpec spec = new X509EncodedKeySpec(der);
             pubKey = KeyFactory.getInstance("RSA").generatePublic(spec);
-            android.util.Log.i(TAG, "服务端公钥已就绪");
         } catch (Throwable t) {
-            android.util.Log.w(TAG, "公钥解析失败，请求体将明文发送", t);
             pubKey = null;
         }
         return pubKey;
@@ -118,7 +116,6 @@ public final class PayloadCrypto {
             e.aesKey = aesKey;
             return e;
         } catch (Throwable t) {
-            android.util.Log.w(TAG, "加密失败", t);
             return null;
         }
     }
@@ -147,7 +144,6 @@ public final class PayloadCrypto {
             byte[] plain = aes.doFinal(raw, 16, raw.length - 16);
             return new String(plain, "UTF-8");
         } catch (Throwable t2) {
-            android.util.Log.w(TAG, "解响应失败，按明文处理: " + t2);
             return body;
         }
     }
@@ -188,7 +184,6 @@ public final class PayloadCrypto {
             o.put("d", Base64.encodeToString(payload, Base64.NO_WRAP));
             return o.toString();
         } catch (Throwable t) {
-            android.util.Log.w(TAG, "加密失败，回落到明文", t);
             return null;
         }
     }
