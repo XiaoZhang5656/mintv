@@ -2030,10 +2030,33 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             if (items == null || items.isEmpty()) return;
             int port = remotePort > 0
                     ? remotePort : com.mintv.tv.data.RemoteServer.PORT_MAIN;
+            // 先清理「脚本已经不在」的订阅。
+            //
+            // 脚本订阅是自动注册的，但删掉脚本文件之后订阅记录不会自己消失：
+            // 界面里还留着一行，点进去 404，而且因为脚本没了也扫不回来。
+            // 这里按现存脚本名做一次对账。
+            java.util.Set<String> alive = new java.util.HashSet<>();
+            for (com.mintv.tv.data.ScriptStore.Item it : items) alive.add("script:" + it.name);
+            java.util.List<com.mintv.tv.data.SubscriptionStore.Sub> all =
+                    com.mintv.tv.data.SubscriptionStore.list(this);
+            boolean purged = false;
+            if (all != null) {
+                for (com.mintv.tv.data.SubscriptionStore.Sub sb : all) {
+                    if (sb.id == null || !sb.id.startsWith("script:")) continue;
+                    if (alive.contains(sb.id)) continue;
+                    com.mintv.tv.data.SubscriptionStore.remove(this, sb.id);
+                    android.util.Log.w("MinTV", "清理失效脚本订阅: " + sb.id);
+                    purged = true;
+                }
+            }
+            if (purged) fillSubColumn();
+
+            java.util.Set<String> dismissed = dismissedSubs();
             int added = 0;
             for (com.mintv.tv.data.ScriptStore.Item it : items) {
                 if (it.listPath == null || it.listPath.isEmpty()) continue;
                 String id = "script:" + it.name;
+                if (dismissed.contains(id)) continue;   // 用户手动删过，别再塞回来
                 String url = "http://127.0.0.1:" + port + it.listPath;
                 com.mintv.tv.data.SubscriptionStore.Sub existing =
                         com.mintv.tv.data.SubscriptionStore.find(this, id);
@@ -4899,6 +4922,8 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                 boolean isLocal = sub.url != null && sub.url.startsWith("local://");
                 String fileName = isLocal ? sub.url.substring("local://".length()) : null;
 
+                // 脚本订阅要记黑名单，否则下次启动扫描会重新加回来
+                dismissSub(sub.id);
                 com.mintv.tv.data.SubscriptionStore.remove(MainActivity.this, sub.id);
 
                 if (fileName != null) {
@@ -4929,10 +4954,43 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                         rebuildHelperSubs();
                     }
                 }
+                // 左侧订阅列必须重建，否则删完那一行还在。
+                // rebuildHelperSubs 刷的是「手机助手」页里的列表，不是这里。
+                fillSubColumn();
                 osd.toast("已删除「" + label + "」");
             }
         });
         b.show();
+    }
+
+    /**
+     * 用户手动删掉的脚本订阅。
+     *
+     * <p>脚本订阅是启动时自动扫描注册的 —— 删掉列表里那一行，下次启动
+     * 扫描又会把它加回来，表现为「删不掉」。所以在删除时把 id 记下来，
+     * 扫描时跳过。脚本文件本身被删掉时，这个标记也就没用了（自然失效）。
+     */
+    private static final String KEY_DISMISSED_SUBS = "dismissed_script_subs";
+
+    private java.util.Set<String> dismissedSubs() {
+        java.util.Set<String> out = new java.util.HashSet<>();
+        String raw = getSharedPreferences(PREF, MODE_PRIVATE).getString(KEY_DISMISSED_SUBS, "");
+        if (raw == null || raw.isEmpty()) return out;
+        for (String x : raw.split("\n")) if (!x.trim().isEmpty()) out.add(x.trim());
+        return out;
+    }
+
+    private void dismissSub(String id) {
+        if (id == null || !id.startsWith("script:")) return;
+        java.util.Set<String> s = dismissedSubs();
+        s.add(id);
+        StringBuilder sb = new StringBuilder();
+        for (String x : s) {
+            if (sb.length() > 0) sb.append('\n');
+            sb.append(x);
+        }
+        getSharedPreferences(PREF, MODE_PRIVATE).edit()
+                .putString(KEY_DISMISSED_SUBS, sb.toString()).apply();
     }
 
     private boolean hasSub(java.util.List<com.mintv.tv.data.SubscriptionStore.Sub> list, String id) {
