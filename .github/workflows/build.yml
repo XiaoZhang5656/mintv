@@ -61,6 +61,24 @@ jobs:
       # 回写 APK：先试 git push（快），失败再走 Contents API（绕开 443 断连）。
       # 内置 GITHUB_TOKEN 在 permissions: contents: write 下两者都有写权限。
       # 让 version.json 永远跟构建产物一致，App 的「检测更新」靠它
+      # 混淆验证：debug 变体不能混淆（AGP 强制），改 release 后必须确认
+      # R8 真的改了名，否则又会出现"以为混淆了其实没有"。
+      - name: Verify obfuscation
+        run: |
+          M=app/build/outputs/mapping/release/mapping.txt
+          if [ ! -f "$M" ]; then echo "::error::没有 mapping.txt，R8 没跑"; exit 1; fi
+          TOTAL=$(grep -c ' -> ' "$M" || true)
+          RENAMED=$(grep -cE '^[a-z0-9.]+ -> [a-z0-9]+(\.[a-z0-9]+)*:$' "$M" || true)
+          echo "mapping 总行数: $(wc -l < "$M")"
+          echo "类映射条数:   $TOTAL"
+          echo "--- 前 8 条映射 ---"
+          grep ' -> ' "$M" | head -8
+          if [ "$TOTAL" -lt 100 ]; then
+            echo "::error::映射条数只有 $TOTAL，混淆可能没生效"
+            exit 1
+          fi
+          echo "OK: R8 已混淆"
+
       - name: Write version.json
         run: |
           python3 .ci/write_version.py
@@ -72,8 +90,15 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           mkdir -p public/apk
-          # ABI 分包后会产出多个 apk，全部拷进去，由 publish 脚本按 ABI 分别命名上传
-          cp app/build/outputs/apk/release/*.apk public/apk/
+          # release 产物叫 app-<abi>-release.apk，但已发布的下载链接是
+          # app-<abi>-debug.apk。改名保持链接稳定（文件名只是历史遗留标识）。
+          for f in app/build/outputs/apk/release/*.apk; do
+            base=$(basename "$f")
+            abi=${base#app-}
+            abi=${abi%-release.apk}
+            cp "$f" "public/apk/app-${abi}-debug.apk"
+          done
+          rm -f public/apk/*-release.apk
           ls -la public/apk
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
