@@ -756,6 +756,8 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                 .setPositiveButton("保存", new android.content.DialogInterface.OnClickListener() {
                     @Override public void onClick(android.content.DialogInterface d, int w) {
                         com.mintv.tv.data.NetProxy.save(MainActivity.this, input.getText().toString());
+                        // 副标题和右侧「代理/直连」都要跟着变，否则看起来像没保存
+                        refreshSettingRow(ROW_NET_PROXY);
                         osd.toast("代理已保存：" + com.mintv.tv.data.NetProxy.summary(MainActivity.this));
                         // 重建播放器，让新配置在下次起播生效
                         if (playerManager != null) playerManager.release();
@@ -7317,6 +7319,23 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     @Override
     public void onSettingRowChanged(int rowIndex, int optIndex) {
         applyRowFocus(rowIndex);
+    }
+
+    /**
+     * 重新绑一行设置。
+     *
+     * <p>设置行只在 buildSettingRows 时 bind 一次，之后不会自动刷新 ——
+     * 所以凡是「不在行内改、而是弹对话框改」的项（代理、脚本目录……）
+     * 保存后都必须手动调这里，否则界面还显示旧值，看起来像没保存。
+     */
+    private void refreshSettingRow(int i) {
+        if (i < 0 || i >= rowViews.size() || i >= DemoData.ROW_TITLES.length) return;
+        try {
+            rowViews.get(i).bind(DemoData.ROW_TITLES[i][0], hintFor(i),
+                    optionLabelsFor(i), selections[i]);
+        } catch (Throwable t) {
+            android.util.Log.w("MinTV", "刷新设置行失败: " + i, t);
+        }
     }
 
     /** 设置项写入后调用：只处理需要立刻生效的项。 */
