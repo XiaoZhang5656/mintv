@@ -99,3 +99,45 @@ jobs:
           git add -f public/apk
           git diff --cached --quiet || git commit -m "ci: publish debug apk [skip ci]"
           git push || python3 .ci/publish_apk.py
+
+      # 把 APK 同步到一个**公开**仓库。
+      #
+      # 主仓库转私有之后，raw.githubusercontent / ghproxy / jsDelivr 对它的
+      # 所有文件都会返回 401 —— 用户就下不到包了。所以产物单独放公开仓库：
+      # 代码私有，分发包公开，两边互不影响。
+      #
+      # 需要：
+      #   1. 建一个公开仓库 <owner>/mintv-apk
+      #   2. 生成一个有 repo 权限的 PAT，存进 Secrets 名为 APK_REPO_TOKEN
+      # 没配 token 就跳过，不影响主流程（转私有之前本来也不需要）。
+      - name: Mirror APK to public repo
+        env:
+          APK_TOKEN: ${{ secrets.APK_REPO_TOKEN }}
+        run: |
+          if [ -z "$APK_TOKEN" ]; then
+            echo "未配置 APK_REPO_TOKEN，跳过同步"
+            exit 0
+          fi
+          OWNER="${GITHUB_REPOSITORY%%/*}"
+          # 先在本仓库根目录读出当前版本号，进 /tmp 之后就找不到了
+          VERSION=$(sed -n 's/.*versionName "\([^"]*\)".*/\1/p' app/build.gradle | head -1)
+          [ -n "$VERSION" ] || VERSION="unknown"
+          DEST="https://x-access-token:${APK_TOKEN}@github.com/${OWNER}/mintv-apk.git"
+          rm -rf /tmp/apk-mirror
+          if ! git clone --depth 1 "$DEST" /tmp/apk-mirror 2>/dev/null; then
+            echo "::error::克隆 mintv-apk 失败：仓库不存在或 token 无权限"
+            exit 1
+          fi
+          mkdir -p /tmp/apk-mirror
+          cp public/apk/*.apk /tmp/apk-mirror/
+          cd /tmp/apk-mirror
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "APK 无变化，跳过提交"
+          else
+            git commit -m "apk: v$VERSION"
+            git push
+            echo "已同步到公开仓库"
+          fi
