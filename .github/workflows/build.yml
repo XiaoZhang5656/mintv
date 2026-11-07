@@ -138,6 +138,11 @@ jobs:
             echo "APK 无变化，跳过提交"
           else
             git commit -m "apk: v$VERSION"
-            git push
-            echo "已同步到公开仓库"
+            # force push：只保留最新一份 APK。
+            #
+            # 每个包 48MB，正常提交的话 10 个版本就 480MB、50 个版本 2.4GB，
+            # GitHub 会警告影响拉取。产物仓库的历史本来也没有价值，
+            # 覆盖掉最省事，仓库体积永远是 48MB 上下。
+            git push --force origin HEAD:main
+            echo "已同步到公开仓库（覆盖式）"
           fi
