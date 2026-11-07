@@ -26,3 +26,20 @@
 -dontwarn org.videolan.**
 
 -dontwarn androidx.media3.**
+
+# ============================================================
+# release 包移除调试级日志
+# ============================================================
+# Log.d / Log.i 只用于开发期观察，正式包里没必要留：
+#   · 抓 logcat 能看到内部状态
+#   · 每条日志都有字符串拼接和 IO，高频调用时是纯开销
+#
+# Log.w / Log.e 保留 —— 用户报问题时只有这些能查。
+#
+# 依赖 proguard-android-optimize.txt（build.gradle 里已指定），
+# 只有那个配置文件才会执行 -assumenosideeffects。
+-assumenosideeffects class android.util.Log {
+    public static int d(...);
+    public static int i(...);
+    public static int v(...);
+}

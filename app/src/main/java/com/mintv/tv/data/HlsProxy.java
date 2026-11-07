@@ -34,6 +34,27 @@ public final class HlsProxy {
      * <p>放宽到 24MB 是「防止失控」而不是「限制正常内容」：
      * 正常分片不会到这个量级，真超了说明拿到的不是分片（比如整段点播文件）。
      */
+    /**
+     * 日志里用的短地址。
+     *
+     * <p>完整 URL 会暴露具体频道（路径里常带频道 ID 和分片序号）。
+     * 只保留 host + 路径前 12 字符，足够判断"哪台服务器出的问题"，
+     * 又看不出在看什么台。
+     */
+    private static String brief(String url) {
+        if (url == null) return "null";
+        try {
+            java.net.URL u = new java.net.URL(url);
+            String host = u.getHost();
+            String path = u.getPath();
+            if (path == null) path = "";
+            if (path.length() > 12) path = path.substring(0, 12) + "…";
+            return (host == null ? "?" : host) + path;
+        } catch (Throwable t) {
+            return url.length() > 28 ? url.substring(0, 28) + "…" : url;
+        }
+    }
+
     private static final int MAX_BYTES = 24 * 1024 * 1024;
 
     /**
@@ -124,7 +145,7 @@ public final class HlsProxy {
             if (limit) {
                 acquired = FETCH_LIMIT.tryAcquire(5, java.util.concurrent.TimeUnit.SECONDS);
                 if (!acquired) {
-                    android.util.Log.w("HlsProxy", "并发已满，跳过本次拉取: " + remoteUrl);
+                    android.util.Log.w("HlsProxy", "并发已满，跳过本次拉取: " + brief(remoteUrl));
                     return null;
                 }
             }
@@ -149,7 +170,7 @@ public final class HlsProxy {
                 // 内部的 DNS 不受 setConnectTimeout 约束，网络切换能卡十几秒。
                 Net.Prepared np = Net.prepare(remoteUrl);
                 if (np == null) {
-                    android.util.Log.w("HlsProxy", "域名解析失败/超时: " + remoteUrl);
+                    android.util.Log.w("HlsProxy", "域名解析失败/超时: " + brief(remoteUrl));
                     return null;
                 }
                 conn = (HttpURLConnection) new URL(np.url).openConnection();
@@ -163,7 +184,7 @@ public final class HlsProxy {
 
             int code = conn.getResponseCode();
             if (code < 200 || code >= 300) {
-                android.util.Log.w("HlsProxy", "HTTP " + code + " " + remoteUrl);
+                android.util.Log.w("HlsProxy", "HTTP " + code + " " + brief(remoteUrl));
                 return null;
             }
             InputStream in = conn.getInputStream();
@@ -192,7 +213,7 @@ public final class HlsProxy {
             return bos.toByteArray();
         } catch (Throwable t) {
             // 异常类型拼进消息里，免得栈被系统日志冲掉后什么都看不出来
-            android.util.Log.w("HlsProxy", "拉取失败 " + remoteUrl + " : " + t);
+            android.util.Log.w("HlsProxy", "拉取失败 " + brief(remoteUrl) + " : " + t);
             return null;
         } finally {
             // 成功读完就不 disconnect —— 那样会把可复用的连接掐掉。
@@ -261,7 +282,7 @@ public final class HlsProxy {
                 finished = true;   // 读到 EOF，连接可以复用
                 return acc.toByteArray();
             } catch (Throwable t) {
-                android.util.Log.w("HlsProxy", "流式拉取中断 " + url + " : " + t);
+                android.util.Log.w("HlsProxy", "流式拉取中断 " + brief(url) + " : " + t);
                 return null;
             } finally {
                 close();
@@ -323,7 +344,7 @@ public final class HlsProxy {
         try {
             acquired = FETCH_LIMIT.tryAcquire(5, java.util.concurrent.TimeUnit.SECONDS);
             if (!acquired) {
-                android.util.Log.w("HlsProxy", "并发已满，跳过: " + remoteUrl);
+                android.util.Log.w("HlsProxy", "并发已满，跳过: " + brief(remoteUrl));
                 return null;
             }
             java.net.Proxy px = resolveProxy();
@@ -348,7 +369,7 @@ public final class HlsProxy {
 
             int code = conn.getResponseCode();
             if (code < 200 || code >= 300) {
-                android.util.Log.w("HlsProxy", "HTTP " + code + " " + remoteUrl);
+                android.util.Log.w("HlsProxy", "HTTP " + code + " " + brief(remoteUrl));
                 return null;
             }
             InputStream in = conn.getInputStream();
@@ -363,7 +384,7 @@ public final class HlsProxy {
             }
             return new Session(conn, in, head, headLen, remoteUrl, acquired);
         } catch (Throwable t) {
-            android.util.Log.w("HlsProxy", "建立流式会话失败 " + remoteUrl + " : " + t);
+            android.util.Log.w("HlsProxy", "建立流式会话失败 " + brief(remoteUrl) + " : " + t);
             if (conn != null) try { conn.disconnect(); } catch (Throwable ignored) { }
             if (acquired) try { FETCH_LIMIT.release(); } catch (Throwable ignored) { }
             return null;
@@ -391,7 +412,7 @@ public final class HlsProxy {
             while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
             out.flush();
         } catch (Throwable t) {
-            android.util.Log.w("HlsProxy", "转发失败 " + remoteUrl, t);
+            android.util.Log.w("HlsProxy", "转发失败 " + brief(remoteUrl), t);
         } finally {
             if (conn != null) try { conn.disconnect(); } catch (Throwable ignored) { }
         }
