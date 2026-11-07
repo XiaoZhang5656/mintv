@@ -63,10 +63,16 @@ def parse_commit(msg):
         if ln != ln.lstrip():
             continue                       # 缩进 → 跳过
         t = ln.strip()
-        if t.startswith('- ') or t.startswith('* '):
-            t = re.sub(r'^[-*]+\s*', '', t).strip()
-            if t and len(t) < 120 and t not in bullets:
-                bullets.append(t)
+        # 三种要点写法都认：- 项目 / * 项目 / 一、标题
+        m2 = re.match(r'^[-*]\s+(.+)$', t)
+        if not m2:
+            m2 = re.match(r'^[一二三四五六七八九十]、\s*(.+)$', t)
+        if m2:
+            v = m2.group(1).strip()
+            # 去掉括注里的实现路径，日志里不需要
+            v = re.sub(r'[（(].*?[)）]\s*$', '', v).strip()
+            if v and len(v) < 100 and v not in bullets:
+                bullets.append(v)
         if len(bullets) >= 6:
             break
     return version, title.strip(), bullets
