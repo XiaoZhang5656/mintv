@@ -102,6 +102,21 @@ public final class SettingsStore {
         return text != null && !text.trim().isEmpty();
     }
 
+    /**
+     * 这个 key 有没有被写过（哪怕写的是空字符串）。
+     *
+     * <p>{@link #getString} 把空串当成"没有值"返回默认值，这对大多数设置项
+     * 是合理的，但对「留空 = 直连」这类语义就有问题：分不清
+     * 「用户主动清了」和「从来没设过」，于是清空之后又被旧值覆盖回来。
+     */
+    public static boolean has(Context c, String key) {
+        try {
+            return load(c).has(key);
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
     public static String getString(Context c, String key, String def) {
         JSONObject o = load(c);
         String v = o.optString(key, null);

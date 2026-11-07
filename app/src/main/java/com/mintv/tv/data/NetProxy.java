@@ -31,10 +31,16 @@ public final class NetProxy {
     private NetProxy() { }
 
     public static String url(Context c) {
-        // 和其他设置项一样存进存储目录，不再用 SharedPreferences
-        String v = SettingsStore.getString(c, "proxy", null);
-        if (v != null && !v.isEmpty()) return v;
-        // 首次：从旧的 SharedPreferences 读一次并迁移
+        // 写过就直接返回，空串也算 —— 「留空 = 直连」是有效设置。
+        //
+        // 之前是 getString(...) != null 才返回，而 getString 会把空串转成
+        // 默认值 null，于是清空之后掉进下面的迁移分支，把 SharedPreferences
+        // 里的旧值捞回来，代理永远清不掉。
+        if (SettingsStore.has(c, "proxy")) {
+            String v = SettingsStore.getString(c, "proxy", "");
+            return v == null ? "" : v;
+        }
+        // 从来没写过：从旧的 SharedPreferences 迁移一次
         String legacy = c.getSharedPreferences(PREF, Context.MODE_PRIVATE)
                 .getString(KEY, "");
         if (legacy != null && !legacy.isEmpty()) {
