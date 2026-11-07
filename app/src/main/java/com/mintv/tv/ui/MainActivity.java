@@ -3177,17 +3177,37 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         return added;
     }
 
-    /** 收藏分类的计数要跟着变。 */
+    /**
+     * 收藏分类跟着增减：0 个时整项消失，从 0 变 1 时立刻出现。
+     *
+     * <p>原来这里只「更新已有收藏分类的数字」——循环找不到就直接返回，
+     * 所以从来没收藏过的人收藏第一个台之后，分类列表里什么都不会冒出来；
+     * 反过来取消到 0 时，那一项还留着显示「我的收藏 0」。
+     *
+     * <p>现在改成完整重建：rebuildCategories() 里按「当前订阅里实际存在的
+     * 收藏数」决定要不要这一项，自然是双向都对的。
+     *
+     * <p>重建后分类下标可能整体位移（收藏项在最前面，增删会让其他项前移/
+     * 后移），所以按**名字**找回焦点，而不是沿用旧下标。
+     */
     private void refreshFavCategory() {
-        if (categories == null || categories.isEmpty()) return;
-        for (int i = 0; i < categories.size(); i++) {
-            DemoData.Category c = categories.get(i);
-            if (FAV_CATEGORY.equals(c.name)) {
-                categories.set(i, new DemoData.Category(FAV_CATEGORY, favorites.size(), c.glyph));
-                rebuildCategoryColumn();
-                updateNavFocus(focus.navIndex());
-                return;
-            }
+        if (categories == null) return;
+        String cur = currentCategoryName();
+        rebuildCategories();
+
+        int ni = indexOfCategory(cur);
+        boolean gone = ni < 0;          // 当前分类被删掉了（收藏清空时会发生）
+        if (gone) ni = defaultCategoryIndex();
+
+        activeCategory = ni;
+        rebuildCategoryColumn();
+        focus.setNavIndexSilently(ni);
+        updateNavFocus(ni);
+
+        if (gone) {
+            // 站着的分类没了，必须把内容也换过去，否则列表还停在旧数据
+            applyCategoryChannels(ni);
+            updateChannelFocus(0);
         }
     }
 
