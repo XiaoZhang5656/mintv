@@ -372,12 +372,19 @@ public final class PlaylistParser {
             ch = new Channel(name, group, logo, tvgId, pl.all.size() + 1);
             byName.put(key, ch);
             pl.all.add(ch);
-            List<Channel> list = pl.byGroup.get(group);
-            if (list == null) {
-                list = new ArrayList<>();
-                pl.byGroup.put(group, list);
+            // 未分类的频道只留在 all 里，不单独建「未分类」分组。
+            //
+            // 「未分类」的内容 = 「全部」减去其它所有分组，是个纯粹的
+            // 差集，单独列一行只会让分类列表变长、还要多按一次方向键。
+            // 从「全部」照样能看到它们，不会丢。
+            if (!DEFAULT_GROUP.equals(group)) {
+                List<Channel> list = pl.byGroup.get(group);
+                if (list == null) {
+                    list = new ArrayList<>();
+                    pl.byGroup.put(group, list);
+                }
+                list.add(ch);
             }
-            list.add(ch);
         }
         // URL 尾部的 |UA=.. 与独立的 #EXTHTTP/#EXTVLCOPT 合并，后者优先：
         // 指令行是频道级的显式声明，比 URL 尾巴更可信。
