@@ -23,6 +23,9 @@ jobs:
           echo "NDK 安装完成: $(ls $ANDROID_SDK_ROOT/ndk)"
         shell: bash
       - uses: actions/checkout@v4
+        with:
+          # gen_version.py 从 git log 生成更新日志，只抓最近 1 个 commit 会拿不到历史
+          fetch-depth: 60
 
       - uses: actions/setup-java@v4
         with:
@@ -110,6 +113,13 @@ jobs:
       #   1. 建一个公开仓库 <owner>/mintv-apk
       #   2. 生成一个有 repo 权限的 PAT，存进 Secrets 名为 APK_REPO_TOKEN
       # 没配 token 就跳过，不影响主流程（转私有之前本来也不需要）。
+      # 从 git log 生成 version.json，客户端「检测更新」读的就是它
+      - name: Generate version.json
+        run: |
+          python3 .ci/gen_version.py
+          echo '--- version.json ---'
+          head -c 800 public/version.json
+
       - name: Mirror APK to public repo
         env:
           APK_TOKEN: ${{ secrets.APK_REPO_TOKEN }}
@@ -130,6 +140,7 @@ jobs:
           fi
           mkdir -p /tmp/apk-mirror
           cp public/apk/*.apk /tmp/apk-mirror/
+          cp public/version.json /tmp/apk-mirror/version.json
           cd /tmp/apk-mirror
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"

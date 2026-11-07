@@ -85,6 +85,9 @@ public class MainActivity extends Activity implements FocusEngine.Host {
      * onCreate 重跑，如果这里不做判断，用户会看到"怎么又开机了"。
      * 换主题是主动操作，不该被当成冷启动。
      */
+    /** 「关于」页里的检测更新按钮。 */
+    private TextView updateBtn;
+
     private static boolean splashDone = false;
 
     /** 四列的水平容器。加/删列只改这里。 */
@@ -6822,6 +6825,32 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         infoPage.addView(disclaimerBox, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
+        // 检测更新。放在关于页最下面 —— 低频操作，不该占显眼位置。
+        updateBtn = new TextView(this);
+        updateBtn.setText("检测更新");
+        updateBtn.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, Theme.sp(15));
+        updateBtn.setGravity(Gravity.CENTER);
+        updateBtn.setPadding(Theme.px(22), Theme.px(11), Theme.px(22), Theme.px(11));
+        android.graphics.drawable.GradientDrawable ubBg =
+                new android.graphics.drawable.GradientDrawable();
+        ubBg.setCornerRadius(Theme.px(11));
+        ubBg.setColor(0x16FFFFFF);
+        ubBg.setStroke(Theme.px(1), 0x2AFFFFFF);
+        updateBtn.setBackground(ubBg);
+        updateBtn.setTextColor(Theme.TEXT);
+        updateBtn.setFocusable(true);
+        updateBtn.setClickable(true);
+        updateBtn.setVisibility(View.GONE);
+        updateBtn.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { checkUpdate(); }
+        });
+        LinearLayout.LayoutParams ubLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        ubLp.topMargin = Theme.px(28);
+        ubLp.bottomMargin = Theme.px(8);
+        updateBtn.setLayoutParams(ubLp);
+        infoPage.addView(updateBtn);
+
         // 内容可能超出一屏（关于页加了免责声明之后就超了），所以必须能滚。
         //
         // 原来这里是 LinearLayout + 上下弹性空白做垂直居中，
@@ -6964,7 +6993,11 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     /** 收集当前页可聚焦的控件，并把焦点落在第一个。 */
     private void rebuildPageFocus() {
         pageFocus.clear();
-        if (currentTab == TAB_HELPER && helperSubs != null) {
+        if (currentTab == TAB_ABOUT) {
+            if (updateBtn != null && updateBtn.getVisibility() == View.VISIBLE) {
+                pageFocus.add(updateBtn);
+            }
+        } else if (currentTab == TAB_HELPER && helperSubs != null) {
             for (int i = 0; i < helperSubs.getChildCount(); i++) {
                 View v = helperSubs.getChildAt(i);
                 if (v.isFocusable() || v.isClickable()) pageFocus.add(v);
@@ -7032,6 +7065,9 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         }
         if (!isSettings && !isHelper) {
             fillInfoPage(index);
+            if (updateBtn != null) {
+                updateBtn.setVisibility(index == TAB_ABOUT ? View.VISIBLE : View.GONE);
+            }
             infoPage.setVisibility(View.VISIBLE);
             if (infoPageWrap != null) infoPageWrap.setVisibility(View.VISIBLE);
             ui.post(new Runnable() {
@@ -7043,6 +7079,228 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             // 那层空容器还盖在列表上面，遥控器看起来"点不动"。
             infoPage.setVisibility(View.GONE);
             if (infoPageWrap != null) infoPageWrap.setVisibility(View.GONE);
+        }
+    }
+
+
+    // ================= 检测更新 =================
+    //
+    // 版本信息放在**产物仓库** mintv-apk 里，不是主仓库。
+    // 主仓库总有一天会转私有，那时 raw 链接对匿名用户全是 401；
+    // 而产物仓库本来就该公开，客户端也只需要看到它。
+    //
+    // version.json 由 CI 里的 .ci/gen_version.py 从 git log 生成，
+    // 带最近几个版本的更新要点，格式：
+    //   { versionCode, versionName, date, changes, history[], apk }
+
+    private static final String UPDATE_JSON =
+            "https://raw.githubusercontent.com/XiaoZhang5656/mintv-apk/main/version.json";
+
+    /** 系统 Toast。OSD 在设置页里被压在下面，提示看不到。 */
+    private void tip(String msg) {
+        try {
+            android.widget.Toast.makeText(this, msg, android.widget.Toast.LENGTH_SHORT).show();
+        } catch (Throwable t) {
+            if (osd != null) osd.toast(msg);
+        }
+    }
+
+    private void checkUpdate() {
+        tip("正在检查更新…");
+        new Thread(new Runnable() {
+            @Override public void run() {
+                final String body = httpGet(UPDATE_JSON);
+                ui.post(new Runnable() {
+                    @Override public void run() { onUpdateChecked(body); }
+                });
+            }
+        }, "check-update").start();
+    }
+
+    private void onUpdateChecked(String json) {
+        if (json == null || json.trim().isEmpty()) {
+            tip("检查更新失败：网络不可达");
+            return;
+        }
+        int remote;
+        String remoteName, apkUrl, msg;
+        try {
+            org.json.JSONObject o = new org.json.JSONObject(json);
+            remote = o.optInt("versionCode", -1);
+            remoteName = o.optString("versionName", "");
+            apkUrl = o.optString("apk", "");
+            if (remote <= 0 || apkUrl.isEmpty()) {
+                tip("检查更新失败：版本信息不完整");
+                return;
+            }
+            msg = buildUpdateMessage(o);
+        } catch (Throwable t) {
+            tiplog("解析版本信息失败", t);
+            return;
+        }
+
+        int local = versionCode();
+        if (remote <= local) {
+            tip("已是最新版本（" + versionName() + "）");
+            return;
+        }
+
+        final String url = apkUrl;
+        showSystemDialog(new android.app.AlertDialog.Builder(this)
+                .setTitle("发现新版本")
+                .setMessage(msg)
+                .setNegativeButton("稍后", null)
+                .setPositiveButton("立即更新", new android.content.DialogInterface.OnClickListener() {
+                    @Override public void onClick(android.content.DialogInterface d, int w) {
+                        downloadAndInstall(url);
+                    }
+                }));
+    }
+
+    /** 拼「版本号 + 各版本日期与要点 + 手动下载提示」。 */
+    private String buildUpdateMessage(org.json.JSONObject o) {
+        StringBuilder sb = new StringBuilder();
+        sb.append(o.optString("versionName", "")).append("\n");
+
+        org.json.JSONArray hist = o.optJSONArray("history");
+        if (hist != null && hist.length() > 0) {
+            for (int i = 0; i < hist.length() && i < 6; i++) {
+                org.json.JSONObject h = hist.optJSONObject(i);
+                if (h == null) continue;
+                String date = h.optString("date", "");
+                if (!date.isEmpty()) sb.append("\n").append(date).append("\n");
+                org.json.JSONArray ch = h.optJSONArray("changes");
+                if (ch != null) {
+                    for (int k = 0; k < ch.length(); k++) {
+                        String line = ch.optString(k, "");
+                        if (line.isEmpty()) continue;
+                        sb.append(k + 1).append(". ").append(line).append("\n");
+                    }
+                }
+            }
+        } else {
+            org.json.JSONArray ch = o.optJSONArray("changes");
+            if (ch != null) {
+                for (int k = 0; k < ch.length(); k++) {
+                    String line = ch.optString(k, "");
+                    if (line.isEmpty()) continue;
+                    sb.append(k + 1).append(". ").append(line).append("\n");
+                }
+            }
+        }
+
+        sb.append("\n如果无法自动更新，请手动下载安装包：\n");
+        sb.append("https://github.com/XiaoZhang5656/mintv-apk");
+        return sb.toString();
+    }
+
+    private void tiplog(String msg, Throwable t) {
+        android.util.Log.w("MinTV", msg, t);
+        tip(msg);
+    }
+
+    /** 下载 APK 并调起系统安装器。 */
+    private void downloadAndInstall(final String url) {
+        tip("开始下载更新…");
+        new Thread(new Runnable() {
+            @Override public void run() {
+                boolean ok = false;
+                java.io.File out = new java.io.File(getCacheDir(), "update.apk");
+                java.net.HttpURLConnection conn = null;
+                try {
+                    conn = (java.net.HttpURLConnection) new java.net.URL(url).openConnection();
+                    conn.setConnectTimeout(15000);
+                    conn.setReadTimeout(60000);
+                    conn.setRequestProperty("User-Agent", "MinTV/" + versionName());
+                    int code = conn.getResponseCode();
+                    if (code >= 200 && code < 300) {
+                        java.io.InputStream in = conn.getInputStream();
+                        java.io.FileOutputStream fo = new java.io.FileOutputStream(out);
+                        try {
+                            byte[] buf = new byte[65536];
+                            int n;
+                            long total = 0;
+                            while ((n = in.read(buf)) > 0) {
+                                fo.write(buf, 0, n);
+                                total += n;
+                                if (total > 200L * 1024 * 1024) break;
+                            }
+                            fo.flush();
+                            ok = total > 1024 * 1024;   // 小于 1MB 肯定是错误页
+                        } finally {
+                            fo.close();
+                            in.close();
+                        }
+                    }
+                } catch (Throwable t) {
+                    android.util.Log.w("MinTV", "下载更新失败", t);
+                } finally {
+                    if (conn != null) try { conn.disconnect(); } catch (Throwable ignored) { }
+                }
+
+                final boolean success = ok;
+                ui.post(new Runnable() {
+                    @Override public void run() {
+                        if (!success) {
+                            tip("下载失败，检查网络后重试");
+                            return;
+                        }
+                        tip("请按提示完成安装");
+                        installApk(out);
+                    }
+                });
+            }
+        }, "update-download").start();
+    }
+
+    private void installApk(java.io.File apk) {
+        try {
+            android.content.Intent i = new android.content.Intent(android.content.Intent.ACTION_VIEW);
+            android.net.Uri uri;
+            if (android.os.Build.VERSION.SDK_INT >= 24) {
+                uri = androidx.core.content.FileProvider.getUriForFile(
+                        this, getPackageName() + ".fileprovider", apk);
+                i.addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            } else {
+                uri = android.net.Uri.fromFile(apk);
+            }
+            i.setDataAndType(uri, "application/vnd.android.package-archive");
+            i.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(i);
+        } catch (Throwable t) {
+            android.util.Log.w("MinTV", "调起安装器失败", t);
+            tip("无法调起安装器，请手动到 GitHub 下载");
+        }
+    }
+
+    /** 极简 GET。只需要拿一个几百字节的 JSON。 */
+    private String httpGet(String url) {
+        java.net.HttpURLConnection conn = null;
+        try {
+            conn = (java.net.HttpURLConnection) new java.net.URL(url).openConnection();
+            conn.setConnectTimeout(8000);
+            conn.setReadTimeout(8000);
+            conn.setRequestProperty("User-Agent", "MinTV/" + versionName());
+            int code = conn.getResponseCode();
+            if (code < 200 || code >= 300) return null;
+            java.io.InputStream in = conn.getInputStream();
+            java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+            try {
+                byte[] buf = new byte[8192];
+                int n;
+                while ((n = in.read(buf)) > 0) {
+                    bos.write(buf, 0, n);
+                    if (bos.size() > 256 * 1024) break;
+                }
+            } finally {
+                in.close();
+            }
+            return new String(bos.toByteArray(), "UTF-8");
+        } catch (Throwable t) {
+            android.util.Log.w("MinTV", "httpGet 失败", t);
+            return null;
+        } finally {
+            if (conn != null) try { conn.disconnect(); } catch (Throwable ignored) { }
         }
     }
 
