@@ -206,7 +206,6 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     private final List<TextView> tabViews = new ArrayList<>();
     private ScrollView rowScrollView;
     private LinearLayout infoPage;
-    private TextView updateBtn;
 
     // ---- 手机助手（HTTP 服务 + 二维码）----
     private com.mintv.tv.data.RemoteServer remote;
@@ -6760,32 +6759,6 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         infoPage.addView(disclaimerBox, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
-        // 只有「关于」页才显示的检测更新按钮
-        updateBtn = new TextView(this);
-        updateBtn.setText("检测更新");
-        updateBtn.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, Theme.sp(15));
-        updateBtn.setGravity(Gravity.CENTER);
-        updateBtn.setPadding(Theme.px(22), Theme.px(11), Theme.px(22), Theme.px(11));
-        // 圆角 + 细边框：原来是纯色方块，贴在免责声明下面像块补丁
-        android.graphics.drawable.GradientDrawable ubBg =
-                new android.graphics.drawable.GradientDrawable();
-        ubBg.setCornerRadius(Theme.px(11));
-        ubBg.setColor(0x16FFFFFF);
-        ubBg.setStroke(Theme.px(1), 0x2AFFFFFF);
-        updateBtn.setBackground(ubBg);
-        updateBtn.setTextColor(Theme.TEXT);
-        updateBtn.setFocusable(true);
-        updateBtn.setClickable(true);
-        updateBtn.setVisibility(View.GONE);
-        updateBtn.setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View v) { checkUpdate(false); }
-        });
-        LinearLayout.LayoutParams ubLp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        ubLp.topMargin = Theme.px(28);
-        ubLp.bottomMargin = Theme.px(8);
-        infoPage.addView(updateBtn, ubLp);
-
         // 内容可能超出一屏（关于页加了免责声明之后就超了），所以必须能滚。
         //
         // 原来这里是 LinearLayout + 上下弹性空白做垂直居中，
@@ -6928,11 +6901,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
     /** 收集当前页可聚焦的控件，并把焦点落在第一个。 */
     private void rebuildPageFocus() {
         pageFocus.clear();
-        if (currentTab == TAB_ABOUT) {
-            if (updateBtn != null && updateBtn.getVisibility() == View.VISIBLE) {
-                pageFocus.add(updateBtn);
-            }
-        } else if (currentTab == TAB_HELPER && helperSubs != null) {
+        if (currentTab == TAB_HELPER && helperSubs != null) {
             for (int i = 0; i < helperSubs.getChildCount(); i++) {
                 View v = helperSubs.getChildAt(i);
                 if (v.isFocusable() || v.isClickable()) pageFocus.add(v);
@@ -7000,9 +6969,6 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         }
         if (!isSettings && !isHelper) {
             fillInfoPage(index);
-            if (updateBtn != null) {
-                updateBtn.setVisibility(index == TAB_ABOUT ? View.VISIBLE : View.GONE);
-            }
             infoPage.setVisibility(View.VISIBLE);
             if (infoPageWrap != null) infoPageWrap.setVisibility(View.VISIBLE);
             ui.post(new Runnable() {
@@ -7171,159 +7137,6 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         return String.format(java.util.Locale.US, "%d:%02d", s / 60, s % 60);
     }
 
-    /**
-     * 检测更新。
-     *
-     * <p>版本信息的来源是自己仓库里的 {@code public/version.json}，
-     * CI 每次构建会重写它，所以永远和最新 APK 一致。
-     *
-     * <p>两个域名依次尝试：raw.githubusercontent 在国内经常被墙，
-     * jsDelivr 作为镜像通常能通。两个都不通就直接说"检查失败"，
-     * 不假装成功、也不弹一堆技术细节给用户。
-     */
-    /**
-     * 检测更新的提示。
-     *
-     * <p>不能用 osd.toast：OSD 为了给频道列表让位已经沉到弹窗下层，
-     * 在设置页里调用等于把结果写到看不见的地方。
-     * 系统 Toast 是最上层覆盖窗口，永远可见。
-     */
-    private void tip(String msg) {
-        try {
-            android.widget.Toast.makeText(this, msg, android.widget.Toast.LENGTH_SHORT).show();
-        } catch (Throwable t) {
-            if (osd != null) osd.toast(msg);
-        }
-    }
-
-    private void checkUpdate(boolean silent) {
-        tip("正在检查更新…");
-        final String[] urls = {
-                "https://raw.githubusercontent.com/XiaoZhang5656/mintv/main/public/version.json",
-                "https://cdn.jsdelivr.net/gh/XiaoZhang5656/mintv@main/public/version.json",
-        };
-        new Thread(new Runnable() {
-            @Override public void run() {
-                String body = null;
-                String usedBase = null;
-                for (String u : urls) {
-                    body = httpGet(u);
-                    if (body != null && body.contains("versionCode")) {
-                        usedBase = u.substring(0, u.lastIndexOf('/') + 1);
-                        break;
-                    }
-                    body = null;
-                }
-                final String json = body;
-                final String base = usedBase;
-                ui.post(new Runnable() {
-                    @Override public void run() { onUpdateChecked(json, base); }
-                });
-            }
-        }, "check-update").start();
-    }
-
-    private void onUpdateChecked(String json, String baseUrl) {
-        if (json == null) {
-            tip("检查更新失败：网络不可达");
-            return;
-        }
-        int remote = parseIntField(json, "versionCode", -1);
-        String remoteName = parseStrField(json, "versionName");
-        if (remote <= 0) { tip("检查更新失败：版本信息解析异常"); return; }
-
-        int local = versionCode();
-        if (remote <= local) {
-            tip("已是最新版本（" + versionName() + "）");
-            return;
-        }
-        final String apkUrl = baseUrl + "apk/app-arm64-v8a-debug.apk";
-        // TV 上没人会去"复制地址"再挪到别处下载 —— 剪贴板在电视上没有意义。
-        // 按钮就叫「更新」和「退出」：更新 = 盒子自己下载并调起安装器，
-        // 退出 = 什么都不做，继续看。
-        showSystemDialog(new android.app.AlertDialog.Builder(this)
-                .setTitle("发现新版本 " + (remoteName == null ? remote : remoteName))
-                .setMessage("当前版本：" + versionName() + "（" + local + "）\n"
-                        + "最新版本：" + (remoteName == null ? "" : remoteName)
-                        + "（" + remote + "）\n\n"
-                        + "更新会下载约 46MB，装好后自动重启应用。")
-                .setPositiveButton("更新", new android.content.DialogInterface.OnClickListener() {
-                    @Override public void onClick(android.content.DialogInterface d, int w) {
-                        downloadAndInstall(apkUrl);
-                    }
-                })
-                .setNegativeButton("退出", null)
-                );
-    }
-
-    /**
-     * 下载 APK 并调起系统安装器。
-     *
-     * <p>不需要「安装未知应用」权限也能弹安装器：Android 8+ 会跳设置页
-     * 让用户为本应用打开该权限，用户允许后回来再点一次即可。
-     * 文件放 cacheDir，通过 FileProvider 共享 —— 直接传 file:// 在
-     * Android 7+ 会抛 FileUriExposedException。
-     */
-    private void downloadAndInstall(final String url) {
-        tip("开始下载更新…");
-        new Thread(new Runnable() {
-            @Override public void run() {
-                java.io.File out = new java.io.File(getCacheDir(), "update.apk");
-                boolean ok = false;
-                java.net.HttpURLConnection conn = null;
-                java.io.InputStream in = null;
-                java.io.FileOutputStream fo = null;
-                try {
-                    conn = (java.net.HttpURLConnection) new java.net.URL(url).openConnection();
-                    conn.setConnectTimeout(10000);
-                    conn.setReadTimeout(30000);
-                    conn.setRequestProperty("User-Agent", "MinTV/" + versionName());
-                    conn.setInstanceFollowRedirects(true);
-                    if (conn.getResponseCode() == 200) {
-                        in = conn.getInputStream();
-                        fo = new java.io.FileOutputStream(out);
-                        byte[] buf = new byte[16384];
-                        int n;
-                        while ((n = in.read(buf)) > 0) fo.write(buf, 0, n);
-                        fo.flush();
-                        ok = out.length() > 1024 * 1024;   // 小于 1MB 肯定是错的
-                    }
-                } catch (Throwable ignored) {
-                } finally {
-                    try { if (fo != null) fo.close(); } catch (Throwable ignored) { }
-                    try { if (in != null) in.close(); } catch (Throwable ignored) { }
-                    try { if (conn != null) conn.disconnect(); } catch (Throwable ignored) { }
-                }
-                final boolean success = ok;
-                ui.post(new Runnable() {
-                    @Override public void run() {
-                        if (!success) { tip("下载失败，检查网络后重试"); return; }
-                        installApk(new java.io.File(getCacheDir(), "update.apk"));
-                    }
-                });
-            }
-        }, "update-dl").start();
-    }
-
-    private void installApk(java.io.File apk) {
-        try {
-            android.content.Intent i = new android.content.Intent(android.content.Intent.ACTION_VIEW);
-            android.net.Uri uri;
-            if (android.os.Build.VERSION.SDK_INT >= 24) {
-                uri = androidx.core.content.FileProvider.getUriForFile(
-                        this, getPackageName() + ".fileprovider", apk);
-                i.addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION);
-            } else {
-                uri = android.net.Uri.fromFile(apk);
-            }
-            i.setDataAndType(uri, "application/vnd.android.package-archive");
-            i.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
-            startActivity(i);
-            tip("请按提示完成安装");
-        } catch (Throwable t) {
-            tip("无法调起安装器：" + t.getClass().getSimpleName());
-        }
-    }
 
     /**
      * 显示系统弹窗，并在显示期间把按键交还给系统。
@@ -7341,58 +7154,6 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         d.show();
         sysDialogOpen = true;
         return d;
-    }
-
-    private String httpGet(String url) {
-        java.net.HttpURLConnection conn = null;
-        try {
-            conn = (java.net.HttpURLConnection) new java.net.URL(url).openConnection();
-            conn.setConnectTimeout(6000);
-            conn.setReadTimeout(8000);
-            conn.setRequestProperty("User-Agent", "MinTV/" + versionName());
-            conn.setInstanceFollowRedirects(true);
-            if (conn.getResponseCode() != 200) return null;
-            java.io.InputStream in = conn.getInputStream();
-            java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
-            byte[] buf = new byte[4096];
-            int n;
-            while ((n = in.read(buf)) > 0) bos.write(buf, 0, n);
-            in.close();
-            return bos.toString("UTF-8");
-        } catch (Throwable t) {
-            return null;
-        } finally {
-            if (conn != null) conn.disconnect();
-        }
-    }
-
-    /** 极简 JSON 取值：只认 "key": 123 这种，够读 version.json 用。 */
-    private static int parseIntField(String json, String key, int def) {
-        try {
-            int i = json.indexOf("\"" + key + "\"");
-            if (i < 0) return def;
-            int c = json.indexOf(':', i);
-            int end = c + 1;
-            while (end < json.length() && " \t\r\n".indexOf(json.charAt(end)) >= 0) end++;
-            int start = end;
-            while (end < json.length() && (Character.isDigit(json.charAt(end)) || json.charAt(end) == '-')) end++;
-            return Integer.parseInt(json.substring(start, end));
-        } catch (Throwable t) {
-            return def;
-        }
-    }
-
-    private static String parseStrField(String json, String key) {
-        try {
-            int i = json.indexOf("\"" + key + "\"");
-            if (i < 0) return null;
-            int c = json.indexOf(':', i);
-            int q1 = json.indexOf('"', c);
-            int q2 = json.indexOf('"', q1 + 1);
-            return json.substring(q1 + 1, q2);
-        } catch (Throwable t) {
-            return null;
-        }
     }
 
     private String infoText(int tab) {
