@@ -7433,7 +7433,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                                 final long d = done;
                                 ui.post(new Runnable() { @Override public void run() {
                                     if (total > 0) {
-                                        bar.setProgress((int) (d * 100 / total));
+                                        bar.setProgress((int) (d * 1000 / total));
                                         status.setText(String.format(java.util.Locale.US,
                                                 "正在下载 %d%%  ·  %.1f / %.1f MB",
                                                 (int) (d * 100 / total),
@@ -7470,7 +7470,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                             if (status.getText().length() == 0) status.setText("下载失败");
                             return;
                         }
-                        bar.setProgress(100);
+                        bar.setProgress(1000);
                         status.setText("下载完成，正在调起安装器…");
                         installApk(out);
                     }
