@@ -39,6 +39,8 @@ public class OsdView extends View {
     private String nowText;       // "20:03 伟大的长征第38集"
     private String nextText;      // "20:53 前情提要"
     private float progress = -1f; // 0~1，<0 不画进度条
+    /** true = 进度来自 EPG 推算（直播）；false = 真实播放位置（回看）。 */
+    private boolean progressFromEpg = true;
 
     // ---- 技术信息小标签 ----
     private final String[] tags = new String[9];   // 源/回看/分辨率/视频编码/音频编码/声道/帧率/码率/网速
@@ -198,9 +200,18 @@ public class OsdView extends View {
     public void setPaused(boolean p) { paused = p; invalidate(); }
 
     public void setProgram(String now, String next, float progress01) {
+        setProgram(now, next, progress01, true);
+    }
+
+    /**
+     * @param fromEpg true = 直播，进度由 EPG 推算（用固定色，任何主题下都看得清）
+     *                false = 回看，进度是真实播放位置（跟随主题色）
+     */
+    public void setProgram(String now, String next, float progress01, boolean fromEpg) {
         nowText = now;
         nextText = next;
         progress = progress01;
+        progressFromEpg = fromEpg;
         invalidate();
     }
 
@@ -735,14 +746,22 @@ public class OsdView extends View {
             barRect.set(x, y - Theme.px(12), x + barW, y + barH + Theme.px(12));
             barShown = true;
 
-            // 槽
+            // 底轨：深灰实心。
+            //
+            // 原来这里是 16% 白 + 直播时铺 12px 虚线，虚线占满整行又没信息量，
+            // 看着很脏。改成一条实底：有进度时叠蓝色填充，没有就只剩这条灰线。
             fill.setColor(Theme.OSD_BAR_TRACK);
             r.set(x, y, x + barW, y + barH);
             c.drawRoundRect(r, barH / 2f, barH / 2f, fill);
 
+            // 有进度就叠一段蓝色填充（EPG 节目进度 / 回看进度都走这里），
+            // 没有进度就只留那条深灰底轨 —— 两种状态颜色差别明显。
             if (progress >= 0f) {
-                // 回看：蓝色实心
-                fill.setColor(Theme.FOCUS_BLUE);
+                // 直播的 EPG 进度用固定浅色 —— 不跟主题色走，换什么强调色都看得清。
+                // 回看用主题色 —— 跟界面其余部分保持一套视觉。
+                fill.setColor(progressFromEpg
+                        ? 0xFFE2E8F2
+                        : Theme.FOCUS_BLUE);
                 r.set(x, y, x + barW * Math.min(1f, progress), y + barH);
                 c.drawRoundRect(r, barH / 2f, barH / 2f, fill);
                 p.setColor(Theme.TEXT_SUB);
@@ -751,17 +770,7 @@ public class OsdView extends View {
                 c.drawText(pct, x + barW + Theme.px(14),
                         y + barH / 2f - (p.ascent() + p.descent()) / 2f, p);
             } else {
-                // 直播：虚线纹理（用短条交替铺，模拟 repeating-linear-gradient）
-                fill.setColor(Theme.OSD_BAR_DASH);
-                float seg = Theme.px(12), gapSeg = Theme.px(12);
-                float px0 = x;
-                while (px0 < x + barW) {
-                    float px1 = Math.min(px0 + seg, x + barW);
-                    r.set(px0, y, px1, y + barH);
-                    c.drawRoundRect(r, barH / 2f, barH / 2f, fill);
-                    px0 += seg + gapSeg;
-                }
-                // 「直播」标签
+                // 没有进度：右侧给「直播」标签，底轨保持深灰
                 float ltX = x + barW + Theme.px(14);
                 fill.setColor(Theme.OSD_LIVE_BG);
                 r.set(ltX, y - Theme.px(8), ltX + liveTagW, y + barH + Theme.px(8));

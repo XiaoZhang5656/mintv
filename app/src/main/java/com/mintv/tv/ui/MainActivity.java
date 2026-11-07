@@ -579,6 +579,12 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                 speedMeter.sample();
                 if (selections[ROW_SPEED] == 0) refreshOsdTags();   // 0 = 显示
                 if (!seeking && seekOverlay != null) seekOverlay.hide();
+                // 回看：用真实播放位置画进度条（主题色）。
+                // 直播 dur 恒为 -1，走 refreshPlayInfo 的 EPG 推算（固定色）。
+                if (dur > 0 && pos >= 0) {
+                    osd.setProgram(epgNowText, epgNextText,
+                            Math.min(1f, pos / (float) dur), false);
+                }
             }
 
             @Override public void onError(String msg) {
@@ -7145,16 +7151,62 @@ public class MainActivity extends Activity implements FocusEngine.Host {
             return;
         }
 
-        final String url = apkUrl;
-        showSystemDialog(new android.app.AlertDialog.Builder(this)
-                .setTitle("发现新版本")
-                .setMessage(msg)
+        showUpdateDialog(remoteName, msg, apkUrl);
+    }
+
+    /**
+     * 更新对话框。
+     *
+     * <p>不用 setMessage：系统默认深色底在深色主题下接近纯黑，字挤在一起，
+     * 而且没法放进度条。这里自己搭一个：深灰卡片 + 圆角 + 可滚动正文 +
+     * 一条默认隐藏的下载进度条。
+     */
+    private void showUpdateDialog(String remoteName, String msg, final String apkUrl) {
+        final android.widget.LinearLayout box = new android.widget.LinearLayout(this);
+        box.setOrientation(android.widget.LinearLayout.VERTICAL);
+        box.setPadding(Theme.px(22), Theme.px(18), Theme.px(22), Theme.px(10));
+
+        final android.widget.TextView body = new android.widget.TextView(this);
+        body.setText(msg);
+        body.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, Theme.sp(14));
+        body.setTextColor(0xFFC6CDD6);
+        body.setLineSpacing(Theme.px(5), 1f);
+        box.addView(body, new android.widget.LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        // 下载进度：平时藏着，点「立即更新」才显示
+        final android.widget.ProgressBar bar = new android.widget.ProgressBar(
+                this, null, android.R.attr.progressBarStyleHorizontal);
+        bar.setMax(100);
+        bar.setProgress(0);
+        bar.setVisibility(View.GONE);
+        android.widget.LinearLayout.LayoutParams blp = new android.widget.LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, Theme.px(6));
+        blp.topMargin = Theme.px(16);
+        box.addView(bar, blp);
+
+        final android.widget.TextView status = new android.widget.TextView(this);
+        status.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, Theme.sp(13));
+        status.setTextColor(0xFF9AA0AA);
+        status.setVisibility(View.GONE);
+        android.widget.LinearLayout.LayoutParams slp = new android.widget.LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        slp.topMargin = Theme.px(8);
+        box.addView(status, slp);
+
+        new android.app.AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+                .setTitle("发现新版本 " + (remoteName == null ? "" : remoteName))
+                .setView(box)
                 .setNegativeButton("稍后", null)
                 .setPositiveButton("立即更新", new android.content.DialogInterface.OnClickListener() {
                     @Override public void onClick(android.content.DialogInterface d, int w) {
-                        downloadAndInstall(url);
+                        bar.setVisibility(View.VISIBLE);
+                        status.setVisibility(View.VISIBLE);
+                        status.setText("正在下载…");
+                        downloadAndInstall(apkUrl, bar, status);
                     }
-                }));
+                })
+                .show();
     }
 
     /** 拼「版本号 + 各版本日期与要点 + 手动下载提示」。 */
@@ -7199,9 +7251,15 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         tip(msg);
     }
 
-    /** 下载 APK 并调起系统安装器。 */
-    private void downloadAndInstall(final String url) {
-        tip("开始下载更新…");
+    /**
+     * 下载 APK 并调起系统安装器。
+     *
+     * <p>带进度：50MB 的包在盒子上要下一会儿，只给个 toast 用户不知道卡没卡死。
+     * 进度通过 Content-Length 算，拿不到总长度就只报已下载 MB 数。
+     */
+    private void downloadAndInstall(final String url,
+                                    final android.widget.ProgressBar bar,
+                                    final android.widget.TextView status) {
         new Thread(new Runnable() {
             @Override public void run() {
                 boolean ok = false;
@@ -7211,29 +7269,58 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                     conn = (java.net.HttpURLConnection) new java.net.URL(url).openConnection();
                     conn.setConnectTimeout(15000);
                     conn.setReadTimeout(60000);
+                    // 走 Cloudflare 之类会分块传输，但它一般也给 Content-Length
+                    conn.setRequestProperty("Accept-Encoding", "identity");
                     conn.setRequestProperty("User-Agent", "MinTV/" + versionName());
                     int code = conn.getResponseCode();
-                    if (code >= 200 && code < 300) {
-                        java.io.InputStream in = conn.getInputStream();
-                        java.io.FileOutputStream fo = new java.io.FileOutputStream(out);
-                        try {
-                            byte[] buf = new byte[65536];
-                            int n;
-                            long total = 0;
-                            while ((n = in.read(buf)) > 0) {
-                                fo.write(buf, 0, n);
-                                total += n;
-                                if (total > 200L * 1024 * 1024) break;
+                    if (code < 200 || code >= 300) {
+                        ui.post(new Runnable() { @Override public void run() {
+                            status.setText("下载失败：HTTP 错误");
+                        }});
+                        return;
+                    }
+                    final long total = conn.getContentLength();
+                    java.io.InputStream in = conn.getInputStream();
+                    java.io.FileOutputStream fo = new java.io.FileOutputStream(out);
+                    try {
+                        byte[] buf = new byte[65536];
+                        int n;
+                        long done = 0;
+                        long lastPost = 0;
+                        while ((n = in.read(buf)) > 0) {
+                            fo.write(buf, 0, n);
+                            done += n;
+                            long now = System.currentTimeMillis();
+                            if (now - lastPost > 250) {          // 节流，别刷爆主线程
+                                lastPost = now;
+                                final long d = done;
+                                ui.post(new Runnable() { @Override public void run() {
+                                    if (total > 0) {
+                                        bar.setProgress((int) (d * 100 / total));
+                                        status.setText(String.format(java.util.Locale.US,
+                                                "正在下载 %d%%  ·  %.1f / %.1f MB",
+                                                (int) (d * 100 / total),
+                                                d / 1048576.0, total / 1048576.0));
+                                    } else {
+                                        status.setText(String.format(java.util.Locale.US,
+                                                "正在下载 %.1f MB", d / 1048576.0));
+                                    }
+                                }});
                             }
-                            fo.flush();
-                            ok = total > 1024 * 1024;   // 小于 1MB 肯定是错误页
-                        } finally {
-                            fo.close();
-                            in.close();
+                            if (done > 200L * 1024 * 1024) break;
                         }
+                        fo.flush();
+                        ok = done > 1024 * 1024;      // 小于 1MB 肯定是错误页
+                    } finally {
+                        fo.close();
+                        in.close();
                     }
                 } catch (Throwable t) {
                     android.util.Log.w("MinTV", "下载更新失败", t);
+                    final String why = t.getClass().getSimpleName();
+                    ui.post(new Runnable() { @Override public void run() {
+                        status.setText("下载失败：" + why);
+                    }});
                 } finally {
                     if (conn != null) try { conn.disconnect(); } catch (Throwable ignored) { }
                 }
@@ -7242,10 +7329,12 @@ public class MainActivity extends Activity implements FocusEngine.Host {
                 ui.post(new Runnable() {
                     @Override public void run() {
                         if (!success) {
-                            tip("下载失败，检查网络后重试");
+                            bar.setVisibility(View.GONE);
+                            if (status.getText().length() == 0) status.setText("下载失败");
                             return;
                         }
-                        tip("请按提示完成安装");
+                        bar.setProgress(100);
+                        status.setText("下载完成，正在调起安装器…");
                         installApk(out);
                     }
                 });
@@ -7253,6 +7342,7 @@ public class MainActivity extends Activity implements FocusEngine.Host {
         }, "update-download").start();
     }
 
+    /** 调起系统安装器。Android 7+ 必须给 FileProvider 的 uri，直接 file:// 会抛异常。 */
     private void installApk(java.io.File apk) {
         try {
             android.content.Intent i = new android.content.Intent(android.content.Intent.ACTION_VIEW);
