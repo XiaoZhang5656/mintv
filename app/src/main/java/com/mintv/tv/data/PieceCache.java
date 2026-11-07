@@ -67,14 +67,41 @@ public final class PieceCache {
      * （9MB 一片大约 200~500ms）。读取仍在调用线程上做，
      * 但只有「内存未命中」才会走到磁盘，实际影响很小。
      */
-    private static final String SUB_DIR = StorageDir.SUB_CACHE + "/p2p";
+    private static final String SUB_DIR = StorageDir.SUB_CACHE + "/mintv";
+
+    /**
+     * 旧目录 {@code cache/p2p}。
+     *
+     * <p>名字里带 p2p 太扎眼，文件管理器里一眼能看出这 app 在做点对点传输。
+     * 改成 cache/mintv 后跟 EPG、源快照混在一起，看不出用途。
+     *
+     * <p>旧目录里的分片是可再生的（丢了会自动重新下载），所以不做迁移，
+     * 直接清掉，避免磁盘上留一个明显是旧版本的目录。
+     */
+    private static final String OLD_DIR = StorageDir.SUB_CACHE + "/p2p";
 
     private final android.content.Context ctx;
     private int minSeq = 0;      // 窗口下界，低于它的直接丢弃
 
     public PieceCache(android.content.Context ctx) {
         this.ctx = ctx.getApplicationContext();
+        purgeOldDir();
         loadDiskIndex();
+    }
+
+    /** 清掉 0.3.68 之前用的 cache/p2p 目录。分片可再生，不迁移。 */
+    private void purgeOldDir() {
+        try {
+            java.util.List<String> names = StorageDir.listPath(ctx, OLD_DIR);
+            if (names == null || names.isEmpty()) return;
+            int n = 0;
+            for (String f : names) {
+                if (f == null) continue;
+                try { StorageDir.deletePath(ctx, OLD_DIR + "/" + f); n++; }
+                catch (Throwable ignored) { }
+            }
+            android.util.Log.w("PieceCache", "已清理旧缓存目录 cache/p2p：" + n + " 个文件");
+        } catch (Throwable ignored) { }
     }
 
     /** 启动时扫一遍磁盘，把已有分片登记进索引（上次运行留下的）。 */
