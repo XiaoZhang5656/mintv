@@ -9,9 +9,11 @@ apply plugin: 'stringfog'
 
 stringfog {
     enable true
-    // xor 比 aes 快，对「挡 strings」这个目标已经够用。
-    // 真要抗逆向得靠加壳，字符串加密只能提高门槛。
-    mode 'xor'
+    // mode 是**密文的编码方式**，不是算法（算法看下面的 implementation）：
+    //   base64  密文转 Base64，兼容性最稳
+    //   bytes   直接存字节序列，省掉编解码开销，但需要 5.x 运行时
+    mode 'base64'
+    // xor 是最轻的算法，挡 strings 够用。真要抗逆向得靠加壳。
     implementation 'com.github.megatronking.stringfog.xor.StringFogImpl'
     // 密钥：改动会让旧版本的密文失效，只在发新版时改
     kg 'MinTV2026StrFog'
@@ -62,8 +64,8 @@ android {
         // 方法数已超 64K（media3 + libvlc + zxing + androidx.core）
         multiDexEnabled true
         targetSdk 34
-        versionCode 269
-        versionName "0.3.73"
+        versionCode 270
+        versionName "0.3.74"
 
         // native 只编 32 位 —— 跟下面的 splits 一致。
         // 注意：不能写在外层 ndk {} 里，那会跟 splits 冲突；
